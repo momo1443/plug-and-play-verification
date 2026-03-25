@@ -18,9 +18,9 @@
 
 ## News
 
-- [2026.03.23] **The Agent-R1 codebase has been fully refactored.** (The previous version has been archived to the `legacy` branch) This update introduces **Layered Abstractions** (`AgentFlowBase` -> `AgentEnvLoop` -> `ToolEnv`) for a cleaner, object-oriented API. We also formalized the **Step-level MDP** foundation to enable flexible context management during RL training. Please refer to our new [Documentation Site](https://agentr1.github.io/Agent-R1/) for details.
+- [2026.03.23] **Agent-R1 v0.1.0 marks the first official version of the project.** It introduces a fully refactored codebase, the **Step-level MDP** foundation, and new **Layered Abstractions**. The previous version has been archived to the `legacy` branch.
 
-- [2026.03.04] We've launched [Claw-R1](https://agentr1.github.io/Claw-R1/), a more advanced framework designed to empower General Agents (OpenClaw etc.) with Agentic RL through a Middleware design. Check it out at [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
+- [2026.03.04] **We've launched [Claw-R1](https://agentr1.github.io/Claw-R1/)**, a more advanced framework designed to empower General Agents (OpenClaw etc.) with Agentic RL through a Middleware design. Check it out at [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
 
 
 ## Overview
@@ -35,7 +35,7 @@
 
 ## Getting Started
 
-Agent-R1 uses the same environment setup as [verl](https://verl.readthedocs.io/en/latest/start/install.html). After preparing that environment, the recommended reading path is:
+Agent-R1 uses the same environment setup as [verl](https://verl.readthedocs.io/en/latest/start/install.html), and the current version requires `verl==0.7.0`. You only need to clone this repository; there is no separate Agent-R1 installation step. After preparing that environment, the recommended reading path is:
 
 1. Read the [Getting Started](https://agentr1.github.io/Agent-R1/getting-started/) page for the minimal setup flow.
 2. Use [`examples/data_preprocess/gsm8k.py`](examples/data_preprocess/gsm8k.py) and [`examples/run_qwen2.5-3b.sh`](examples/run_qwen2.5-3b.sh) as a sanity check that the environment is wired correctly.
