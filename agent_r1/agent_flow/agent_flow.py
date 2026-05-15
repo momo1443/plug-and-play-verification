@@ -456,7 +456,10 @@ def register(agent_name: str):
 
     def decorator(subclass: type[AgentFlowBase]) -> type[AgentFlowBase]:
         fqdn = f"{subclass.__module__}.{subclass.__qualname__}"
-        _agent_flow_registry[agent_name] = {"_target_": fqdn}
+        if agent_name in _agent_flow_registry:
+            _agent_flow_registry[agent_name]["_target_"] = fqdn
+        else:
+            _agent_flow_registry[agent_name] = {"_target_": fqdn}
         return subclass
 
     return decorator
