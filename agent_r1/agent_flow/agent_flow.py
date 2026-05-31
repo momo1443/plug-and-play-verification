@@ -1,4 +1,4 @@
-# Copyright 2024 Bytedance Ltd. and/or its affiliates
+# Copyright 2025 Agent-R1 Teams
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -736,7 +736,7 @@ class AgentFlowWorkerBase:
 
         metrics = [input.metrics.model_dump() for input in inputs]
 
-        # TODO: 验证 metrics 格式
+        # TODO: Validate the metrics format.
         # Add num_steps to each metric dict for proper aggregation during concat
         for i, metric in enumerate(metrics):
             metric["num_steps"] = num_steps[i]

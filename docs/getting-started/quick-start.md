@@ -4,10 +4,22 @@ This quick start is a **sanity check**, not the main Agent-R1 workflow. Its purp
 
 ## 1. Prepare a Minimal Dataset
 
-Use the GSM8K preprocessing script:
+The processed Agent-R1 datasets are available on [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data). Download the release and place or symlink the GSM8K files to `~/data/gsm8k`, or use the GSM8K preprocessing script to regenerate the sanity-check data locally:
 
 ```bash
-python3 examples/data_preprocess/gsm8k.py --local_save_dir ~/data/gsm8k
+pip install modelscope
+modelscope download --dataset Melmaphother/Agent-R1-data --local_dir data/agent-r1-data
+```
+
+You can also clone the dataset repository with git:
+
+```bash
+git lfs install
+git clone https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data.git data/agent-r1-data
+```
+
+```bash
+python3 -m recipes.gsm8k.data_preprocess.process_gsm8k --local_save_dir ~/data/gsm8k
 ```
 
 This produces:
@@ -20,7 +32,7 @@ This produces:
 Use the provided single-step script:
 
 ```bash
-bash examples/run_qwen2.5-3b.sh
+bash examples/gsm8k/run_steppo.sh
 ```
 
 If needed, adjust the following values before running:
@@ -29,10 +41,11 @@ If needed, adjust the following values before running:
 - `actor_rollout_ref.model.path`
 - dataset paths under `~/data/gsm8k`
 
-The script entrypoint is [`examples/run_qwen2.5-3b.sh`](https://github.com/AgentR1/Agent-R1/blob/main/examples/run_qwen2.5-3b.sh), which launches `python3 -m agent_r1.trainer.main_agent_ppo`.
+The script entrypoint is [`examples/gsm8k/run_steppo.sh`](https://github.com/AgentR1/Agent-R1/blob/main/examples/gsm8k/run_steppo.sh), which launches `python3 -m agent_r1.trainer.main_agent_ppo` with the StepPO-style `gae` estimator.
 
 ## 3. What to Do Next
 
 - Read [`Step-level MDP`](../core-concepts/step-level-mdp.md) to understand the main training abstraction.
 - Read [`Layered Abstractions`](../core-concepts/layered-abstractions.md) to see how `AgentFlowBase`, `AgentEnvLoop`, and `ToolEnv` fit together.
-- Continue to the [`Agent Task Tutorial`](../tutorials/agent-task.md) for the main Agent-R1 workflow based on multi-step interaction.
+- Continue to the [`Agent Task Tutorial`](../tutorials/agent-task.md) for the minimal GSM8K + Tool example based on `ToolEnv + BaseTool`.
+- Use [`Recipes and Algorithms`](../tutorials/recipes-and-algorithms.md) to find task-specific recipes and algorithm scripts.
