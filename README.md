@@ -16,6 +16,7 @@ Unlike single-turn RL pipelines that treat interaction as one growing prompt-res
 
 ## News
 
+- [2026.05.29] **Agent-R1 integrates [StepPO](https://arxiv.org/abs/2604.18401), expands recipe coverage, and releases processed data.** The framework now includes StepPO-style training support together with recipe integrations for HotpotQA, ALFWorld, WebShop, and academic paper search. Processed datasets are available on [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
 - [2026.03.23] **Agent-R1 v0.1.0 is the first official release of the refactored architecture.** It introduces the **Step-level MDP** foundation and new **Layered Abstractions**. The previous implementation is archived on the `legacy` branch.
 - [2026.03.04] **[Claw-R1](https://agentr1.github.io/Claw-R1/) is released.** It extends Agentic RL to general agents such as OpenClaw through a middleware-style design. See [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
 
@@ -25,7 +26,7 @@ Unlike single-turn RL pipelines that treat interaction as one growing prompt-res
 - [2026.01.10] **PaperScout** is released: an autonomous academic paper search agent trained with Agent-R1 and Proximal Sequence Policy Optimization. Read the paper [here](https://arxiv.org/abs/2601.10029).
 - [2025.11.18] The Agent-R1 technical report is released on [arXiv](https://arxiv.org/abs/2511.14460).
 - [2025.05.06] Tool environments are redesigned to support more flexible agent-tool interaction patterns.
-- [2025.05.06] GRPO and REINFORCE++ training crashes caused by NaN values are fixed. See [issue #30](https://github.com/0russwest0/Agent-R1/issues/30).
+- [2025.05.06] GRPO and REINFORCE training crashes caused by NaN values are fixed. See [issue #30](https://github.com/0russwest0/Agent-R1/issues/30).
 - [2025.04.01] Basic inference scripts and an interactive chat interface are added.
 - [2025.03.18] Multi-modal support is added for vision-language model agents.
 - [2025.03.18] `verl` is moved to a git submodule and Agent-R1 extensions are separated from upstream code.
@@ -57,10 +58,10 @@ Agent-R1 uses layered abstractions so new tasks can reuse the same trainer witho
 
 | Layer | Responsibility | When to Use |
 |---|---|---|
-| `AgentFlowBase` | Full control over prompt construction, model calls, and step assembly. | Custom workflows or experimental agent logic. |
-| `AgentEnvLoop` | The main multi-step loop connecting model generation with environment `reset()` / `step()`. | Most agentic RL tasks. |
-| `AgentEnv` | Task environment interface returning observations, rewards, termination, and metadata. | When your task has state transitions. |
-| `ToolEnv` | Built-in environment for parsing tool calls, executing tools, and feeding observations back. | Tool-augmented tasks such as GSM8K-tool. |
+| `AgentFlowBase` | Full control over prompt construction, model calls, branching, context management, and step assembly. | Complex custom agents that do not fit a standard environment loop. |
+| `AgentEnvLoop` | Generic loop connecting model generation with an environment's `reset()` / `step()` interface. | Agent tasks that can be modeled as environment interaction, including traditional RL-style environments. |
+| `AgentEnv` | Task environment interface returning observations, rewards, termination, and metadata. | Implementing the full environment logic for `AgentEnvLoop`. |
+| `ToolEnv` | Built-in environment for standard multi-turn tool calling. | Tool-augmented tasks where you only need to define tools. |
 | `BaseTool` | Standard interface for registering executable tools. | Adding calculators, search tools, APIs, or task-specific checkers. |
 
 The main loop is:
@@ -79,30 +80,44 @@ Agent-R1 uses the same environment setup as [verl](https://verl.readthedocs.io/e
 The recommended path is:
 
 1. Read the [Getting Started](https://agentr1.github.io/Agent-R1/getting-started/) page for the minimal setup flow.
-2. Use [`examples/data_preprocess/gsm8k.py`](examples/data_preprocess/gsm8k.py) and [`examples/run_qwen2.5-3b.sh`](examples/run_qwen2.5-3b.sh) as a sanity check that the environment is wired correctly.
-3. Move to the [Agent Task Tutorial](https://agentr1.github.io/Agent-R1/tutorials/agent-task/) for the main Agent-R1 workflow based on multi-step interaction and tool use.
+2. Download the processed data release from [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data), then place or symlink each task's files to the paths expected by the corresponding recipe.
+3. Use [`examples/gsm8k/run_steppo.sh`](examples/gsm8k/run_steppo.sh) as a sanity check that the environment is wired correctly.
+4. Move to the [Agent Task Tutorial](https://agentr1.github.io/Agent-R1/tutorials/agent-task/) for the minimal GSM8K + Tool example based on `ToolEnv + BaseTool`.
+5. Read [Recipes and Algorithms](https://agentr1.github.io/Agent-R1/tutorials/recipes-and-algorithms/) for the current task integrations and launch-script layout.
+
+Download the processed data with either the ModelScope CLI or git:
+
+```bash
+pip install modelscope
+modelscope download --dataset Melmaphother/Agent-R1-data --local_dir data/agent-r1-data
+```
+
+```bash
+git lfs install
+git clone https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data.git data/agent-r1-data
+```
 
 ### Stage 1: Sanity Check the Base Training Stack
 
-Prepare a minimal GSM8K dataset and run the single-step script:
+Use the processed GSM8K files from the data release, or regenerate a minimal GSM8K dataset locally, then run the single-step script:
 
 ```bash
-python3 examples/data_preprocess/gsm8k.py --local_save_dir ~/data/gsm8k
-bash examples/run_qwen2.5-3b.sh
+python3 -m recipes.gsm8k.data_preprocess.process_gsm8k --local_save_dir ~/data/gsm8k
+bash examples/gsm8k/run_steppo.sh
 ```
 
 This stage is only a **setup check**. It helps confirm that your environment, model path, dataset path, and training stack are wired correctly.
 
-### Stage 2: Run the Main Agent-R1 Workflow
+### Stage 2: Try the Minimal Tool-Calling Example
 
-Prepare the tool-augmented dataset and launch the multi-step agent training script:
+GSM8K + Tool is the simplest `ToolEnv + BaseTool` example. Use the processed GSM8K tool files from the data release, or regenerate the tool-augmented dataset locally, then launch the multi-step tool-calling script:
 
 ```bash
-python3 examples/data_preprocess/gsm8k_tool.py --local_save_dir ~/data/gsm8k_tool
-bash examples/run_qwen3-4b_gsm8k_tool.sh
+python3 -m recipes.gsm8k.data_preprocess.process_gsm8k_tool --local_save_dir ~/data/gsm8k_tool
+bash examples/gsm8k/run_steppo_tool.sh
 ```
 
-This is the main Agent-R1 path, where `AgentEnvLoop` drives multi-step rollout and `ToolEnv` handles tool calls and environment feedback.
+This path uses the generic `AgentEnvLoop` with the built-in `ToolEnv` and recipe-local `calc_gsm8k_reward` tool. The plain GSM8K script remains a single-turn environment sanity check.
 
 Core concepts:
 
@@ -118,7 +133,7 @@ The Agent-R1 report evaluates Qwen3-4B across representative agent scenarios. Th
 | ReAct | 53.1 | 25.8 | 7.14 | 2.98 | 51.58 | 23.8 |
 | GRPO | **83.3** | **59.4** | **81.29** | **74.58** | 65.83 | 44.2 |
 | PPO | 78.1 | 56.7 | 76.42 | 72.38 | **70.18** | **46.0** |
-| REINFORCE++ | 78.9 | 52.8 | 73.84 | 69.57 | 63.41 | 41.8 |
+| REINFORCE | 78.9 | 52.8 | 73.84 | 69.57 | 63.41 | 41.8 |
 | RLOO | 81.6 | 55.2 | 79.08 | 73.46 | 68.02 | 45.1 |
 
 ## Building a New Agent Task
@@ -126,9 +141,9 @@ The Agent-R1 report evaluates Qwen3-4B across representative agent scenarios. Th
 For a new task, keep the trainer intact and implement the task-specific layers:
 
 ```text
-recipe/<task>/
+recipes/<task>/
   base.yaml
-  prepare_<task>_agent_r1.py
+  data_preprocess/process_<task>.py
   <task>_agent_flow.py
   reward_fn.py
   prompts.py
