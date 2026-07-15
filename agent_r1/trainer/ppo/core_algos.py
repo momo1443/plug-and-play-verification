@@ -344,6 +344,67 @@ def compute_grpo_outcome_advantage(
     return scores, scores
 
 
+def compute_step_grpo_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    trajectory_uids: np.ndarray,
+    step_indices: np.ndarray,
+    gamma: float = 1.0,
+    epsilon: float = 1e-6,
+    norm_adv_by_std_in_grpo: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute causal, step-specific GRPO advantages for multi-step agents.
+
+    Multiple rollouts from the same prompt remain the relative-reward group and
+    the actor still uses the GRPO clipped objective. Each row first receives its
+    causal return-to-go, then is normalized only against rollouts from the same
+    prompt and step index. A reward can therefore affect its generating action
+    and causally earlier actions, but never later actions; no trajectory scalar
+    is broadcast to every step.
+    """
+
+    if len(index) != len(trajectory_uids) or len(index) != len(step_indices):
+        raise ValueError("index, trajectory_uids, and step_indices must have equal lengths")
+
+    with torch.no_grad():
+        step_returns = compute_step_discounted_returns(
+            token_level_rewards=token_level_rewards,
+            response_mask=response_mask,
+            trajectory_uids=trajectory_uids,
+            step_indices=step_indices,
+            gamma=gamma,
+        )
+        group_scores: dict[tuple[object, int], list[torch.Tensor]] = defaultdict(list)
+        for row in range(step_returns.shape[0]):
+            key = (_to_hashable(index[row]), int(step_indices[row]))
+            group_scores[key].append(step_returns[row])
+
+        group_stats: dict[tuple[object, int], tuple[torch.Tensor, torch.Tensor]] = {}
+        for key, scores in group_scores.items():
+            if len(scores) == 1:
+                group_stats[key] = (
+                    step_returns.new_tensor(0.0),
+                    step_returns.new_tensor(1.0),
+                )
+            else:
+                stacked = torch.stack(scores)
+                group_stats[key] = (stacked.mean(), stacked.std())
+
+        step_advantages = torch.zeros_like(step_returns)
+        for row in range(step_returns.shape[0]):
+            key = (_to_hashable(index[row]), int(step_indices[row]))
+            mean, std = group_stats[key]
+            centered = step_returns[row] - mean
+            step_advantages[row] = (
+                centered / (std + epsilon) if norm_adv_by_std_in_grpo else centered
+            )
+
+        advantages = step_advantages.unsqueeze(-1) * response_mask
+        returns = step_returns.unsqueeze(-1) * response_mask
+    return advantages, returns
+
+
 def compute_reinforce_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,

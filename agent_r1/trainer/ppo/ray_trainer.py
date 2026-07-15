@@ -36,7 +36,13 @@ from agent_r1.trainer.ppo.core_algos import AgentAdvantageEstimator
 from agent_r1.trainer.ppo.metric_utils import compute_data_metrics
 from agent_r1.trainer.ppo.trajectory_batching import prepare_trajectory_mini_batch
 from verl import DataProto
-from verl.experimental.dataset.sampler import AbstractCurriculumSampler
+try:
+    from verl.experimental.dataset.sampler import AbstractCurriculumSampler
+except ModuleNotFoundError:
+    # verl 0.8 removed the experimental curriculum sampler module.  Keep the
+    # legacy training-only isinstance guard inert on that release.
+    class AbstractCurriculumSampler:  # type: ignore[no-redef]
+        pass
 from verl.protocol import pad_dataproto_to_divisor
 from verl.single_controller.ray import RayClassWithInitArgs
 from verl.single_controller.ray.base import create_colocated_worker_cls
@@ -52,7 +58,15 @@ from verl.trainer.ppo.ray_trainer import (
     apply_kl_penalty,
     compute_response_mask,
 )
-from verl.trainer.ppo.reward import compute_reward_async
+try:
+    from verl.trainer.ppo.reward import compute_reward_async
+except ImportError:
+    class _UnavailableAsyncReward:
+        @staticmethod
+        def remote(*args, **kwargs):
+            raise RuntimeError("compute_reward_async is unavailable in verl 0.8")
+
+    compute_reward_async = _UnavailableAsyncReward()
 from verl.trainer.ppo.utils import Role
 from verl.utils.checkpoint.checkpoint_manager import should_save_ckpt_esi
 from verl.utils.config import omega_conf_to_dataclass
@@ -368,7 +382,10 @@ class RayAgentTrainer(RayPPOTrainer):
     """
 
     def __init__(self, *args, **kwargs):
+        self.reward_fn = kwargs.pop("reward_fn", None)
+        self.val_reward_fn = kwargs.pop("val_reward_fn", None)
         super().__init__(*args, **kwargs)
+        self.use_legacy_worker_impl = self.config.trainer.get("use_legacy_worker_impl", "auto")
         self.use_reward_loop = True
         adv_estimator = AgentAdvantageEstimator(self.config.algorithm.adv_estimator)
         if adv_estimator in (AgentAdvantageEstimator.GAE, AgentAdvantageEstimator.TOKEN_GAE):
@@ -380,6 +397,28 @@ class RayAgentTrainer(RayPPOTrainer):
             if Role.Critic not in self.role_worker_mapping:
                 raise ValueError(f"algorithm.adv_estimator={adv_estimator.value!r} requires Role.Critic.")
             self.use_critic = True
+
+    def _compute_or_extract_reward(self, data: DataProto, reward_fn, return_dict: bool):
+        """Bridge Agent-R1's callable reward contract onto verl 0.8."""
+        if "rm_scores" in data.batch:
+            reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
+            reward_extra_info = {
+                key: data.non_tensor_batch[key]
+                for key in reward_extra_keys
+                if key in data.non_tensor_batch
+            }
+            if return_dict:
+                return {
+                    "reward_tensor": data.batch["rm_scores"],
+                    "reward_extra_info": reward_extra_info,
+                }
+            return data.batch["rm_scores"], reward_extra_info
+        if reward_fn is None:
+            raise ValueError("A callable reward manager is required when rm_scores are absent")
+        result = reward_fn(data, return_dict=return_dict)
+        if return_dict:
+            return result
+        return result, {}
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
@@ -742,13 +781,13 @@ class RayAgentTrainer(RayPPOTrainer):
         # create actor and rollout
         actor_role = Role.ActorRolloutRef if Role.ActorRolloutRef in self.role_worker_mapping else Role.ActorRollout
         if self.hybrid_engine:
-            resource_pool = self.resource_pool_manager.get_resource_pool(actor_role)
+            actor_rollout_resource_pool = self.resource_pool_manager.get_resource_pool(actor_role)
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[actor_role],
                 config=self.config.actor_rollout_ref,
                 role=str(actor_role),
             )
-            self.resource_pool_to_cls[resource_pool][str(actor_role)] = actor_rollout_cls
+            self.resource_pool_to_cls[actor_rollout_resource_pool][str(actor_role)] = actor_rollout_cls
         else:
             raise NotImplementedError
 
@@ -861,16 +900,47 @@ class RayAgentTrainer(RayPPOTrainer):
         self.async_rollout_mode = True
 
         from agent_r1.agent_flow import AgentFlowManager
+        from verl.workers.rollout.llm_server import LLMServerManager
 
         if self.config.reward_model.enable:
             rm_resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
         else:
             rm_resource_pool = None
 
-        self.async_rollout_manager = AgentFlowManager(
+        self.llm_server_manager = LLMServerManager.create(
             config=self.config,
             worker_group=self.actor_rollout_wg,
+            rollout_resource_pool=actor_rollout_resource_pool,
+        )
+        self.async_rollout_manager = AgentFlowManager.create(
+            config=self.config,
+            llm_client=self.llm_server_manager.get_client(),
             rm_resource_pool=rm_resource_pool,
+        )
+
+        # HYBRID rollout replicas load dummy weights (see verl vllm_async_server:
+        # load_format stays "dummy" in HYBRID mode). Real actor weights must be
+        # pushed into the vLLM engines via the checkpoint engine before any
+        # generation, exactly as verl's native RayPPOTrainer does. Without this
+        # step the servers keep random weights and emit degenerate output
+        # (e.g. 1024 newline tokens), producing empty answers for every sample.
+        from verl.utils.config import omega_conf_to_dataclass
+        from verl.utils.import_utils import load_class_from_fqn
+
+        checkpoint_engine_config = omega_conf_to_dataclass(
+            self.config.actor_rollout_ref.rollout.checkpoint_engine
+        )
+        checkpoint_manager_class_fqn = self.config.actor_rollout_ref.rollout.get("checkpoint_manager_class")
+        if checkpoint_manager_class_fqn:
+            CheckpointEngineManager = load_class_from_fqn(
+                checkpoint_manager_class_fqn, "CheckpointEngineManager"
+            )
+        else:
+            from verl.checkpoint_engine import CheckpointEngineManager
+        self.checkpoint_manager = CheckpointEngineManager(
+            config=checkpoint_engine_config,
+            trainer=self.actor_rollout_wg,
+            replicas=self.llm_server_manager.get_replicas(),
         )
 
     def fit(self):
@@ -895,6 +965,10 @@ class RayAgentTrainer(RayPPOTrainer):
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+
+        # Sync actor weights into the (dummy-loaded) HYBRID vLLM rollout engines
+        # before the first generation, mirroring verl's native RayPPOTrainer.fit().
+        self.checkpoint_manager.update_weights(self.global_steps)
 
         current_epoch = self.global_steps // len(self.train_dataloader)
 

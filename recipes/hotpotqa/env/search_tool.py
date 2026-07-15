@@ -11,6 +11,13 @@ import numpy as np
 import torch
 from FlagEmbedding import FlagAutoModel
 
+from recipes.hotpotqa.evidence import (
+    EVIDENCE_SCHEMA_VERSION,
+    EVIDENCE_SIDECAR_FILENAME,
+    OfficialEvidenceStore,
+    coerce_bool,
+)
+
 # Retrieval corpus root: defaults to <repo>/data/corpus/hotpotqa_corpus
 # (index.bin + hpqa_corpus.jsonl). Override with HOTPOTQA_CORPUS_DATA_ROOT.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -45,6 +52,19 @@ DEFAULT_HOTPOTQA_EMBEDDING_MODEL = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_hotpotqa_evidence_sidecar(
+    evidence_sidecar_path: Optional[str],
+    *,
+    corpus_data_dir: Path,
+) -> Path:
+    raw = (
+        evidence_sidecar_path
+        or os.environ.get("HOTPOTQA_EVIDENCE_SIDECAR")
+        or str(corpus_data_dir / EVIDENCE_SIDECAR_FILENAME)
+    )
+    return Path(raw).expanduser().resolve()
 
 
 def default_hotpotqa_embedding_device() -> str:
@@ -123,31 +143,31 @@ class Passage:
     title: str
     text: str
     score: float = 0.0
+    sentence_evidence: list[dict[str, Any]] = field(default_factory=list)
+
+    def evidence_record(self) -> dict[str, Any]:
+        """Return the compact, auditable retrieval record persisted by A0."""
+
+        return {
+            "pid": int(self.pid),
+            "title": self.title,
+            "text": self.text,
+            "score": float(self.score),
+            "sentence_evidence": self.sentence_evidence,
+        }
 
 
-@dataclass
-class PassagePool:
-    passages: list[Passage] = field(default_factory=list)
+@dataclass(frozen=True)
+class CorpusParagraph:
+    """One unchanged row from the existing paragraph corpus."""
 
-    def has_passage(self, pid: int) -> bool:
-        return any(p.pid == pid for p in self.passages)
-
-    def add_passage(self, passage: Passage) -> None:
-        # Dedupe by passage text; pid is the index in-pool (avoids fixed 0~4 ids across searches dropping hits).
-        if any(p.text == passage.text for p in self.passages):
-            return
-        pid = len(self.passages)
-        self.passages.append(Passage(pid=pid, title=passage.title, text=passage.text, score=passage.score))
+    pid: int
+    title: str
+    text: str
 
     @property
-    def passage_list(self) -> str:
-        if not self.passages:
-            return "None"
-        lines = []
-        for i, p in enumerate(self.passages, start=1):
-            snippet = p.text[:512].replace("\n", " ")
-            lines.append(f"[{i}] (id={p.pid}) {p.title}: {snippet}")
-        return "\n".join(lines)
+    def retrieval_text(self) -> str:
+        return f"{self.title} {self.text}".strip()
 
 
 class HotpotQASearchToolLegacy:
@@ -167,8 +187,10 @@ class HotpotQASearchToolLegacy:
     _shared_lock = threading.RLock()
     _shared_key: Optional[str] = None
     _shared_index: Optional[faiss.Index] = None
-    _shared_corpus: Optional[list[str]] = None
+    _shared_corpus: Optional[list[CorpusParagraph]] = None
     _shared_model: Optional[FlagAutoModel] = None
+    _shared_evidence_key: Optional[str] = None
+    _shared_evidence_store: Optional[OfficialEvidenceStore] = None
 
     def __init__(
         self,
@@ -176,12 +198,26 @@ class HotpotQASearchToolLegacy:
         query_instruction: str = "Represent this sentence for searching relevant passages: ",
         embedding_devices: Optional[str] = None,
         corpus_data_dir: Optional[str] = None,
+        require_sentence_evidence: bool = False,
+        evidence_sidecar_path: Optional[str] = None,
     ) -> None:
         self.data_dir = resolve_hotpotqa_corpus_data_root(corpus_data_dir)
         self.index_path = self.data_dir / "index.bin"
         self.corpus_path = self.data_dir / "hpqa_corpus.jsonl"
         self.embedding_model_name = embedding_model_name
         self.query_instruction = query_instruction
+        env_requirement = os.environ.get("HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE")
+        self.require_sentence_evidence = coerce_bool(
+            env_requirement if env_requirement is not None else require_sentence_evidence,
+            name="HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE",
+        )
+        self.evidence_schema_version = (
+            EVIDENCE_SCHEMA_VERSION if self.require_sentence_evidence else "legacy-compatible"
+        )
+        self.evidence_sidecar_path = resolve_hotpotqa_evidence_sidecar(
+            evidence_sidecar_path,
+            corpus_data_dir=self.data_dir,
+        )
         raw = (
             embedding_devices if embedding_devices is not None else default_hotpotqa_embedding_device()
         ).strip() or "cpu"
@@ -194,8 +230,9 @@ class HotpotQASearchToolLegacy:
             )
 
         self._index: Optional[faiss.Index] = None
-        self._corpus: list[str] = []
+        self._corpus: list[CorpusParagraph] = []
         self._model: Optional[FlagAutoModel] = None
+        self._evidence_store: Optional[OfficialEvidenceStore] = None
         self._ensure_loaded()
 
     def __enter__(self):
@@ -225,7 +262,7 @@ class HotpotQASearchToolLegacy:
                     "HotpotQASearchToolLegacy: loading corpus jsonl from %s (may take several minutes)",
                     self.corpus_path,
                 )
-                corpus: list[str] = []
+                corpus: list[CorpusParagraph] = []
                 with self.corpus_path.open("r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
@@ -234,7 +271,7 @@ class HotpotQASearchToolLegacy:
                         rec = json.loads(line)
                         title = str(rec.get("title", ""))
                         text = str(rec.get("text", ""))
-                        corpus.append(f"{title} {text}".strip())
+                        corpus.append(CorpusParagraph(pid=len(corpus), title=title, text=text))
 
                 logger.info(
                     "HotpotQASearchToolLegacy: loading FlagEmbedding model=%s devices=%s",
@@ -252,17 +289,46 @@ class HotpotQASearchToolLegacy:
                 self.__class__._shared_model = model
 
                 if int(index.ntotal) != len(corpus):
-                    logger.warning(
-                        "FAISS index.ntotal (%s) != hpqa_corpus.jsonl rows (%s). "
+                    message = (
+                        f"FAISS index.ntotal ({int(index.ntotal)}) != hpqa_corpus.jsonl rows ({len(corpus)}). "
                         "Ids from search may be out of range and passages will be empty; "
-                        "rebuild index.bin with the same jsonl or fix the corpus file.",
-                        int(index.ntotal),
-                        len(corpus),
+                        "rebuild index.bin with the same jsonl or fix the corpus file."
                     )
+                    if self.require_sentence_evidence:
+                        raise ValueError(message)
+                    logger.warning(message)
 
             self._index = self.__class__._shared_index
             self._corpus = self.__class__._shared_corpus or []
             self._model = self.__class__._shared_model
+            if self.require_sentence_evidence:
+                evidence_key = str(self.evidence_sidecar_path)
+                if (
+                    self.__class__._shared_evidence_key != evidence_key
+                    or self.__class__._shared_evidence_store is None
+                ):
+                    logger.info(
+                        "HotpotQASearchToolLegacy: loading official evidence sidecar from %s",
+                        self.evidence_sidecar_path,
+                    )
+                    # Artifact preparation/validation performs the full SQLite
+                    # integrity scan once. Repeating a 658 MB PRAGMA
+                    # integrity_check in every AgentFlow process creates eight
+                    # redundant NAS scans before the first model request.
+                    store = OfficialEvidenceStore(
+                        self.evidence_sidecar_path,
+                        verify_integrity=False,
+                    )
+                    if store.paragraph_count != len(self._corpus):
+                        raise ValueError(
+                            f"Evidence sidecar has {store.paragraph_count} paragraphs for "
+                            f"{len(self._corpus)} corpus rows"
+                        )
+                    self.__class__._shared_evidence_key = evidence_key
+                    self.__class__._shared_evidence_store = store
+                self._evidence_store = self.__class__._shared_evidence_store
+            else:
+                self._evidence_store = None
 
     def close(self) -> None:
         # Keep shared model/index alive for whole training process.
@@ -270,14 +336,21 @@ class HotpotQASearchToolLegacy:
         self._index = self.__class__._shared_index
         self._corpus = self.__class__._shared_corpus or []
         self._model = self.__class__._shared_model
+        self._evidence_store = self.__class__._shared_evidence_store
+
+    @property
+    def evidence_store(self) -> OfficialEvidenceStore:
+        if not self.require_sentence_evidence or self._evidence_store is None:
+            raise RuntimeError("Official sentence evidence is not enabled for this search tool")
+        return self._evidence_store
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:
         try:
             query = str(args["query"])
             embeddings = self._encode_queries([query])
             assert self._index is not None
-            _, ids = self._index.search(embeddings, 5)
-            result_str = self._format_results(ids[0])
+            scores, ids = self._index.search(embeddings, 5)
+            result_str = self._format_results(ids[0], scores[0])
             return {"content": result_str, "success": True}
         except Exception as e:
             return {"content": str(e), "success": False}
@@ -290,8 +363,8 @@ class HotpotQASearchToolLegacy:
             queries = [str(x["query"]) for x in args_list]
             embeddings = self._encode_queries(queries)
             assert self._index is not None
-            _, ids = self._index.search(embeddings, 5)
-            results_str = [self._format_results(ids[i]) for i in range(len(ids))]
+            scores, ids = self._index.search(embeddings, 5)
+            results_str = [self._format_results(ids[i], scores[i]) for i in range(len(ids))]
             return [{"content": result_str, "success": True} for result_str in results_str]
         except Exception as e:
             logger.warning(
@@ -315,31 +388,70 @@ class HotpotQASearchToolLegacy:
             arr = np.ascontiguousarray(arr)
         return arr
 
-    def _format_results(self, results) -> str:
-        results_list: list[str] = []
+    def _format_results(self, results, scores=None) -> str:
+        results_list: list[Any] = []
         row_ids = [int(x) for x in np.asarray(results, dtype=np.int64).reshape(-1)]
-        for result in row_ids:
+        row_scores = (
+            [float(x) for x in np.asarray(scores, dtype=np.float32).reshape(-1)]
+            if scores is not None
+            else [0.0] * len(row_ids)
+        )
+        for result, score in zip(row_ids, row_scores, strict=False):
             if result < 0 or result >= len(self._corpus):
                 continue
-            results_list.append(self._corpus[result])
+            paragraph = self._corpus[result]
+            retrieval_text = paragraph.retrieval_text
+            if self.require_sentence_evidence:
+                sentence_evidence = self.evidence_store.paragraph_evidence(
+                    result,
+                    expected_title=paragraph.title,
+                    expected_text=paragraph.text,
+                )
+                results_list.append(
+                    Passage(
+                        pid=result,
+                        title=paragraph.title,
+                        text=retrieval_text,
+                        score=score,
+                        sentence_evidence=sentence_evidence,
+                    ).evidence_record()
+                )
+            else:
+                results_list.append(retrieval_text)
         if not results_list and self._corpus and row_ids and max(row_ids) >= len(self._corpus):
             logger.warning(
                 "FAISS returned ids %s but corpus length is %s; dropping all hits.",
                 row_ids[:10],
                 len(self._corpus),
             )
-        return json.dumps({"results": results_list}, ensure_ascii=False)
+        payload: dict[str, Any] = {"results": results_list}
+        if self.require_sentence_evidence:
+            payload["evidence_schema_version"] = self.evidence_schema_version
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def parse_legacy_tool_result(content: str) -> list[Passage]:
-    """Parse legacy `{"results":[...]}` tool content into Passage list."""
+    """Parse paragraph results while retaining the legacy string payload."""
     passages: list[Passage] = []
     try:
         payload = json.loads(content)
         results = payload.get("results", [])
-        for idx, text in enumerate(results):
-            text_str = str(text)
-            passages.append(Passage(pid=idx, title="", text=text_str, score=0.0))
+        for idx, item in enumerate(results):
+            if isinstance(item, dict):
+                sentence_evidence = item.get("sentence_evidence")
+                passages.append(
+                    Passage(
+                        pid=int(item.get("pid", idx)),
+                        title=str(item.get("title", "")),
+                        text=str(item.get("text", "")),
+                        score=float(item.get("score", 0.0)),
+                        sentence_evidence=(
+                            list(sentence_evidence) if isinstance(sentence_evidence, list) else []
+                        ),
+                    )
+                )
+            else:
+                passages.append(Passage(pid=idx, title="", text=str(item), score=0.0))
     except Exception:
         return []
     return passages
