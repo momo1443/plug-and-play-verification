@@ -31,13 +31,27 @@ def _normalize_answer(s: str) -> str:
 
 def _extract_answer_from_solution(solution_str: str) -> str:
     """
-    Prefer content inside <answer>...</answer>. If not present, fall back to full string.
+    Prefer the last complete <answer>...</answer> pair. If not present, fall back
+    to the full string.
+
+    Qwen reasoning text can mention a literal ``<answer>`` before producing its
+    actual final answer. Pairing the first such opening tag with the final
+    closing tag incorrectly includes the reasoning and turns an exact answer
+    into an EM miss, so locate the last opening tag before the last close.
     """
-    pattern = r"<answer>(.*?)</answer>"
-    matches = list(re.finditer(pattern, solution_str, flags=re.DOTALL | re.IGNORECASE))
-    if not matches:
+    lowered = solution_str.lower()
+    think_close = lowered.rfind("</think>")
+    if think_close >= 0:
+        solution_str = solution_str[think_close + len("</think>") :]
+        lowered = solution_str.lower()
+    close_start = lowered.rfind("</answer>")
+    if close_start < 0:
         return solution_str.strip()
-    return matches[-1].group(1).strip()
+    open_start = lowered.rfind("<answer>", 0, close_start)
+    if open_start < 0:
+        return solution_str.strip()
+    answer_start = open_start + len("<answer>")
+    return solution_str[answer_start:close_start].strip()
 
 
 def _iter_ground_truths(ground_truth: Any) -> list[str]:

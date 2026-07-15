@@ -29,29 +29,34 @@ from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
 
 from agent_r1.reward_loop.reward_loop import RewardLoopWorker
-from verl.experimental.agent_loop.agent_loop import (
-    AsyncLLMServerManager,
-    DictConfigWrap,
-)
-from verl.experimental.agent_loop.prometheus_utils import update_prometheus_config
+from verl.experimental.agent_loop.agent_loop import DictConfigWrap
 from verl.experimental.agent_loop.utils import resolve_config_path
 from verl.protocol import DataProto
-from verl.single_controller.ray.base import RayResourcePool, RayWorkerGroup
+from verl.single_controller.ray.base import RayResourcePool
 from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.chat_template import initialize_system_prompt
 from verl.utils.dataset.rl_dataset import RLHFDataset, get_dataset_class
 from verl.utils.fs import copy_to_local
 from verl.utils.model import compute_position_id_with_mask
-from verl.utils.ray_utils import get_event_loop
+from verl.utils.ray_utils import auto_await, get_event_loop
 from verl.utils.rollout_trace import (
     RolloutTraceConfig,
     rollout_trace_attr,
 )
+from verl.utils.tokenizer import get_processor_token_id
 from verl.utils.transferqueue_utils import tqbridge
-from verl.workers.rollout.replica import get_rollout_replica_class
+from verl.workers.rollout.llm_server import LLMServerClient
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+def _as_object_array(values) -> np.ndarray:
+    """Build a one-dimensional object array without inferring nested shapes."""
+    items = list(values)
+    result = np.empty(len(items), dtype=object)
+    result[:] = items
+    return result
 
 
 class AgentFlowMetrics(BaseModel):
@@ -133,7 +138,7 @@ class AgentFlowBase(ABC):
     def __init__(
         self,
         trainer_config: DictConfigWrap,
-        server_manager: AsyncLLMServerManager,
+        server_manager: LLMServerClient,
         reward_loop_worker: RewardLoopWorker,
         tokenizer: AutoTokenizer,
         processor: AutoProcessor,
@@ -145,7 +150,7 @@ class AgentFlowBase(ABC):
 
         Args:
             trainer_config (DictConfigWrap): trainer config.
-            server_manager (AsyncLLMServerManager): OpenAI compatible LLM server manager.
+            server_manager (LLMServerClient): OpenAI compatible LLM server client.
             reward_loop_worker (RewardLoopWorker): Reward loop worker.
             tokenizer (AutoTokenizer): Tokenizer for tokenize messages.
             processor (AutoProcessor): Processor for process messages.
@@ -366,8 +371,12 @@ class AgentFlowBase(ABC):
         if self.processor is None:
             return multi_modal_inputs
 
-        images = output.multi_modal_data.get("images")
-        videos = output.multi_modal_data.get("videos")
+        # Qwen3.5 exposes a multimodal processor even for text-only samples.
+        # Keep the processor path active for position-id construction, but
+        # normalize an absent payload exactly as verl's current AgentLoop does.
+        multi_modal_data = output.multi_modal_data or {}
+        images = multi_modal_data.get("images")
+        videos = multi_modal_data.get("videos")
         # split the videos and according metadatas
         if videos is not None:
             videos, video_metadatas = zip(*videos, strict=False)
@@ -396,15 +405,28 @@ class AgentFlowBase(ABC):
         if self.processor is None:
             return compute_position_id_with_mask(attention_mask)  # (1, seq_len)
 
-        image_grid_thw = multi_modal_inputs.get("image_grid_thw")
-        video_grid_thw = multi_modal_inputs.get("video_grid_thw")
+        multi_modal_kwargs = {
+            "image_grid_thw": multi_modal_inputs.get("image_grid_thw"),
+            "video_grid_thw": multi_modal_inputs.get("video_grid_thw"),
+        }
+        # transformers>=5.3 makes this argument mandatory for Qwen3.5's
+        # get_rope_index, including text-only inputs. Mirror verl's current
+        # AgentLoop behavior and reconstruct token types from the padded ids.
+        if multi_modal_inputs.pop("mm_token_type_ids", None) is not None:
+            mm_token_type_ids = torch.zeros_like(input_ids)
+            image_token_id = get_processor_token_id(self.processor, "image")
+            video_token_id = get_processor_token_id(self.processor, "video")
+            if image_token_id is not None:
+                mm_token_type_ids[0][input_ids[0] == image_token_id] = 1
+            if video_token_id is not None:
+                mm_token_type_ids[0][input_ids[0] == video_token_id] = 2
+            multi_modal_kwargs["mm_token_type_ids"] = mm_token_type_ids
 
         # Model's get_rope_index has been dynamically bind to the processor.
         vision_position_ids, _ = self.processor.get_rope_index(
             input_ids=input_ids,
-            image_grid_thw=image_grid_thw,
-            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
+            **multi_modal_kwargs,
         )
         vision_position_ids = vision_position_ids.transpose(0, 1)  # (3, 1, seq_len) => (1, 3, seq_len)
 
@@ -429,9 +451,9 @@ class AgentFlowBase(ABC):
                 batch_size=1,
             )
             non_tensor_batch = {
-                **{k: np.array([v]) for k, v in kwargs.items()},
+                **{k: _as_object_array([v]) for k, v in kwargs.items()},
                 "__num_turns__": np.array([output.num_turns]),
-                "tool_extra_fields": np.array([output.extra_fields], dtype=object),
+                "tool_extra_fields": _as_object_array([output.extra_fields]),
             }
 
             data = DataProto(
@@ -471,20 +493,18 @@ class AgentFlowWorkerBase:
     def __init__(
         self,
         config: DictConfig,
-        server_handles: list[ray.actor.ActorHandle],
+        llm_client: LLMServerClient,
         reward_router_address: str = None,
     ):
         """Initialize agent flow manager.
 
         Args:
             config (DictConfig): YAML config.
-            server_handles (List[ray.actor.ActorHandle]): OpenAI compatible LLM server actor handles.
+            llm_client (LLMServerClient): OpenAI compatible LLM server client.
         """
         self.config = config
 
-        # for recipe to change
-        if not hasattr(self, "server_manager"):
-            self.server_manager = AsyncLLMServerManager(config, server_handles)
+        self.server_manager = llm_client
 
         self.dataset_cls = get_dataset_class(config.data)
         self.reward_router_address = reward_router_address
@@ -593,7 +613,13 @@ class AgentFlowWorkerBase:
             kwargs = {k: v[i] for k, v in batch.non_tensor_batch.items()}
             tasks.append(
                 asyncio.create_task(
-                    self._run_agent_flow(sampling_params, trajectory_info[i], trace=trace_this_sample, **kwargs)
+                    self._run_agent_flow(
+                        sampling_params,
+                        trajectory_info[i],
+                        trace=trace_this_sample,
+                        is_validation=bool(trajectory_info[i]["validate"]),
+                        **kwargs,
+                    )
                 )
             )
         outputs = await asyncio.gather(*tasks)
@@ -608,6 +634,7 @@ class AgentFlowWorkerBase:
         *,
         agent_name: str,
         trace: bool = True,
+        is_validation: bool = False,
         **kwargs,
     ) -> AgentFlowOutput:
         with rollout_trace_attr(
@@ -633,7 +660,11 @@ class AgentFlowWorkerBase:
                 dataset_cls=self.dataset_cls,
                 dataset_config=self.config.data,
             )
-            output: AgentFlowOutput = await agent_flow.run(sampling_params, **kwargs)
+            output: AgentFlowOutput = await agent_flow.run(
+                sampling_params,
+                _agent_r1_is_validation=is_validation,
+                **kwargs,
+            )
 
             return output
 
@@ -673,8 +704,11 @@ class AgentFlowWorkerBase:
                 routed_experts_list.append(step.routed_experts)
                 if step.reward_score is not None:
                     reward_tensor = torch.zeros_like(step.response_mask, dtype=torch.float32)
-                    valid_length = step.response_mask.sum().item()
-                    reward_tensor[0, valid_length - 1] = float(step.reward_score)
+                    valid_length = int(step.response_mask.sum().item())
+                    if valid_length > 0:
+                        reward_tensor[0, valid_length - 1] = float(step.reward_score)
+                    elif float(step.reward_score) != 0.0:
+                        raise ValueError("A fully masked AgentFlow step cannot carry non-zero reward")
                     reward_tensors.append(reward_tensor)
                 else:
                     reward_tensors.append(None)
@@ -728,11 +762,11 @@ class AgentFlowWorkerBase:
             all_reward_keys.update(info.keys())
         reward_extra_keys = sorted(all_reward_keys)
         for key in reward_extra_keys:
-            non_tensor_batch[key] = np.array([info.get(key) for info in reward_extra_infos])
+            non_tensor_batch[key] = _as_object_array(info.get(key) for info in reward_extra_infos)
 
         # Add multi_modal_inputs to non_tensor_batch if any samples have them
         if any(mmi is not None for mmi in multi_modal_inputs):
-            non_tensor_batch["multi_modal_inputs"] = np.array(multi_modal_inputs, dtype=object)
+            non_tensor_batch["multi_modal_inputs"] = _as_object_array(multi_modal_inputs)
 
         metrics = [input.metrics.model_dump() for input in inputs]
 
@@ -755,7 +789,7 @@ class AgentFlowWorkerBase:
             for input_item in inputs:
                 for step in input_item.steps:
                     temp_list.append(step.extra_fields.get(key))
-            extra_fields[key] = np.array(temp_list, dtype=object)
+            extra_fields[key] = _as_object_array(temp_list)
 
         non_tensor_batch.update(extra_fields)
         return DataProto(
@@ -784,15 +818,15 @@ class AgentFlowWorker(AgentFlowWorkerBase):
     """Agent flow worker takes a batch of messages and run each message in an agent flow."""
 
     def __init__(
-        self, config: DictConfig, server_handles: list[ray.actor.ActorHandle], reward_router_address: str = None
+        self, config: DictConfig, llm_client: LLMServerClient, reward_router_address: str = None
     ):
         """Initialize agent flow manager.
         Args:
             config (DictConfig): YAML config.
-            server_handles (List[ray.actor.ActorHandle]): OpenAI compatible LLM server actor handles.
+            llm_client (LLMServerClient): OpenAI compatible LLM server client.
             reward_router_address (str): reward router address.
         """
-        super().__init__(config, server_handles, reward_router_address)
+        super().__init__(config, llm_client, reward_router_address)
 
 
 async def get_trajectory_info(step, index, validate):
@@ -821,17 +855,20 @@ class AgentFlowManager:
     """Agent flow manager that manages a group of agent flow workers."""
 
     def __init__(
-        self, config: DictConfig, worker_group: RayWorkerGroup = None, rm_resource_pool: RayResourcePool = None
+        self,
+        config: DictConfig,
+        llm_client: LLMServerClient,
+        rm_resource_pool: RayResourcePool = None,
     ):
         """Initialize agent flow manager.
 
         Args:
             config (DictConfig): trainer config.
-            worker_group (RayWorkerGroup): ActorRolloutRef worker group for hybrid mode; None for standalone mode.
+            llm_client (LLMServerClient): Client owned by verl's LLMServerManager.
             rm_resource_pool (RayResourcePool): Resource pool for reward model (Standalone mode).
         """
         self.config = config
-        self.worker_group = worker_group
+        self.llm_client = llm_client
         self.reward_model_manager = None
         self.reward_router_address = None
         if self.config.reward_model.enable:
@@ -840,59 +877,18 @@ class AgentFlowManager:
             self.reward_model_manager = RewardModelManager(config.reward_model, rm_resource_pool)
             self.reward_router_address = self.reward_model_manager.get_router_address()
 
-        # for recipe to change
-        if not hasattr(self, "rollout_replica_class"):
-            self.rollout_replica_class = get_rollout_replica_class(self.config.actor_rollout_ref.rollout.name)
         if not hasattr(self, "agent_flow_workers_class"):
             self.agent_flow_workers_class = AgentFlowWorker
 
-        self._initialize_llm_servers()
-        self._init_agent_flow_workers()
+    @classmethod
+    @auto_await
+    async def create(cls, *args, **kwargs):
+        """Create workers after the shared verl LLM servers are initialized."""
+        instance = cls(*args, **kwargs)
+        await instance._init_agent_flow_workers()
+        return instance
 
-        # Initially we're in sleep mode.
-        if self.config.actor_rollout_ref.rollout.free_cache_engine:
-            self.sleep()
-
-    def _initialize_llm_servers(self):
-        rollout_world_size = (
-            self.config.actor_rollout_ref.rollout.tensor_model_parallel_size
-            * self.config.actor_rollout_ref.rollout.data_parallel_size
-            * self.config.actor_rollout_ref.rollout.pipeline_model_parallel_size
-        )
-        world_size = (
-            self.worker_group.world_size
-            if self.worker_group
-            else self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes
-        )
-        num_replicas = world_size // rollout_world_size
-
-        rollout_config = self.config.actor_rollout_ref.rollout
-        model_config = self.config.actor_rollout_ref.model
-        self.rollout_replicas = [
-            self.rollout_replica_class(
-                replica_rank=replica_rank,
-                config=rollout_config,
-                model_config=model_config,
-                gpus_per_node=self.config.trainer.n_gpus_per_node,
-            )
-            for replica_rank in range(num_replicas)
-        ]
-        if self.worker_group:
-            self._run_all([server.init_hybrid(self.worker_group) for server in self.rollout_replicas])
-        else:
-            self._run_all([server.init_standalone() for server in self.rollout_replicas])
-        self.server_handles = [server._server_handle for server in self.rollout_replicas]
-        self.server_addresses = [server._server_address for server in self.rollout_replicas]
-
-        print(f"AgentFlowManager: {self.server_addresses}")
-
-        # Update Prometheus configuration with server addresses
-        if rollout_config.prometheus.enable:
-            if rollout_config.disable_log_stats:
-                raise ValueError("PROMETHEUS needs disable_log_stats==False, but it is currently True.")
-            update_prometheus_config(rollout_config.prometheus, self.server_addresses)
-
-    def _init_agent_flow_workers(self):
+    async def _init_agent_flow_workers(self):
         self.agent_flow_workers = []
         num_workers = self.config.actor_rollout_ref.rollout.agent.num_workers
 
@@ -902,14 +898,15 @@ class AgentFlowManager:
             node_id = node_ids[i % len(node_ids)]
             self.agent_flow_workers.append(
                 self.agent_flow_workers_class.options(
-                    name=f"agent_flow_worker_{i}",
+                    name=f"agent_flow_worker_{i}_{uuid4().hex[:8]}",
                     scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
                         node_id=node_id, soft=True
                     ),
-                ).remote(self.config, self.server_handles, self.reward_router_address)
+                ).remote(self.config, self.llm_client, self.reward_router_address)
             )
 
-    def generate_sequences(self, prompts: DataProto) -> DataProto:
+    @auto_await
+    async def generate_sequences(self, prompts: DataProto) -> DataProto:
         """Split input batch and dispatch to agent loop workers.
 
         Args:
@@ -919,20 +916,19 @@ class AgentFlowManager:
             DataProto: Output batch.
         """
 
-        self.wake_up()
         if self.reward_model_manager:
             self.reward_model_manager.wake_up()
 
         split_size = (len(prompts) - 1) // len(self.agent_flow_workers) + 1
         chunks = prompts.split(split_size)
-        outputs = ray.get(
-            [
+        workers = self.agent_flow_workers[: len(chunks)]
+        outputs = await asyncio.gather(
+            *[
                 worker.generate_sequences.remote(chunk)
-                for worker, chunk in zip(self.agent_flow_workers, chunks, strict=True)
+                for worker, chunk in zip(workers, chunks, strict=True)
             ]
         )
         output = DataProto.concat(outputs)
-        self.sleep()
         if self.reward_model_manager:
             self.reward_model_manager.sleep()
 
@@ -1012,21 +1008,3 @@ class AgentFlowManager:
         timing["agent_flow/slowest/total_response_length"] = total_response_length
 
         return timing
-
-    def wake_up(self):
-        """Wake up all rollout replica instances."""
-        self._run_all([replica.wake_up() for replica in self.rollout_replicas])
-
-    def sleep(self):
-        """Sleep all rollout replica instances."""
-        self._run_all([replica.sleep() for replica in self.rollout_replicas])
-
-    def clear_kv_cache(self):
-        """Clear all rollout kv cache, but don`t sleep."""
-        self._run_all([replica.clear_kv_cache() for replica in self.rollout_replicas])
-
-    def _run_all(self, tasks: list[asyncio.Task]):
-        async def run_all():
-            await asyncio.gather(*tasks)
-
-        asyncio.run(run_all())

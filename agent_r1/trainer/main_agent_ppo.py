@@ -24,7 +24,7 @@ from omegaconf import OmegaConf
 
 from agent_r1.trainer.ppo.ray_trainer import RayAgentTrainer, need_critic_agent_ppo
 from verl.trainer.constants_ppo import get_ppo_ray_runtime_env
-from verl.trainer.ppo.reward import load_reward_manager
+from verl.trainer.ppo.reward import get_custom_reward_fn
 from verl.trainer.ppo.utils import need_reference_policy
 from verl.utils.config import validate_config
 from verl.utils.device import auto_set_device, is_cuda_available
@@ -285,7 +285,7 @@ class TaskRunner:
         # validate config
         validate_config(
             config=config,
-            use_reference_policy=need_reference_policy(self.role_worker_mapping),
+            use_reference_policy=need_reference_policy(config),
             use_critic=need_critic_agent_ppo(config),
         )
 
@@ -304,12 +304,15 @@ class TaskRunner:
         processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)
 
         # Load the reward manager for training and validation.
-        reward_fn = load_reward_manager(
-            config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
-        )
-        val_reward_fn = load_reward_manager(
-            config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {})
-        )
+        # Agent-R1's step-preserving trainer still consumes the callable reward
+        # manager contract.  verl 0.8's load_reward_manager now returns an
+        # async RewardLoop manager instead, so construct the compatible callable
+        # evaluator explicitly for the validation/training fallbacks.
+        from verl.workers.reward_manager.naive import NaiveRewardManager
+
+        compute_score = get_custom_reward_fn(config)
+        reward_fn = NaiveRewardManager(tokenizer, num_examine=0, compute_score=compute_score)
+        val_reward_fn = NaiveRewardManager(tokenizer, num_examine=1, compute_score=compute_score)
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 
@@ -337,7 +340,20 @@ class TaskRunner:
         train_sampler = create_rl_sampler(config.data, train_dataset)
 
         # Initialize the Agent trainer.
-        trainer = RayAgentTrainer(
+        trainer_class = RayAgentTrainer
+        if os.getenv("HOTPOTQA_STREAMING_RESULTS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            from agent_r1.trainer.streaming_agent_validation import (
+                StreamingValidationRayAgentTrainer,
+            )
+
+            trainer_class = StreamingValidationRayAgentTrainer
+
+        trainer = trainer_class(
             config=config,
             tokenizer=tokenizer,
             processor=processor,

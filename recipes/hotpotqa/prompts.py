@@ -1,13 +1,15 @@
-"""
-HotpotQA prompts - same layout as `recipes/paper_search/prompts.py` (system + user
-sections, Instructions, Output Format with `<analysis>` / `<tool_call>` placeholders).
-HotpotQA-only: `### Retrieved Passages`, `### Recent tool / format issues`, and
-`<answer>` when finishing from current evidence.
-"""
+"""HotpotQA prompts for Qwen search and minimal answers."""
 
 HOTPOTQA_SYSTEM_PROMPT = (
     "You are a research agent. Your goal is to answer the User Query using Wikipedia search evidence."
 )
+
+HOTPOTQA_FINAL_TURN_PROMPT = """FINAL TURN: Do not call search again. Use the best available evidence.
+Reply only with `<answer>MINIMAL_ANSWER</answer>`.
+- Return only the smallest answer span that directly answers the question.
+- For a yes/no question, MINIMAL_ANSWER must be exactly `yes` or `no`.
+- Do not include explanations or information that the question did not request.
+- For a date, match the requested granularity exactly: year, month, or full date."""
 
 HOTPOTQA_USER_PROMPT = """### User Query
 {user_query}
@@ -22,25 +24,26 @@ HOTPOTQA_USER_PROMPT = """### User Query
 {tool_feedback}
 
 ### Instructions
-Analyze the **Retrieved Passages** and **History Actions** to determine the next set of actions.
-Enclose your analysis of the state and decision logic within `<analysis>...</analysis>` tags.
-**You support parallel tool calling.**
-You should output multiple tool calls in a single step if several independent actions are valuable at the current state.
+Analyze the **Retrieved Passages** and **History Actions** and determine the next action.
+Output only one search tool call or one final `<answer>`; never expose reasoning as prose.
+Make at most one search call per turn.
+When passages name a plausible entity, search that entity together with the missing attribute
+instead of repeating all clues.
 **Attend to the history actions and avoid repeating the same search queries.**
-When you can answer the question from the current passages, put the short final answer inside `<answer></answer>`
-tags (no explanation) instead of further tool calls.
+When you can answer the question from the current passages, or when told that it is the final turn:
+- Return only the smallest answer span inside `<answer></answer>`.
+- For yes/no questions, return exactly `<answer>yes</answer>` or `<answer>no</answer>`.
+- Do not include explanations or information the question did not request.
+- For dates, match the requested granularity exactly: year, month, or full date.
 
-### Output Format
-<analysis>
-[Your analysis of the current state and decision logic...]
-</analysis>
+### Visible Output Format
+For a search turn, output only:
 <tool_call>
-[Tool call 1]
+[One tool call]
 </tool_call>
-<tool_call>
-[Tool call 2]
-</tool_call>
-...
+
+For a final answer, output only:
+<answer>[Minimal answer span]</answer>
 """
 
 SEARCH_TOOL_SCHEMA = {
