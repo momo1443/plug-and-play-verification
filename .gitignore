@@ -124,6 +124,7 @@ ENV/
 *.lock
 
 # data
+data/
 *.parquet
 
 

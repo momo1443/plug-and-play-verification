@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-LR_CONTRACT_VERSION = "a8-lr-50-v1"
+LR_CONTRACT_VERSION = "a8-lr-30-v1"
 
 
 @dataclass(frozen=True)
 class LocalReasoningRewardContract:
-    terminal_weight: float = 0.5
-    process_weight: float = 0.5
+    terminal_weight: float = 0.7
+    process_weight: float = 0.3
     reward_horizon: int = 3
     dependency_taint_gamma: float = 0.3
     final_response_mask: int = 1
