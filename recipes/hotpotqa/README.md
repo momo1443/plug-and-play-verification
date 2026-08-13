@@ -2,50 +2,72 @@
 
 ## Overview
 
-This recipe trains a multi-hop question-answering agent with a retrieval tool. The agent searches a FAISS index built from passage text and returns the final answer in the format expected by the HotpotQA reward function.
+This recipe runs the retained raw-answer HotpotQA arms with local FAISS/BGE retrieval. The standalone local-reasoning experiment lives under `recipes/hotpotqa_lr/`.
 
-Official dataset references: https://hotpotqa.github.io/ and https://github.com/StonyBrookNLP/musique. Processed Agent-R1 train, validation, cross-eval, and retrieval assets for this recipe are available from the [Agent-R1-data ModelScope release](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
+| Arm | Role | Optimizer signal |
+|-----|------|------------------|
+| **A0** | Evaluation-only baseline | No policy update; process rewards are audit-only |
+| **A1** | Terminal-only RLVR | GRPO + `step_causal`; reward = terminal exact match |
+| **A2** | Verifier-only agentic RLVR | GRPO + `step_causal`; per-step new-gold-evidence reward; final-answer tokens masked from policy loss |
+| **A3** | Combined agentic RLVR | GRPO + `step_causal`; `0.5 * process + 0.5 * terminal EM`; final-answer tokens remain in policy loss |
+| **A6** | Gold-conditioned semantic verifier | frozen LLM fact-coverage Judge + terminal EM |
+| **A7** | Weak execution control | `1/3` per valid observable search + terminal EM |
+| **A9** | Gold-free behavioral verifier | `0.5 * binary joint probe verdict` per known search + `0.5 * terminal EM`; partial/invalid process verdicts are masked |
+
+Official dataset references: https://hotpotqa.github.io/ and https://github.com/StonyBrookNLP/musique. Processed Agent-R1 assets are also available from the [Agent-R1-data ModelScope release](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
 
 ## Directory Layout
 
-- `base.yaml`: HotpotQA agent configuration.
-- `hotpotqa_agent_flow.py`: Agent-R1 rollout loop for retrieval-based QA.
-- `data_preprocess/process_hotpotqa.py`: Converts HotpotQA and optional cross-eval splits into Agent-R1 parquet files.
-- `env/build_retrieval_corpus.py`: Builds retrieval corpora from local 2Wiki/MuSiQue-style raw files.
-- `env/build_index.py`: Encodes the HotpotQA corpus and builds the FAISS index.
-- `env/search_tool.py`: Runtime FAISS/BGE retrieval tool.
-- `examples/hotpotqa/*.sh`: Training launch scripts for PPO, StepPO, GRPO, RLOO, REINFORCE, GSPO, and GiGPO variants.
+Recipe code (`recipes/hotpotqa/`):
+
+- `base.yaml` — agent config (`max_steps=4`, retrieval paths, evidence sidecar)
+- `hotpotqa_agent_flow.py` — shared rollout loop for every formal arm
+- `reward_arm.py` — frozen reward and final-token mask semantics
+- `reward_fn.py` — terminal exact-match scorer
+- `process_verifier.py` — deterministic evidence process reward
+- `a9_behavioral_verifier.py` / `a9_entity_library.json` — A9 counterfactual probe generator and scorer
+- `judge_server.py` — shared frozen-Judge client (local vLLM or remote API) with retries and exact-input cache
+- `final_answer_protocol.py` — raw-final contract for retained arms
+- `prepare_formal_rlvr_run.py` / `validate_formal_a0_artifacts.py` — fail-closed preflight + manifests
+- `build_evidence_sidecar.py` — official-sentence evidence SQLite builder
+- `data_preprocess/` / `env/` — parquet conversion, corpus/index build, search tool
+
+Launch scripts (`examples/hotpotqa/`):
+
+- `run_a0.sh` — formal A0 validation-only launcher
+- `run_a1.sh`, `run_a2.sh`, `run_a3.sh`, `run_a6.sh`, `run_a7.sh`, `run_a9.sh` — retained arm entrypoints
+- `run_rlvr.sh` — shared GRPO training engine
+- `run_with_judge.sh` — A6 Judge lifecycle wrapper
 
 ## Additional Requirements
-
-Install recipe-specific extras after setting up the base Agent-R1 / verl environment:
 
 ```bash
 pip install -r recipes/hotpotqa/requirements.txt
 ```
 
-Building the retrieval index requires enough CPU/GPU memory to encode the corpus with the configured embedding model.
+Building the retrieval index needs enough CPU/GPU memory to encode the corpus with the configured embedding model.
 
 ## Data And Resources
 
 Expected processed files:
 
-- `data/corpus/hotpotqa/train.parquet`
-- `data/corpus/hotpotqa/validation.parquet`
-- Optional cross-eval parquets such as `data/corpus/hotpotqa/2wikimultihopqa_validation.parquet` and `data/corpus/hotpotqa/musique_validation.parquet`
+- `data/corpus/hotpotqa/train.parquet` (90,447 rows for formal main)
+- `data/corpus/hotpotqa/validation.parquet` (7,405 rows; always retained)
+- Optional cross-eval: `2wikimultihopqa_validation.parquet`, `musique_validation.parquet`
 - `data/corpus/hotpotqa_corpus/hpqa_corpus.jsonl`
 - `data/corpus/hotpotqa_corpus/hpqa_corpus.npy`
 - `data/corpus/hotpotqa_corpus/index.bin`
+- `data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3`
 
-The FAISS index is searched by `recipes.hotpotqa.env.search_tool`. The default embedding model is `BAAI/bge-large-en-v1.5`, configurable with `HOTPOTQA_EMBEDDING_MODEL`.
+The FAISS index is searched by `recipes.hotpotqa.env.search_tool`. Default embedding id is `BAAI/bge-large-en-v1.5` (`HOTPOTQA_EMBEDDING_MODEL`); formal launchers point at the local checkpoint under `../models/bge-large-en-v1.5`.
 
-Formal A0 preserves those paragraph, embedding, and FAISS files byte-for-byte. It additionally requires `hotpotqa_evidence_v1.sqlite3`, built from the official distractor sentence arrays and supporting facts and exactly aligned to the existing PID order. No embedding or index rebuild occurs. Evidence IDs and gold hits remain audit-only and never enter the model prompt.
+Formal A0/A1/A2/A3 preserve paragraph, embedding, and FAISS files byte-for-byte. The evidence sidecar is built from official distractor sentence arrays and supporting facts, aligned to the existing PID order. Evidence IDs and gold hits are audit/verifier fields and never enter the model prompt.
 
-Formal A1/A2 use the current Agent-R1 HotpotQA split contract: all 90,447 training rows are the main-run source and all 7,405 validation rows are retained for evaluation. A smoke may cap the number of training questions but never substitutes a validation subset.
+Formal `pilot64`, `pilot2048`, and `main` modes use deterministic prefixes of 64, 2,048, and 30,000 training rows respectively, and retain all 7,405 validation rows.
 
 ## Data Preparation
 
-Download the processed release from [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data), then place or symlink the HotpotQA files to the paths above. To regenerate HotpotQA-style files from public sources for local testing:
+Download the processed release from [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data), or regenerate:
 
 ```bash
 python recipes/hotpotqa/data_preprocess/process_hotpotqa.py \
@@ -58,9 +80,9 @@ python recipes/hotpotqa/env/build_index.py \
   --corpus_path data/corpus/hotpotqa_corpus/hpqa_corpus.jsonl
 ```
 
-For local 2Wiki/MuSiQue corpus construction, use `recipes/hotpotqa/env/build_retrieval_corpus.py` with raw files placed under the paths expected by that script.
+For local 2Wiki/MuSiQue corpus construction, use `recipes/hotpotqa/env/build_retrieval_corpus.py`.
 
-Build the versioned verifier sidecar from the official Hugging Face Parquet shards after downloading them under a project-local cache:
+Build the verifier sidecar from official Hugging Face Parquet shards (e.g. under `../.cache/hotpotqa-official`):
 
 ```bash
 python -m recipes.hotpotqa.build_evidence_sidecar \
@@ -72,7 +94,7 @@ python -m recipes.hotpotqa.build_evidence_sidecar \
   --output_path data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3
 ```
 
-The formal launcher performs a fail-closed count, checksum, mapping-rate, sidecar, corpus, embedding, and index check. It can also be run directly:
+Fail-closed artifact check (also invoked by formal launchers):
 
 ```bash
 python -m recipes.hotpotqa.validate_formal_a0_artifacts \
@@ -81,63 +103,64 @@ python -m recipes.hotpotqa.validate_formal_a0_artifacts \
   --evidence_sidecar_path data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3
 ```
 
-## Formal A0
-
-Formal A0 is evaluation-only: no policy update or verifier reward is applied. A0 and future A2 use the same `HotpotQAAgentFlow`; the old provisional native-AgentLoop A0 path has been removed. The flow freezes thinking off, Hermes parsing, top-5 paragraph retrieval, one search per turn, three search turns plus one final turn, and `force_first_search=false`. A0 records deterministic process rewards only as replayable audit fields.
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash examples/hotpotqa/run_a0.sh
-```
-
-For a four-question gate before the full run:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-HOTPOTQA_VAL_MAX_SAMPLES=4 \
-RUN_ID=qwen35-4b_a0_smoke \
-  bash examples/hotpotqa/run_a0.sh
-```
-
-Every A0 JSONL row contains stable `sample_key`, official qid, ordered native-thinking audit, model-generated search steps, exact source sentence records, gold/new/covered IDs, offline process rewards, unresolved source annotations, evidence metrics, final answer, and terminal EM. The launcher freezes an artifact lock and ordered-qid run manifest before allocating the model runtime; completion requires strict sidecar replay and exact row/qid completeness.
-
 ## Environment Setup
 
-No separate HTTP service is required. The retrieval tool loads local corpus and FAISS files. Typical environment variables:
+No separate HTTP service. Retrieval loads local corpus + FAISS. Typical knobs:
 
 ```bash
-export HOTPOTQA_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+export HOTPOTQA_EMBEDDING_MODEL=/path/to/bge-large-en-v1.5   # or BAAI/bge-large-en-v1.5
+export HOTPOTQA_EMBEDDING_DEVICE=cpu                         # default in formal launchers
 ```
 
-By default, retrieval uses `HOTPOTQA_EMBEDDING_DEVICE=cpu` unless configured otherwise.
+## Formal A0 (validation only)
 
-## Training Scripts
+No policy update. Shared `HotpotQAAgentFlow`: thinking off, Hermes parsing, top-5 retrieval, one search per turn, three search turns + one final turn, `force_first_search=false`, raw final completion. Process rewards are recorded as replayable audit fields only.
 
-Formal Qwen3.5 A1/A2 use GRPO only. A1 has zero search rewards and terminal exact-match; A2 uses deterministic new-gold-evidence rewards, zero final reward, and masks final-answer tokens from its process-policy loss. Both use step-causal group-relative advantages with `gamma=1.0`.
+Defaults in `run_a0.sh`: 4 GPUs (`4,5,6,7`), model `../models/Qwen3-4B`.
 
 ```bash
-# CPU/artifact preflight only
-CUDA_VISIBLE_DEVICES=4,5,6,7 \
-HOTPOTQA_PREFLIGHT_ONLY=1 \
-HOTPOTQA_RUN_MODE=smoke \
-  bash examples/hotpotqa/run_a1.sh
+# Full 7,405-row validation
+bash examples/hotpotqa/run_a0.sh
 
-# Four-GPU, one-update compatibility smoke
-CUDA_VISIBLE_DEVICES=4,5,6,7 HOTPOTQA_RUN_MODE=smoke \
-  bash examples/hotpotqa/run_a1.sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 HOTPOTQA_RUN_MODE=smoke \
-  bash examples/hotpotqa/run_a2.sh
 ```
 
-Main runs are fail-closed to the full 90,447/7,405 source contract and require an explicit optimizer-step budget:
+Override model/GPUs via env, e.g. `HOTPOTQA_MODEL_PATH=../models/Qwen3.5-4B CUDA_VISIBLE_DEVICES=0,1,2,3`.
+
+Every A0 JSONL row carries stable `sample_key`, qid, search steps, evidence IDs, process-reward audit, final answer, and terminal EM. The launcher writes a run manifest before allocating the model runtime.
+
+## Formal A1 / A2 / A3 (GRPO training)
+
+All three training arms use `run_rlvr.sh` with GRPO, `algorithm.grpo.credit_assignment=step_causal`, and `gamma=1.0`. They uniformly enable verl/GRPO's built-in actor-loss reference KL (`low_var_kl`, coefficient `0.001`) while keeping KL out of the task reward. Entrypoints:
+
+- `run_a1.sh` → `HOTPOTQA_REWARD_ARM=A1` (wrapper default GPUs `0,1,2,3,4,5,6,7`)
+- `run_a2.sh` → `HOTPOTQA_REWARD_ARM=A2` (wrapper default GPUs `0,1,2,3,4,5,6,7`)
+- `run_a3.sh` → `HOTPOTQA_REWARD_ARM=A3` (combined `0.5/0.5`, final-answer mask = 1; GPU selection is explicit per run)
+
+The launcher accepts `pilot64`, `pilot2048`, and `main`. Defaults are model `../models/Qwen3.5-4B`, rollout `n=4`, and one pass over the selected deterministic prefix. Performance-sensitive defaults enable actor dynamic batching and keep actor parameter/optimizer offload disabled. Calling `run_rlvr.sh` directly requires `HOTPOTQA_REWARD_ARM`.
+
+Main training shape (overridable via `HOTPOTQA_*`): `train_batch_size=20`, `rollout_n=4`, `grpo_micro_batch_size_per_gpu=2`, actor token cap 8,192, entropy objective disabled, first 30,000 train / all 7,405 validation rows. Use `HOTPOTQA_GRPO_MICRO_BATCH_SIZE` to change the micro-batch size.
 
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 \
-HOTPOTQA_RUN_MODE=main \
-HOTPOTQA_TOTAL_TRAINING_STEPS=<frozen_step_budget> \
-  bash examples/hotpotqa/run_a1.sh
+# Main runs (default: 1,500 steps)
+bash examples/hotpotqa/run_a1.sh
+HOTPOTQA_TOTAL_TRAINING_STEPS=800 bash examples/hotpotqa/run_a2.sh
+bash examples/hotpotqa/run_a3.sh
+
+# Example: Qwen3.5-4B on GPUs 2–7
+HOTPOTQA_MODEL_PATH=../models/Qwen3.5-4B \
+CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 \
+  bash examples/hotpotqa/run_a3.sh
 ```
 
-The formal entrypoints reject trailing Hydra overrides. Use `HOTPOTQA_*` environment variables so the manifest can record the resolved arm, data counts, estimator, model, artifacts, code hashes, and resource mapping.
+Formal A1/A2/A3 entrypoints reject trailing Hydra overrides. Configure via `HOTPOTQA_*` / `RUN_ID` / `CUDA_VISIBLE_DEVICES` so the preflight manifest records arm, reward weights, final response mask, splits, estimator, model hashes, artifacts, and resources. Outputs land under `../logs/$RUN_ID/` (`train.log`, `tensorboard/`, `checkpoints/`, one append-only `rollouts.jsonl`, `validation/`, and `run_manifest.json`).
+
+Useful env flags: `HOTPOTQA_SKIP_PREFLIGHT=1` reuses a complete manifest for the same experiment directory; `HOTPOTQA_HYDRA_CONFIG_ONLY=1` only expands configuration and never starts training.
+
+Formal A1/A2/A3 training saves actor checkpoints every 100 optimizer steps and retains the latest two by default. Override with `HOTPOTQA_SAVE_FREQ` and `HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP` when a different cadence is required; values are captured at launch and do not alter an already-running process.
+
+## Legacy Algorithm Scripts
+
+Upstream-style launchers (accept Hydra `"$@"` overrides; not the formal A0/A1/A2/A3 contract):
 
 ```bash
 bash examples/hotpotqa/run_ppo.sh
@@ -149,18 +172,19 @@ bash examples/hotpotqa/run_gspo.sh
 bash examples/hotpotqa/run_gigpo.sh
 ```
 
-Scripts accept trailing Hydra overrides through `"$@"`.
-
 ## Core Code Entry Points
 
-- Shared A0/A2 rollout flow: `recipes/hotpotqa/hotpotqa_agent_flow.py`.
-- Retrieval utilities: `recipes/hotpotqa/env/search_tool.py`.
-- Prompt and tool schema: `recipes/hotpotqa/prompts.py`.
-- Reward: `recipes/hotpotqa/reward_fn.py`.
+- Shared rollout: `hotpotqa_agent_flow.py`
+- Arm semantics: `reward_arm.py`
+- Terminal reward: `reward_fn.py`
+- Process verifier: `process_verifier.py`
+- Final-answer contract: `final_answer_protocol.py`
+- Retrieval: `env/search_tool.py`
+- Prompts / tool schema: `prompts.py`
 
 ## Outputs And Evaluation
 
-Validation uses normalized exact-match style reward against `reward_model.ground_truth`. Search behavior is controlled by `max_steps`, `max_parallel_calls`, and `force_first_search` in the recipe config.
+Validation scores normalized exact match against `reward_model.ground_truth`. Search behavior is controlled by `max_steps`, `max_parallel_calls`, and `force_first_search` in `base.yaml` (formal runs freeze thinking off and `force_first_search=false`).
 
 ## References
 

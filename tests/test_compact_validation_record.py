@@ -6,8 +6,10 @@ from agent_r1.trainer.compact_validation_record import (
     extract_question,
     extract_search_queries,
 )
+from recipes.hotpotqa.final_answer_protocol import RAW_FINAL_ANSWER_PROTOCOL, require_raw_final_only
 from recipes.hotpotqa.output_parsing import split_native_thinking
 from recipes.hotpotqa.reward_fn import _extract_answer_from_solution
+from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL
 
 
 class CompactValidationRecordTest(unittest.TestCase):
@@ -51,8 +53,10 @@ class CompactValidationRecordTest(unittest.TestCase):
             thinking_mode="native",
             thinking_steps=[{"turn": 1, "content": "reasoning", "complete": True}],
             force_first_search=False,
+            final_answer_protocol=RAW_FINAL_ANSWER_PROTOCOL,
             evidence_schema_version="hotpotqa-official-sentence-v1",
             search_steps=search_steps,
+            local_reasoning_transitions=[{"reason_step": {"ref": "r1"}}],
             executed_queries=["target query"],
             num_turns=4,
             sample_key="validation:0",
@@ -65,10 +69,17 @@ class CompactValidationRecordTest(unittest.TestCase):
         self.assertEqual(record["thinking_mode"], "native")
         self.assertEqual(record["qwen_thinking"][0]["content"], "reasoning")
         self.assertFalse(record["force_first_search"])
+        self.assertEqual(record["final_answer_protocol"], RAW_FINAL_ANSWER_PROTOCOL)
         self.assertEqual(record["search_steps"], search_steps)
+        self.assertEqual(record["local_reasoning_transitions"], [{"reason_step": {"ref": "r1"}}])
         self.assertEqual(record["answer"], "Answer")
         self.assertEqual(record["sample_key"], "validation:0")
         self.assertEqual(record["official_qid"], "official-qid-0")
+
+    def test_raw_final_contract_rejects_removed_force_switch(self):
+        self.assertEqual(require_raw_final_only({}), RAW_FINAL_ANSWER_PROTOCOL)
+        with self.assertRaisesRegex(RuntimeError, "has been removed"):
+            require_raw_final_only({"HOTPOTQA_FORCE_FINAL_ANSWER": "false"})
 
     def test_extracts_question_from_raw_prompt(self):
         raw_prompt = [{"role": "user", "content": "What is the answer?"}]
@@ -99,6 +110,16 @@ second query
 
     def test_missing_complete_answer_is_null(self):
         self.assertIsNone(extract_final_answer("<answer>truncated"))
+
+    def test_extracts_local_reasoning_finish_answer(self):
+        output = (
+            '<tool_call>{"name":"finish","arguments":{"status":"answer","answer":"Paris",'
+            '"reason_step":{"ref":"r1"}}}</tool_call>'
+        )
+        self.assertEqual(
+            extract_final_answer(output, LR_FINISH_PROTOCOL),
+            "Paris",
+        )
 
     def test_splits_prompt_owned_native_thinking(self):
         thinking, visible, complete = split_native_thinking(

@@ -35,7 +35,9 @@ from tqdm import tqdm
 from agent_r1.trainer.ppo.core_algos import AgentAdvantageEstimator
 from agent_r1.trainer.ppo.metric_utils import compute_data_metrics
 from agent_r1.trainer.ppo.trajectory_batching import prepare_trajectory_mini_batch
+from agent_r1.trainer.rollout_jsonl import append_jsonl_records
 from verl import DataProto
+
 try:
     from verl.experimental.dataset.sampler import AbstractCurriculumSampler
 except ModuleNotFoundError:
@@ -43,6 +45,8 @@ except ModuleNotFoundError:
     # legacy training-only isinstance guard inert on that release.
     class AbstractCurriculumSampler:  # type: ignore[no-redef]
         pass
+
+
 from verl.protocol import pad_dataproto_to_divisor
 from verl.single_controller.ray import RayClassWithInitArgs
 from verl.single_controller.ray.base import create_colocated_worker_cls
@@ -58,9 +62,11 @@ from verl.trainer.ppo.ray_trainer import (
     apply_kl_penalty,
     compute_response_mask,
 )
+
 try:
     from verl.trainer.ppo.reward import compute_reward_async
 except ImportError:
+
     class _UnavailableAsyncReward:
         @staticmethod
         def remote(*args, **kwargs):
@@ -73,6 +79,23 @@ from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
 from verl.utils.metric import reduce_metrics
 from verl.utils.rollout_skip import RolloutSkip
+
+
+def should_sync_initial_rollout_weights(config) -> bool:
+    """Return whether actor weights must be pushed before the first rollout."""
+    trainer = config.trainer
+    rollout = config.actor_rollout_ref.rollout
+    validation_uses_source_weights = (
+        bool(trainer.get("val_only", False))
+        and str(trainer.get("resume_mode", "disable")).lower() == "disable"
+        and str(rollout.get("load_format", "dummy")).lower() != "dummy"
+    )
+    return not validation_uses_source_weights
+
+
+def should_sleep_rollout_replicas(config) -> bool:
+    """Return whether rollout replicas should enter vLLM sleep mode after generation."""
+    return bool(config.actor_rollout_ref.rollout.get("enable_sleep_mode", False))
 
 
 def get_valid_data(data: DataProto) -> tuple[DataProto, torch.Tensor]:
@@ -153,6 +176,32 @@ def make_json_safe(value):
     return value
 
 
+def fail_on_judge_invalid(batch: DataProto) -> None:
+    """Abort the whole optimizer update if any Judge-backed trajectory failed."""
+
+    values = batch.non_tensor_batch.get("judge_invalid")
+    if values is None:
+        return
+    invalid_indices = [
+        index
+        for index, value in enumerate(np.asarray(values, dtype=object).tolist())
+        if value is not None and bool(value)
+    ]
+    if not invalid_indices:
+        return
+    trajectory_uids = batch.non_tensor_batch.get("trajectory_uids")
+    invalid_uids: list[str] = []
+    if trajectory_uids is not None:
+        uid_values = np.asarray(trajectory_uids, dtype=object).tolist()
+        invalid_uids = sorted({str(uid_values[index]) for index in invalid_indices})
+    raise RuntimeError(
+        "Judge fail-closed gate rejected the optimizer update: "
+        f"{len(invalid_indices)} invalid step record(s), "
+        f"{len(invalid_uids)} trajectory/trajectories "
+        f"({invalid_uids[:8]})."
+    )
+
+
 def build_trajectory_dump_entries(
     *,
     inputs,
@@ -202,6 +251,8 @@ def build_trajectory_dump_entries(
             "output": last_step["output"],
             "gts": first_step["gts"],
             "score": sum(step["score"] for step in steps),
+            "global_step": global_step,
+            # Keep the historical field for downstream readers of old dumps.
             "step": global_step,
             "num_steps": len(steps),
             "steps": steps,
@@ -211,8 +262,8 @@ def build_trajectory_dump_entries(
     return entries
 
 
-def need_critic_agent_ppo(config) -> bool:
-    """Return whether Agent-R1 PPO needs a critic for the configured estimator."""
+def need_critic_agent_rl(config) -> bool:
+    """Return whether the configured Agent-R1 estimator needs a critic."""
     if config.critic.enable is not None:
         return bool(config.critic.enable)
 
@@ -229,6 +280,21 @@ def critic_vf_loss_response_mask(response_mask: torch.Tensor, adv_estimator: Age
     value_mask = torch.zeros_like(response_mask)
     value_mask[:, 0] = response_mask[:, 0]
     return value_mask
+
+
+def _optional_process_component_mask(values: np.ndarray) -> list[bool]:
+    result: list[bool] = []
+    for value in np.asarray(values, dtype=object):
+        if value is None:
+            result.append(False)
+        elif isinstance(value, (bool, np.bool_)):
+            result.append(bool(value))
+        else:
+            raise ValueError(
+                "a9_process_component_valid must contain only bool values or None, "
+                f"got {value!r}"
+            )
+    return result
 
 
 def compute_advantage(
@@ -298,15 +364,67 @@ def compute_advantage(
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
     elif adv_estimator == AgentAdvantageEstimator.GRPO:
-        from agent_r1.trainer.ppo.core_algos import compute_grpo_outcome_advantage
+        grpo_config = config.get("grpo", {}) if config is not None else {}
+        credit_assignment = str((grpo_config or {}).get("credit_assignment", "trajectory") or "trajectory").lower()
+        if credit_assignment == "step_causal":
+            # Matched A1/A2 credit assignment: give each row its causal
+            # return-to-go, then normalize only within its (prompt, step_index)
+            # group instead of broadcasting one trajectory scalar to every step.
+            from agent_r1.trainer.ppo.core_algos import compute_step_grpo_advantage
 
-        valid_advantages, valid_returns = compute_grpo_outcome_advantage(
-            token_level_rewards=valid_data.batch["token_level_rewards"],
-            response_mask=valid_data.batch["response_mask"],
-            index=valid_data.non_tensor_batch["uid"],
-            trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )
+            a9_component_valid = valid_data.non_tensor_batch.get("a9_process_component_valid")
+            a9_component_rewards = valid_data.non_tensor_batch.get("optimizer_process_component")
+            process_component_mask = None
+            process_component_rewards = None
+            if a9_component_valid is not None:
+                if a9_component_rewards is None:
+                    raise ValueError(
+                        "a9_process_component_valid requires optimizer_process_component"
+                    )
+                component_valid_rows = _optional_process_component_mask(a9_component_valid)
+                process_component_mask = torch.as_tensor(
+                    component_valid_rows,
+                    dtype=torch.bool,
+                    device=valid_data.batch.device,
+                )
+                process_component_rewards = torch.as_tensor(
+                    [
+                        float(value) if is_valid else 0.0
+                        for value, is_valid in zip(
+                            np.asarray(a9_component_rewards, dtype=object),
+                            component_valid_rows,
+                        )
+                    ],
+                    dtype=valid_data.batch["token_level_rewards"].dtype,
+                    device=valid_data.batch.device,
+                )
+
+            valid_advantages, valid_returns = compute_step_grpo_advantage(
+                token_level_rewards=valid_data.batch["token_level_rewards"],
+                response_mask=valid_data.batch["response_mask"],
+                index=valid_data.non_tensor_batch["uid"],
+                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+                step_indices=valid_data.non_tensor_batch["step_indices"],
+                gamma=gamma,
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                process_component_rewards=process_component_rewards,
+                process_component_mask=process_component_mask,
+            )
+        elif credit_assignment in ("trajectory", "outcome"):
+            from agent_r1.trainer.ppo.core_algos import compute_grpo_outcome_advantage
+
+            valid_advantages, valid_returns = compute_grpo_outcome_advantage(
+                token_level_rewards=valid_data.batch["token_level_rewards"],
+                response_mask=valid_data.batch["response_mask"],
+                index=valid_data.non_tensor_batch["uid"],
+                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            )
+        else:
+            raise ValueError(
+                "Unsupported algorithm.grpo.credit_assignment="
+                f"{credit_assignment!r}; expected 'trajectory' or 'step_causal'"
+            )
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
     elif adv_estimator == AgentAdvantageEstimator.REINFORCE:
@@ -398,14 +516,49 @@ class RayAgentTrainer(RayPPOTrainer):
                 raise ValueError(f"algorithm.adv_estimator={adv_estimator.value!r} requires Role.Critic.")
             self.use_critic = True
 
+    def _compute_old_log_prob(self, batch: DataProto):
+        """Recompute old log-probs without full-vocabulary entropy when disabled."""
+
+        actor_config = self.config.actor_rollout_ref.actor
+        calculate_entropy = actor_config.calculate_entropy or actor_config.entropy_coeff != 0.0
+        if calculate_entropy:
+            return super()._compute_old_log_prob(batch)
+
+        from verl.utils import tensordict_utils as tu
+        from verl.workers.utils.padding import left_right_2_no_padding, no_padding_2_padding
+
+        batch_td = left_right_2_no_padding(batch.to_tensordict())
+        calculate_sum_pi_squared = actor_config.get("calculate_sum_pi_squared", False)
+        tu.assign_non_tensor(
+            batch_td,
+            calculate_entropy=False,
+            calculate_sum_pi_squared=calculate_sum_pi_squared,
+            compute_loss=False,
+        )
+        output = self.actor_rollout_wg.compute_log_prob(batch_td)
+        log_probs = tu.get(output, "log_probs")
+        routed_experts = tu.get(output, "routed_experts")
+        sum_pi_squared = tu.get(output, "sum_pi_squared") if calculate_sum_pi_squared else None
+        old_log_prob_mfu = tu.get(output, "metrics")["mfu"]
+
+        log_probs = no_padding_2_padding(log_probs, batch_td)
+        if sum_pi_squared is not None:
+            sum_pi_squared = no_padding_2_padding(sum_pi_squared, batch_td)
+
+        result = {"old_log_probs": log_probs.float()}
+        if routed_experts is not None:
+            result["routed_experts"] = routed_experts
+        if sum_pi_squared is not None:
+            result["sum_pi_squared"] = sum_pi_squared.float()
+        old_log_prob = DataProto.from_tensordict(tu.get_tensordict(result))
+        return old_log_prob, old_log_prob_mfu
+
     def _compute_or_extract_reward(self, data: DataProto, reward_fn, return_dict: bool):
         """Bridge Agent-R1's callable reward contract onto verl 0.8."""
         if "rm_scores" in data.batch:
             reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
             reward_extra_info = {
-                key: data.non_tensor_batch[key]
-                for key in reward_extra_keys
-                if key in data.non_tensor_batch
+                key: data.non_tensor_batch[key] for key in reward_extra_keys if key in data.non_tensor_batch
             }
             if return_dict:
                 return {
@@ -538,38 +691,52 @@ class RayAgentTrainer(RayPPOTrainer):
         print(f"Dumped generations to {filename}")
 
     def _log_rollout_data(
-        self, batch: DataProto, reward_extra_infos_dict: dict, timing_raw: dict, rollout_data_dir: str
+        self, batch: DataProto, reward_extra_infos_dict: dict, timing_raw: dict, rollout_data_file: str
     ):
         """Log rollout data to disk.
         Args:
             batch (DataProto): The batch containing rollout data
             reward_extra_infos_dict (dict): Additional reward information to log
             timing_raw (dict): Timing information for profiling
-            rollout_data_dir (str): Directory path to save the rollout data
+            rollout_data_file (str): Append-only JSONL path for all training steps
         """
         with marked_timer("dump_rollout_generations", timing_raw, color="green"):
-            inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
-            outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
-            scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
-            sample_gts = [item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None) for item in batch]
+            # Post-rollout FSDP alignment may append masked copies until the
+            # step-row count is divisible by the data-parallel world size.
+            # They never contribute to the loss and must not appear as extra
+            # trajectory steps in the persisted training rollout record.
+            valid_batch, _ = get_valid_data(batch)
+            inputs = self.tokenizer.batch_decode(valid_batch.batch["prompts"], skip_special_tokens=True)
+            outputs = self.tokenizer.batch_decode(valid_batch.batch["responses"], skip_special_tokens=True)
+            scores = valid_batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+            sample_gts = [
+                item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None) for item in valid_batch
+            ]
 
-            reward_extra_infos_to_dump = reward_extra_infos_dict.copy()
-            if "request_id" in batch.non_tensor_batch:
+            reward_extra_infos_to_dump = {}
+            for key in reward_extra_infos_dict:
+                if key not in valid_batch.non_tensor_batch:
+                    continue
+                values = valid_batch.non_tensor_batch[key]
+                reward_extra_infos_to_dump[key] = values.tolist() if hasattr(values, "tolist") else list(values)
+            if "request_id" in valid_batch.non_tensor_batch:
                 reward_extra_infos_to_dump.setdefault(
                     "request_id",
-                    batch.non_tensor_batch["request_id"].tolist(),
+                    valid_batch.non_tensor_batch["request_id"].tolist(),
                 )
 
-            self._dump_generations(
+            entries = build_trajectory_dump_entries(
                 inputs=inputs,
                 outputs=outputs,
                 gts=sample_gts,
                 scores=scores,
                 reward_extra_infos_dict=reward_extra_infos_to_dump,
-                dump_path=rollout_data_dir,
-                trajectory_uids=batch.non_tensor_batch["trajectory_uids"],
-                step_indices=batch.non_tensor_batch["step_indices"],
+                trajectory_uids=valid_batch.non_tensor_batch["trajectory_uids"],
+                step_indices=valid_batch.non_tensor_batch["step_indices"],
+                global_step=self.global_steps,
             )
+            written = append_jsonl_records(rollout_data_file, entries)
+            print(f"Appended {written} rollout records to {rollout_data_file}")
 
     def _maybe_log_val_generations(self, inputs, outputs, scores):
         """Log a table of validation samples to the configured logger (wandb or swanlab)"""
@@ -924,17 +1091,12 @@ class RayAgentTrainer(RayPPOTrainer):
         # generation, exactly as verl's native RayPPOTrainer does. Without this
         # step the servers keep random weights and emit degenerate output
         # (e.g. 1024 newline tokens), producing empty answers for every sample.
-        from verl.utils.config import omega_conf_to_dataclass
         from verl.utils.import_utils import load_class_from_fqn
 
-        checkpoint_engine_config = omega_conf_to_dataclass(
-            self.config.actor_rollout_ref.rollout.checkpoint_engine
-        )
+        checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
         checkpoint_manager_class_fqn = self.config.actor_rollout_ref.rollout.get("checkpoint_manager_class")
         if checkpoint_manager_class_fqn:
-            CheckpointEngineManager = load_class_from_fqn(
-                checkpoint_manager_class_fqn, "CheckpointEngineManager"
-            )
+            CheckpointEngineManager = load_class_from_fqn(checkpoint_manager_class_fqn, "CheckpointEngineManager")
         else:
             from verl.checkpoint_engine import CheckpointEngineManager
         self.checkpoint_manager = CheckpointEngineManager(
@@ -966,9 +1128,13 @@ class RayAgentTrainer(RayPPOTrainer):
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # Sync actor weights into the (dummy-loaded) HYBRID vLLM rollout engines
-        # before the first generation, mirroring verl's native RayPPOTrainer.fit().
-        self.checkpoint_manager.update_weights(self.global_steps)
+        # The usual HYBRID engines are dummy-loaded and require an actor weight
+        # push. Validation-only launchers may instead load the exact source
+        # checkpoint in vLLM and avoid the extra colocated memory peak.
+        if should_sync_initial_rollout_weights(self.config):
+            self.checkpoint_manager.update_weights(self.global_steps)
+        else:
+            print("Skipping initial actor-to-rollout sync: validation rollout loaded source weights")
 
         current_epoch = self.global_steps // len(self.train_dataloader)
 
@@ -1036,6 +1202,8 @@ class RayAgentTrainer(RayPPOTrainer):
                     # generate a batch
                     with marked_timer("gen", timing_raw, color="red"):
                         gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
+                        if should_sleep_rollout_replicas(self.config):
+                            self.checkpoint_manager.sleep_replicas()
 
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
@@ -1051,6 +1219,7 @@ class RayAgentTrainer(RayPPOTrainer):
                     num_steps = gen_batch_output.meta_info.pop("num_steps")
                     batch = batch.sample_level_repeat(num_steps)
                     batch = batch.union(gen_batch_output)
+                    fail_on_judge_invalid(batch)
 
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
@@ -1102,21 +1271,22 @@ class RayAgentTrainer(RayPPOTrainer):
                     else:  # Recompute old_log_probs
                         with marked_timer("old_log_prob", timing_raw, color="blue"):
                             old_log_prob, old_log_prob_mfu = self._compute_old_log_prob(batch)
-                            entropys = old_log_prob.batch["entropys"]
-                            response_masks = batch.batch["response_mask"]
-                            actor_config = self.config.actor_rollout_ref.actor
-                            entropy_agg = agg_loss(
-                                loss_mat=entropys,
-                                loss_mask=response_masks,
-                                loss_agg_mode=actor_config.loss_agg_mode,
-                                loss_scale_factor=actor_config.loss_scale_factor,
-                            )
                             old_log_prob_metrics = {
-                                "actor/entropy": entropy_agg.detach().item(),
                                 "perf/mfu/actor_infer": old_log_prob_mfu,
                             }
+                            if "entropys" in old_log_prob.batch:
+                                entropys = old_log_prob.batch["entropys"]
+                                response_masks = batch.batch["response_mask"]
+                                actor_config = self.config.actor_rollout_ref.actor
+                                entropy_agg = agg_loss(
+                                    loss_mat=entropys,
+                                    loss_mask=response_masks,
+                                    loss_agg_mode=actor_config.loss_agg_mode,
+                                    loss_scale_factor=actor_config.loss_scale_factor,
+                                )
+                                old_log_prob_metrics["actor/entropy"] = entropy_agg.detach().item()
+                                old_log_prob.batch.pop("entropys")
                             metrics.update(old_log_prob_metrics)
-                            old_log_prob.batch.pop("entropys")
                             batch = batch.union(old_log_prob)
                             if "rollout_log_probs" in batch.batch.keys():
                                 # TODO: we may want to add diff of probs too.
@@ -1215,10 +1385,21 @@ class RayAgentTrainer(RayPPOTrainer):
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
 
+                    # Generation put the rollout replicas to sleep. Synchronize the
+                    # newly updated actor (or simply wake during critic warmup) before
+                    # the next optimizer step. Without this call vLLM remains resident
+                    # during backward and continues sampling from stale weights.
+                    with marked_timer("update_weights", timing_raw, color="red"):
+                        self.checkpoint_manager.update_weights(self.global_steps)
+
                     # Log rollout generations if enabled
-                    rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-                    if rollout_data_dir:
-                        self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
+                    rollout_data_file = self.config.trainer.get("rollout_data_file", None)
+                    if not rollout_data_file:
+                        rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+                        if rollout_data_dir:
+                            rollout_data_file = os.path.join(rollout_data_dir, "rollouts.jsonl")
+                    if rollout_data_file:
+                        self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_file)
 
                 # validate
                 if (

@@ -1,4 +1,4 @@
-"""HotpotQA prompts for Qwen search and minimal answers."""
+"""HotpotQA prompts and tool schemas for the retained raw-answer arms."""
 
 HOTPOTQA_SYSTEM_PROMPT = (
     "You are a research agent. Your goal is to answer the User Query using Wikipedia search evidence."

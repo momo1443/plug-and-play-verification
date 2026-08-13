@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -12,6 +13,35 @@ class RewardArm(str, Enum):
     A0 = "A0"
     A1 = "A1"
     A2 = "A2"
+    A3 = "A3"
+    A6 = "A6"
+    A7 = "A7"
+    A9 = "A9"
+
+
+@dataclass(frozen=True)
+class TrainingRewardContract:
+    """Optimizer-visible reward weights and final-action loss mask for one arm."""
+
+    process_weight: float
+    terminal_weight: float
+    final_response_mask: int
+
+
+_TRAINING_REWARD_CONTRACTS = {
+    RewardArm.A0: TrainingRewardContract(0.0, 0.0, 1),
+    RewardArm.A1: TrainingRewardContract(0.0, 1.0, 1),
+    RewardArm.A2: TrainingRewardContract(1.0, 0.0, 0),
+    RewardArm.A3: TrainingRewardContract(0.5, 0.5, 1),
+    RewardArm.A6: TrainingRewardContract(0.5, 0.5, 1),
+    RewardArm.A7: TrainingRewardContract(0.5, 0.5, 1),
+    RewardArm.A9: TrainingRewardContract(0.5, 0.5, 1),
+}
+
+def training_reward_contract(arm: RewardArm) -> TrainingRewardContract:
+    """Return the single frozen source of truth for train-time arm semantics."""
+
+    return _TRAINING_REWARD_CONTRACTS[arm]
 
 
 def parse_reward_arm(value: Any) -> RewardArm:
@@ -41,17 +71,36 @@ def search_step_reward(
 ) -> float:
     """Return the optimizer-visible reward for one generated search action."""
 
-    if is_validation or arm is not RewardArm.A2:
+    if is_validation:
         return 0.0
-    return float(process_reward) if process_reward is not None else 0.0
+    reward = float(process_reward) if process_reward is not None else 0.0
+    if arm is RewardArm.A9 and reward not in (0.0, 1.0):
+        raise ValueError(
+            "A9 optimizer process reward must be a known binary verdict; "
+            "partial and invalid probes must be masked before weighting"
+        )
+    return training_reward_contract(arm).process_weight * reward
 
 
 def final_step_reward(arm: RewardArm, *, is_validation: bool) -> float | None:
     """Return ``None`` when terminal EM must be computed, otherwise zero."""
 
-    if is_validation or arm in {RewardArm.A0, RewardArm.A1}:
+    if is_validation or training_reward_contract(arm).terminal_weight > 0.0:
         return None
     return 0.0
+
+
+def scale_terminal_reward(
+    arm: RewardArm,
+    terminal_reward: float,
+    *,
+    is_validation: bool,
+) -> float:
+    """Scale a computed terminal EM for training without changing validation EM."""
+
+    if is_validation:
+        return float(terminal_reward)
+    return training_reward_contract(arm).terminal_weight * float(terminal_reward)
 
 
 def final_step_response_mask(
@@ -60,8 +109,8 @@ def final_step_response_mask(
     *,
     is_validation: bool,
 ) -> list[int] | None:
-    """Mask A2 training final-answer tokens out of process-policy loss."""
+    """Apply the frozen final-token loss mask; validation always scores all tokens."""
 
-    if arm is RewardArm.A2 and not is_validation:
+    if not is_validation and training_reward_contract(arm).final_response_mask == 0:
         return [0] * int(response_length)
     return None

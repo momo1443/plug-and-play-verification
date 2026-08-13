@@ -3,8 +3,8 @@
   # Three research turns plus one reserved final-answer turn.
   max_steps: 4
   max_parallel_calls: 1
-  # Formal A0/A1/A2/A3/A4: every retrieval must be attributable to a model action.
-  # Smoke-only override: HOTPOTQA_FORCE_FIRST_SEARCH=true.
+  # Formal A0/A1/A2/A3: every retrieval must be attributable to a model action.
+  # Optional compatibility override: HOTPOTQA_FORCE_FIRST_SEARCH=true.
   force_first_search: false
 
   # BGE checkpoint. Must match `env/build_index.py --embedding_model`.

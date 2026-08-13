@@ -25,7 +25,10 @@ from recipes.hotpotqa.evidence import (
     parse_evidence_id,
     sentence_evidence_records,
 )
-from recipes.hotpotqa.hotpotqa_agent_flow import _format_passage_list
+from recipes.hotpotqa.hotpotqa_agent_flow import (
+    _format_history_actions,
+    _format_passage_list,
+)
 from recipes.hotpotqa.validate_formal_a0_artifacts import validate_formal_a0_artifacts
 from recipes.hotpotqa.validate_formal_a0_output import validate_formal_a0_output
 

@@ -1,0 +1,12 @@
+- name: hotpotqa_local_reasoning_agent
+  _target_: recipes.hotpotqa_lr.agent_flow.HotpotQALocalReasoningAgentFlow
+  max_steps: 4
+  max_parallel_calls: 1
+  reward_horizon: 3
+  dependency_taint_gamma: 0.3
+  embedding_model_name: ${oc.env:HOTPOTQA_EMBEDDING_MODEL,BAAI/bge-large-en-v1.5}
+  corpus_data_dir: ${oc.env:HOTPOTQA_CORPUS_DATA_ROOT,data/corpus/hotpotqa_corpus}
+  evidence_sidecar_path: ${oc.env:HOTPOTQA_EVIDENCE_SIDECAR,data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3}
+  require_sentence_evidence: ${oc.env:HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE,true}
+  embedding_devices: null
+  enable_tool_parse_feedback: true

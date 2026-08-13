@@ -1,0 +1,17 @@
+# Shared Agent-R1 reinforcement-learning trainer config.
+# verl exposes its common policy-optimization base as `ppo_trainer`; this is an
+# upstream interface name, while each entrypoint selects its own estimator.
+
+defaults:
+  - ppo_trainer
+  - /overrides/rollout@actor_rollout_ref.rollout
+  - _self_
+
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+trainer:
+  logger: ["console", "tensorboard"]
+  tensorboard_dir: null
+  rollout_data_file: null

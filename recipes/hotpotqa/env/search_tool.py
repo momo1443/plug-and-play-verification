@@ -38,7 +38,7 @@ def resolve_hotpotqa_corpus_data_root(corpus_data_dir: Optional[str] = None) -> 
 
 
 HOTPOTQA_CORPUS_DATA_ROOT = resolve_hotpotqa_corpus_data_root()
-# Backward-compatible alias for older smoke tests/imports. New code should use HOTPOTQA_CORPUS_DATA_ROOT.
+# Backward-compatible alias for older imports. New code should use HOTPOTQA_CORPUS_DATA_ROOT.
 HOTPOTQA_DATA_ROOT = HOTPOTQA_CORPUS_DATA_ROOT
 HOTPOTQA_INDEX_BIN = HOTPOTQA_CORPUS_DATA_ROOT / "index.bin"
 # Passage text for decoding search hits; must match hpqa_corpus.jsonl used when building the index.
