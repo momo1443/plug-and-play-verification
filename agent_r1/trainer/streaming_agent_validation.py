@@ -33,6 +33,16 @@ def _step_field(non_tensor_batch: dict[str, Any], name: str, index: int, default
     return values[index]
 
 
+def _streaming_metric_keys() -> set[str] | None:
+    raw = os.getenv("HOTPOTQA_STREAMING_METRIC_KEYS", "").strip()
+    if not raw:
+        return None
+    keys = {value.strip() for value in raw.split(",") if value.strip()}
+    if not keys:
+        raise ValueError("HOTPOTQA_STREAMING_METRIC_KEYS must contain at least one key")
+    return keys
+
+
 class StreamingValidationRayAgentTrainer(RayAgentTrainer):
     """Persist one compact record per AgentFlow trajectory during validation."""
 
@@ -47,9 +57,8 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
         stream_path = os.path.join(validation_dir, f"{self.global_steps}.jsonl")
         resume = _env_flag("HOTPOTQA_STREAMING_RESUME", False)
         fsync = _env_flag("HOTPOTQA_STREAMING_FSYNC", True)
-        expected_samples = len(self.val_dataloader.dataset) * int(
-            self.config.actor_rollout_ref.rollout.val_kwargs.n
-        )
+        val_n = int(self.config.actor_rollout_ref.rollout.val_kwargs.n)
+        expected_samples = len(self.val_dataloader.dataset) * val_n
 
         data_source_lst: list[Any] = []
         sample_inputs: list[str] = []
@@ -57,14 +66,41 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
         sample_scores: list[float] = []
         sample_uids: list[str] = []
         reward_extra_infos_dict: dict[str, list[Any]] = defaultdict(list)
+        aggregate_metric_keys = _streaming_metric_keys()
 
         print(
             f"Streaming AgentFlow validation to {stream_path} "
             f"(resume={resume}, fsync={fsync}, expected={expected_samples})"
         )
         with StreamingJsonlWriter(stream_path, resume=resume, fsync=fsync) as writer:
+            completed_samples = writer.contiguous_sample_count
+            if completed_samples > expected_samples:
+                raise RuntimeError(
+                    f"Cannot resume {stream_path}: existing rows={completed_samples} exceed "
+                    f"expected rows={expected_samples}"
+                )
+            if completed_samples % val_n != 0:
+                raise RuntimeError(
+                    f"Cannot resume {stream_path}: existing rollout count {completed_samples} "
+                    f"is not divisible by val n={val_n}"
+                )
+            rows_to_skip = completed_samples // val_n
+            if rows_to_skip:
+                print(
+                    f"Resuming after {completed_samples} completed rollouts; "
+                    f"skipping {rows_to_skip} validation rows"
+                )
             for test_data in self.val_dataloader:
                 test_batch = DataProto.from_single_dict(test_data)
+                source_batch_size = len(test_batch)
+                if rows_to_skip:
+                    if rows_to_skip < source_batch_size:
+                        raise RuntimeError(
+                            f"Cannot resume {stream_path}: completed prefix ends inside a validation "
+                            f"batch (remaining skip={rows_to_skip}, batch={source_batch_size})"
+                        )
+                    rows_to_skip -= source_batch_size
+                    continue
                 if "uid" not in test_batch.non_tensor_batch:
                     test_batch.non_tensor_batch["uid"] = np.array(
                         [str(uuid.uuid4()) for _ in range(len(test_batch.batch))], dtype=object
@@ -136,12 +172,14 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
                     batch_trajectory_scores.append(trajectory_score)
 
                     for key, values in reward_extra_info.items():
+                        if aggregate_metric_keys is not None and key not in aggregate_metric_keys:
+                            continue
                         batch_trajectory_reward_info[key].append(
                             make_json_safe(values[last])
                         )
 
                     record = build_validation_record(
-                        sample_index=len(sample_scores) + trajectory_index,
+                        sample_index=completed_samples + len(sample_scores) + trajectory_index,
                         raw_prompt=raw_prompts[trajectory_index],
                         decoded_input=step_inputs[0 if step_count == 0 else start],
                         output_text=step_outputs[last],
@@ -157,6 +195,12 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
                         force_first_search=_step_field(
                             output_batch.non_tensor_batch, "force_first_search", last, True
                         ),
+                        final_answer_protocol=_step_field(
+                            output_batch.non_tensor_batch,
+                            "final_answer_protocol",
+                            last,
+                            None,
+                        ),
                         evidence_schema_version=_step_field(
                             output_batch.non_tensor_batch,
                             "evidence_schema_version",
@@ -165,6 +209,12 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
                         ),
                         search_steps=_step_field(
                             output_batch.non_tensor_batch, "search_steps", last, []
+                        ),
+                        local_reasoning_transitions=_step_field(
+                            output_batch.non_tensor_batch,
+                            "local_reasoning_transitions",
+                            last,
+                            [],
                         ),
                         executed_queries=_step_field(
                             output_batch.non_tensor_batch,
@@ -222,6 +272,16 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
                 print(
                     f"Streaming AgentFlow validation progress: "
                     f"{writer.count}/{expected_samples} -> {stream_path}"
+                )
+
+            if rows_to_skip:
+                raise RuntimeError(
+                    f"Cannot resume {stream_path}: {rows_to_skip} completed validation rows were "
+                    "not present in the current dataloader"
+                )
+            if writer.count != expected_samples:
+                raise RuntimeError(
+                    f"Streaming validation ended at {writer.count}/{expected_samples} rows"
                 )
 
         self._maybe_log_val_generations(

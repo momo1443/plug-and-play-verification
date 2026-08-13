@@ -24,7 +24,7 @@ import ray
 import torch
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
 
@@ -59,11 +59,37 @@ def _as_object_array(values) -> np.ndarray:
     return result
 
 
+def _align_agent_flow_output_schema(outputs: list[DataProto]) -> list[str]:
+    """Align dynamic non-tensor fields before concatenating worker chunks."""
+
+    all_keys = {
+        key
+        for output in outputs
+        for key in output.non_tensor_batch
+    }
+    reward_extra_keys = sorted(
+        {
+            key
+            for output in outputs
+            for key in output.meta_info.get("reward_extra_keys", [])
+        }
+    )
+    for output in outputs:
+        for key in all_keys.difference(output.non_tensor_batch):
+            output.non_tensor_batch[key] = _as_object_array(None for _ in range(len(output)))
+        output.meta_info["reward_extra_keys"] = reward_extra_keys
+    return reward_extra_keys
+
+
 class AgentFlowMetrics(BaseModel):
     """Agent flow performance metrics."""
 
     generate_sequences: float = 0.0
     tool_calls: float = 0.0
+    step_generate_sequences: list[float] = Field(default_factory=list)
+    """Raw generation time for each step, in trajectory order."""
+    step_tool_calls: list[float] = Field(default_factory=list)
+    """Raw tool time for each step, including zero for steps without a tool call."""
 
 
 class AgentFlowStep(BaseModel):
@@ -533,6 +559,11 @@ class AgentFlowWorkerBase:
             ),
         ).remote(self.config, self.reward_router_address)
 
+        # Shared judge server for A6 arm — lazily initialised on first use
+        # so that all trajectories in this worker reuse the same aiohttp
+        # session / connector and avoid fd-conflict crashes under uvloop.
+        self._shared_judge_server = None
+
         trace_config = self.config.actor_rollout_ref.rollout.get("trace", {})
         RolloutTraceConfig.init(
             self.config.trainer.project_name,
@@ -541,6 +572,37 @@ class AgentFlowWorkerBase:
             trace_config.get("token2text", False),
             trace_config.get("max_samples_per_step_per_worker", None),
         )
+
+    async def _maybe_init_shared_judge_server(self) -> None:
+        """Lazily create one shared judge backend for A6.
+
+        This is called once per worker at the start of ``generate_sequences``.
+        All trajectories in the worker share the same judge instance
+        (and therefore the same aiohttp session / connector for local vLLM,
+        or the same openai.AsyncOpenAI client for remote API), which avoids
+        the fd-conflict crashes that occur when ephemeral sessions are
+        created and destroyed per trajectory under uvloop.
+
+        When ``HOTPOTQA_JUDGE_API_KEY`` is set, a :class:`RemoteJudgeClient`
+        is created (no local GPU needed); otherwise a local
+        :class:`JudgeServerManager` is used.
+        """
+        if self._shared_judge_server is not None:
+            return
+
+        # Only needed for Judge-backed arms — check the environment variable the same
+        # way HotpotQAAgentFlow does.
+        import os
+
+        reward_arm_env = os.environ.get("HOTPOTQA_REWARD_ARM", "")
+        if reward_arm_env.upper() != "A6":
+            return
+
+        from recipes.hotpotqa.judge_server import create_judge_from_env
+        from recipes.hotpotqa.reward_arm import RewardArm
+
+        self._shared_judge_server = create_judge_from_env(RewardArm.A6)
+        await self._shared_judge_server.start()
 
     @tqbridge()
     async def generate_sequences(self, batch: DataProto) -> DataProto:
@@ -564,6 +626,11 @@ class AgentFlowWorkerBase:
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
+        # Lazy-initialise the shared judge server (A6) once per worker.
+        # All trajectories in this worker will share the same aiohttp session
+        # and connector, preventing fd-conflict crashes under uvloop.
+        await self._maybe_init_shared_judge_server()
+
         config = self.config.actor_rollout_ref.rollout
         sampling_params = dict(
             temperature=config.temperature,
@@ -659,12 +726,29 @@ class AgentFlowWorkerBase:
                 processor=self.processor,
                 dataset_cls=self.dataset_cls,
                 dataset_config=self.config.data,
+                shared_judge_server=self._shared_judge_server,
             )
-            output: AgentFlowOutput = await agent_flow.run(
-                sampling_params,
-                _agent_r1_is_validation=is_validation,
-                **kwargs,
-            )
+            try:
+                output: AgentFlowOutput = await agent_flow.run(
+                    sampling_params,
+                    _agent_r1_is_validation=is_validation,
+                    **kwargs,
+                )
+            except RuntimeError as exc:
+                # Defensive: catch uvloop fd-conflict errors (e.g. "File
+                # descriptor N is used by transport") that might slip through
+                # the per-judge-retry handler.  Re-raise as a
+                # non-RuntimeError so that asyncio.gather can collect the
+                # failure without crashing the entire Ray task.
+                if "is used by transport" in str(exc):
+                    logger.error(
+                        "uvloop fd-conflict RuntimeError in trajectory step=%d sample=%d: %s",
+                        trajectory["step"],
+                        trajectory["sample_index"],
+                        exc,
+                    )
+                    raise OSError(exc) from exc
+                raise
 
             return output
 
@@ -817,9 +901,7 @@ class AgentFlowWorkerBase:
 class AgentFlowWorker(AgentFlowWorkerBase):
     """Agent flow worker takes a batch of messages and run each message in an agent flow."""
 
-    def __init__(
-        self, config: DictConfig, llm_client: LLMServerClient, reward_router_address: str = None
-    ):
+    def __init__(self, config: DictConfig, llm_client: LLMServerClient, reward_router_address: str = None):
         """Initialize agent flow manager.
         Args:
             config (DictConfig): YAML config.
@@ -923,11 +1005,9 @@ class AgentFlowManager:
         chunks = prompts.split(split_size)
         workers = self.agent_flow_workers[: len(chunks)]
         outputs = await asyncio.gather(
-            *[
-                worker.generate_sequences.remote(chunk)
-                for worker, chunk in zip(workers, chunks, strict=True)
-            ]
+            *[worker.generate_sequences.remote(chunk) for worker, chunk in zip(workers, chunks, strict=True)]
         )
+        _align_agent_flow_output_schema(outputs)
         output = DataProto.concat(outputs)
         if self.reward_model_manager:
             self.reward_model_manager.sleep()
@@ -943,40 +1023,79 @@ class AgentFlowManager:
         return output
 
     def _performance_metrics(
-        self, metrics: list[list[dict[str, str]]], num_steps: list[int], output: DataProto
+        self, metrics: list[list[dict[str, Any]]], num_steps: list[int], output: DataProto
     ) -> dict[str, float]:
         timing = {}
+        trajectory_metrics = [metric for chunk in metrics for metric in chunk]
+        if not trajectory_metrics:
+            raise ValueError("AgentFlow timing requires at least one trajectory")
+        if len(trajectory_metrics) != len(num_steps):
+            raise ValueError(
+                "AgentFlow timing trajectory count mismatch: "
+                f"metrics={len(trajectory_metrics)}, num_steps={len(num_steps)}"
+            )
 
-        # Extract step-level timing from metrics
-        # Each metric dict corresponds to one trajectory, containing step-level timing data
-        t_generate_sequences = np.array([metric["generate_sequences"] for chunk in metrics for metric in chunk])
-        t_tool_calls = np.array([metric["tool_calls"] for chunk in metrics for metric in chunk])
+        step_generate_times: list[float] = []
+        step_tool_times: list[float] = []
+        trajectory_generate_times: list[float] = []
+        trajectory_tool_times: list[float] = []
+        per_step_available = True
 
-        # Step-level statistics (each number corresponds to one step)
-        timing["agent_flow/step/generate_sequences/min"] = t_generate_sequences.min()
-        timing["agent_flow/step/generate_sequences/max"] = t_generate_sequences.max()
-        timing["agent_flow/step/generate_sequences/mean"] = t_generate_sequences.mean()
-        timing["agent_flow/step/tool_calls/min"] = t_tool_calls.min()
-        timing["agent_flow/step/tool_calls/max"] = t_tool_calls.max()
-        timing["agent_flow/step/tool_calls/mean"] = t_tool_calls.mean()
+        for trajectory_index, (metric, step_count) in enumerate(zip(trajectory_metrics, num_steps, strict=True)):
+            if step_count <= 0:
+                raise ValueError(f"AgentFlow trajectory {trajectory_index} has invalid num_steps={step_count}")
 
-        # Trajectory-level statistics - aggregate step times by trajectory
-        # num_steps: [3, 2, 3] means 3 trajectories with 3, 2, 3 steps respectively
-        trajectory_generate_times = []
-        trajectory_tool_times = []
-        trajectory_total_times = []
-        idx = 0
-        for n in num_steps:
-            traj_gen_time = t_generate_sequences[idx : idx + n].sum()
-            traj_tool_time = t_tool_calls[idx : idx + n].sum()
-            trajectory_generate_times.append(traj_gen_time)
-            trajectory_tool_times.append(traj_tool_time)
-            trajectory_total_times.append(traj_gen_time + traj_tool_time)
-            idx += n
+            cumulative_generate = float(metric["generate_sequences"])
+            cumulative_tool = float(metric["tool_calls"])
+            raw_generate = [float(value) for value in metric.get("step_generate_sequences", [])]
+            raw_tool = [float(value) for value in metric.get("step_tool_calls", [])]
 
-        trajectory_generate_times = np.array(trajectory_generate_times)
-        trajectory_tool_times = np.array(trajectory_tool_times)
-        trajectory_total_times = np.array(trajectory_total_times)
+            if raw_generate or raw_tool:
+                if len(raw_generate) != step_count or len(raw_tool) != step_count:
+                    raise ValueError(
+                        f"AgentFlow trajectory {trajectory_index} timing length mismatch: "
+                        f"num_steps={step_count}, generation={len(raw_generate)}, tool={len(raw_tool)}"
+                    )
+                trajectory_generate = float(sum(raw_generate))
+                trajectory_tool = float(sum(raw_tool))
+                if not np.isclose(trajectory_generate, cumulative_generate) or not np.isclose(
+                    trajectory_tool, cumulative_tool
+                ):
+                    raise ValueError(
+                        f"AgentFlow trajectory {trajectory_index} cumulative timing does not match raw step timing"
+                    )
+                step_generate_times.extend(raw_generate)
+                step_tool_times.extend(raw_tool)
+            elif step_count == 1:
+                # A single-step flow's cumulative value is also an exact step value.
+                trajectory_generate = cumulative_generate
+                trajectory_tool = cumulative_tool
+                step_generate_times.append(cumulative_generate)
+                step_tool_times.append(cumulative_tool)
+            else:
+                # Legacy multi-step flows only expose trajectory totals. Keep their
+                # trajectory metrics exact and suppress misleading step statistics.
+                trajectory_generate = cumulative_generate
+                trajectory_tool = cumulative_tool
+                per_step_available = False
+
+            trajectory_generate_times.append(trajectory_generate)
+            trajectory_tool_times.append(trajectory_tool)
+
+        trajectory_generate_times = np.asarray(trajectory_generate_times, dtype=float)
+        trajectory_tool_times = np.asarray(trajectory_tool_times, dtype=float)
+        trajectory_total_times = trajectory_generate_times + trajectory_tool_times
+
+        timing["agent_flow/timing/per_step_available"] = float(per_step_available)
+        if per_step_available:
+            t_generate_sequences = np.asarray(step_generate_times, dtype=float)
+            t_tool_calls = np.asarray(step_tool_times, dtype=float)
+            timing["agent_flow/step/generate_sequences/min"] = t_generate_sequences.min()
+            timing["agent_flow/step/generate_sequences/max"] = t_generate_sequences.max()
+            timing["agent_flow/step/generate_sequences/mean"] = t_generate_sequences.mean()
+            timing["agent_flow/step/tool_calls/min"] = t_tool_calls.min()
+            timing["agent_flow/step/tool_calls/max"] = t_tool_calls.max()
+            timing["agent_flow/step/tool_calls/mean"] = t_tool_calls.mean()
 
         timing["agent_flow/trajectory/generate_sequences/min"] = trajectory_generate_times.min()
         timing["agent_flow/trajectory/generate_sequences/max"] = trajectory_generate_times.max()

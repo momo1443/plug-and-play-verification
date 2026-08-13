@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,10 @@ from recipes.hotpotqa.evidence import (
     parse_evidence_id,
 )
 
+# Bump when the *logic* of validate_formal_a0_artifacts changes so stale caches
+# from an older code version are ignored instead of silently reused.
+PREFLIGHT_CACHE_VERSION = 1
+
 
 def _sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
     digest = hashlib.sha256()
@@ -26,6 +31,38 @@ def _sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
         while chunk := handle.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def fingerprint(path: Path) -> dict[str, int]:
+    """Cheap identity of a frozen artifact: byte size + nanosecond mtime.
+
+    Any content change to a normal file also changes size or mtime, so an
+    unchanged (size, mtime_ns) pair lets us trust a previously computed result
+    without re-reading multi-GB artifacts from NAS on every launch.
+    """
+
+    stat = path.stat()
+    return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+
+
+def load_cache(cache_path: Path | None) -> dict[str, Any]:
+    if cache_path is None or not cache_path.is_file():
+        return {}
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_cache_atomic(cache_path: Path, payload: dict[str, Any]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, cache_path)
 
 
 def validate_formal_a0_artifacts(
@@ -36,6 +73,8 @@ def validate_formal_a0_artifacts(
     expected_validation_rows: int = 7405,
     minimum_gold_mapping_rate: float = 0.99,
     verify_hashes: bool = True,
+    cache_path: Path | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     corpus_path = corpus_dir / "hpqa_corpus.jsonl"
     index_path = corpus_dir / "index.bin"
@@ -43,6 +82,32 @@ def validate_formal_a0_artifacts(
     for path in (validation_path, corpus_path, index_path, evidence_sidecar_path):
         if not path.is_file():
             raise FileNotFoundError(f"Required formal A0 artifact is missing: {path}")
+
+    # Every artifact whose bytes influence this result is fingerprinted by
+    # (size, mtime_ns). An identical fingerprint set lets us reuse the cached
+    # summary and skip the FAISS load, corpus scan and full-file hashing.
+    artifact_fingerprints = {
+        "validation_parquet": fingerprint(validation_path),
+        "corpus_jsonl": fingerprint(corpus_path),
+        "index_bin": fingerprint(index_path),
+        "evidence_sidecar": fingerprint(evidence_sidecar_path),
+    }
+    if embeddings_path.is_file():
+        artifact_fingerprints["embeddings_npy"] = fingerprint(embeddings_path)
+    cache_key = {
+        "cache_version": PREFLIGHT_CACHE_VERSION,
+        "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
+        "expected_validation_rows": expected_validation_rows,
+        "minimum_gold_mapping_rate": minimum_gold_mapping_rate,
+        "verify_hashes": verify_hashes,
+        "artifact_fingerprints": artifact_fingerprints,
+    }
+    if use_cache:
+        cached = load_cache(cache_path).get("artifact_preflight")
+        if isinstance(cached, dict) and cached.get("key") == cache_key:
+            summary = dict(cached["summary"])
+            summary["cache"] = "hit"
+            return summary
 
     validation_rows = int(pq.read_metadata(validation_path).num_rows)
     if expected_validation_rows > 0 and validation_rows != expected_validation_rows:
@@ -137,7 +202,7 @@ def validate_formal_a0_artifacts(
                 )
             verified_hashes[name] = actual_hash
 
-    return {
+    summary = {
         "status": "ok",
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
         "validation_rows": validation_rows,
@@ -151,7 +216,13 @@ def validate_formal_a0_artifacts(
         "evidence_metric_eligible_rows": eligible_samples,
         "verified_hashes": verified_hashes,
         "example_official_evidence_ids": example_evidence_ids,
+        "cache": "miss",
     }
+    if use_cache and cache_path is not None:
+        cache = load_cache(cache_path)
+        cache["artifact_preflight"] = {"key": cache_key, "summary": summary}
+        write_cache_atomic(cache_path, cache)
+    return summary
 
 
 def main() -> None:

@@ -6,6 +6,9 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from recipes.hotpotqa.final_answer_protocol import RAW_FINAL_ANSWER_PROTOCOL
+from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL, parse_finish
+
 _USER_QUERY_BLOCK = re.compile(
     r"(?:^|\n)### User Query\s*\n(.*?)(?=\n\n### |\Z)", re.DOTALL
 )
@@ -49,8 +52,15 @@ def extract_search_queries(output_text: str) -> list[str]:
     return queries
 
 
-def extract_final_answer(output_text: str) -> str | None:
+def extract_final_answer(
+    output_text: str,
+    final_answer_protocol: str = RAW_FINAL_ANSWER_PROTOCOL,
+) -> str | None:
     """Return the final complete answer tag, or ``None`` for a format failure."""
+
+    if final_answer_protocol == LR_FINISH_PROTOCOL:
+        finish = parse_finish(output_text)
+        return finish.answer if finish.envelope_valid else None
 
     text = output_text or ""
     if "</think>" in text.lower():
@@ -96,8 +106,10 @@ def build_validation_record(
     thinking_mode: Any,
     thinking_steps: Any,
     force_first_search: Any,
+    final_answer_protocol: Any,
     evidence_schema_version: Any,
     search_steps: Any,
+    local_reasoning_transitions: Any = None,
     executed_queries: Any = None,
     num_turns: Any = None,
     sample_key: Any = None,
@@ -109,12 +121,26 @@ def build_validation_record(
 ) -> dict[str, Any]:
     """Build one self-contained formal A0 evaluation record."""
 
+    normalized_protocol = str(_to_builtin(final_answer_protocol))
+    supported_protocols = {
+        RAW_FINAL_ANSWER_PROTOCOL,
+        LR_FINISH_PROTOCOL,
+    }
+    if normalized_protocol not in supported_protocols:
+        raise ValueError(
+            f"Unexpected final-answer protocol {normalized_protocol!r}; "
+            f"expected one of {sorted(supported_protocols)!r}"
+        )
+
     normalized_search_steps = _to_builtin(search_steps)
     if not isinstance(normalized_search_steps, list):
         normalized_search_steps = []
     normalized_thinking = _to_builtin(thinking_steps)
     if not isinstance(normalized_thinking, list):
         normalized_thinking = []
+    normalized_local_transitions = _to_builtin(local_reasoning_transitions)
+    if not isinstance(normalized_local_transitions, list):
+        normalized_local_transitions = []
 
     normalized_queries = _to_builtin(executed_queries)
     if not isinstance(normalized_queries, list):
@@ -157,7 +183,7 @@ def build_validation_record(
         "official_qid": str(normalized_official_qid or ""),
         "question": extract_question(raw_prompt, decoded_input),
         "search_queries": normalized_queries,
-        "answer": extract_final_answer(output_text),
+        "answer": extract_final_answer(output_text, normalized_protocol),
         "ground_truth": _to_builtin(ground_truth),
         "score": float(score),
     }
@@ -168,11 +194,13 @@ def build_validation_record(
             "thinking_mode": str(_to_builtin(thinking_mode)),
             "qwen_thinking": normalized_thinking,
             "force_first_search": bool(_to_builtin(force_first_search)),
+            "final_answer_protocol": normalized_protocol,
             "evidence_schema_version": str(_to_builtin(evidence_schema_version)),
             "gold_evidence_ids": normalized_gold,
             "unresolved_gold_facts": normalized_unresolved,
             "evidence_metrics": normalized_metrics,
             "search_steps": normalized_search_steps,
+            "local_reasoning_transitions": normalized_local_transitions,
         }
     )
     return record

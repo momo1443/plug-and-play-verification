@@ -137,6 +137,16 @@ The Agent-R1 report evaluates Qwen3-4B across representative agent scenarios. Th
 | REINFORCE | 78.9 | 52.8 | 73.84 | 69.57 | 63.41 | 41.8 |
 | RLOO | 81.6 | 55.2 | 79.08 | 73.46 | 68.02 | 45.1 |
 
+### Training visualization and rollout records
+
+Every `agent_r1.trainer.main_agent_ppo` training run automatically enables TensorBoard in addition to its configured loggers. Event files are stored in the experiment directory under `tensorboard/`; start the UI with the command printed at launch, for example:
+
+```bash
+tensorboard --logdir /path/to/experiment/tensorboard --host 0.0.0.0 --port 6006
+```
+
+Training rollouts are appended to one `rollouts.jsonl` file per experiment. Every row carries `global_step`, so steps can be filtered without creating a separate file for each optimizer step. Validation-only runs do not create training curves or rollout files.
+
 ## Building a New Agent Task
 
 For a new task, keep the trainer intact and implement the task-specific layers:

@@ -13,20 +13,10 @@ _LOCAL_EM_DATA_SOURCES = {
 
 
 def _normalize_answer(s: str) -> str:
-    def lower(text: str) -> str:
-        return text.lower()
-
-    def remove_punc(text: str) -> str:
-        exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
-
-    def remove_articles(text: str) -> str:
-        return re.sub(r"\b(a|an|the)\b", " ", text)
-
-    def white_space_fix(text: str) -> str:
-        return " ".join(text.split())
-
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    lowered = str(s).lower()
+    without_punctuation = "".join(ch for ch in lowered if ch not in set(string.punctuation))
+    without_articles = re.sub(r"\b(a|an|the)\b", " ", without_punctuation)
+    return " ".join(without_articles.split())
 
 
 def _extract_answer_from_solution(solution_str: str) -> str:
