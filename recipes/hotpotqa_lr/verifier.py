@@ -7,10 +7,21 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from recipes.hotpotqa_lr.dsl import DSL_VERSION, ClaimSourceStep, ReasonStep, parse_reason_step
+from recipes.hotpotqa_lr.dsl import (
+    DSL_VERSION,
+    REASON_STEP_FORMAT,
+    REASON_STEP_FORMAT_CLAIM_SOURCE,
+    ClaimSourceStep,
+    ReasonStep,
+    parse_reason_step,
+)
 from recipes.hotpotqa_lr.reward_fn import normalize_answer
 
-VERIFIER_VERSION = "hotpotqa-local-reasoning-verifier-v1"
+VERIFIER_VERSION = (
+    "hotpotqa-local-reasoning-claim-source-novelty-v1"
+    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
+    else "hotpotqa-local-reasoning-verifier-v1"
+)
 
 
 def artifact_content_sha256(text: str) -> str:
@@ -85,6 +96,7 @@ class LocalStepAudit:
     invalid_ancestor_count: int
     dependency_factor: float
     action_coupled: int
+    novelty_valid: int
     raw_local_credit: float
     errors: tuple[str, ...]
     canonical_digest_sha256: str
@@ -108,6 +120,7 @@ class LocalStepAudit:
             "invalid_ancestor_count": self.invalid_ancestor_count,
             "dependency_factor": self.dependency_factor,
             "action_coupled": self.action_coupled,
+            "novelty_valid": self.novelty_valid,
             "raw_local_credit": self.raw_local_credit,
             "errors": list(self.errors),
             "canonical_digest_sha256": self.canonical_digest_sha256,
@@ -259,6 +272,7 @@ def _base_audit(
         invalid_ancestor_count=invalid_ancestors,
         dependency_factor=dependency_factor,
         action_coupled=0,
+        novelty_valid=1,
         raw_local_credit=0.0,
         errors=tuple(errors),
         canonical_digest_sha256=_canonical_sha256(seed_record),
@@ -326,24 +340,63 @@ def verify_trajectory(
                         changed = True
 
     finalized: list[LocalStepAudit] = []
+    seen_search_queries: set[str] = set()
+    credited_search_claims: set[str] = set()
+    credited_search_sources: set[str] = set()
     for audit in audits:
         action_coupled = int(bool(audit.ref and audit.ref in coupled_refs))
         horizon_ok = audit.transition_index <= reward_horizon
+        novelty_valid = 1
         credit = (
             audit.own_valid
             * audit.dependency_factor
             * action_coupled
+            * novelty_valid
             / float(reward_horizon)
             if horizon_ok
             else 0.0
         )
         errors = list(audit.errors)
+        canonical = audit.canonical_reason_step
+        is_claim_source = isinstance(canonical, Mapping) and set(canonical) == {"claim", "source"}
+        if audit.action_type == "search":
+            normalized_query = normalize_answer(audit.action_value)
+            if is_claim_source:
+                claim = str(canonical.get("claim") or "")
+                source = str(canonical.get("source") or "")
+                normalized_claim = normalize_answer(claim)
+                if normalized_query and normalized_query in seen_search_queries:
+                    novelty_valid = 0
+                    errors.append("query_repeated")
+                if normalized_claim and normalized_claim in credited_search_claims:
+                    novelty_valid = 0
+                    errors.append("claim_repeated")
+                if source and source in credited_search_sources:
+                    novelty_valid = 0
+                    errors.append("source_repeated")
+                credit = (
+                    audit.own_valid
+                    * audit.dependency_factor
+                    * action_coupled
+                    * novelty_valid
+                    / float(reward_horizon)
+                    if horizon_ok
+                    else 0.0
+                )
+                if credit > 0:
+                    if normalized_claim:
+                        credited_search_claims.add(normalized_claim)
+                    if source:
+                        credited_search_sources.add(source)
+            if normalized_query:
+                seen_search_queries.add(normalized_query)
         if not horizon_ok:
             errors.append("reward_horizon_exceeded")
         record = audit.record()
         record.update(
             {
                 "action_coupled": action_coupled,
+                "novelty_valid": novelty_valid,
                 "raw_local_credit": credit,
                 "errors": errors,
             }
@@ -352,6 +405,7 @@ def verify_trajectory(
             replace(
                 audit,
                 action_coupled=action_coupled,
+                novelty_valid=novelty_valid,
                 raw_local_credit=float(credit),
                 errors=tuple(errors),
                 canonical_digest_sha256=_canonical_sha256(record),
@@ -378,6 +432,9 @@ def trajectory_audit_record(audits: Sequence[LocalStepAudit]) -> dict[str, Any]:
         ),
         "mean_action_coupling": (
             sum(audit.action_coupled for audit in audits) / count if count else 0.0
+        ),
+        "mean_novelty": (
+            sum(audit.novelty_valid for audit in audits) / count if count else 0.0
         ),
         "mean_invalid_ancestor_count": (
             sum(audit.invalid_ancestor_count for audit in audits) / count if count else 0.0

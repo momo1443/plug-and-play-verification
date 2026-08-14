@@ -10,7 +10,7 @@ LR_REWARD_ARM = (
     "A8_LR30_CS" if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE else "A8_LR30"
 )
 LR_CONTRACT_VERSION = (
-    "a8-lr-30-claim-source-v1"
+    "a8-lr-30-claim-source-v2"
     if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
     else "a8-lr-30-v1"
 )

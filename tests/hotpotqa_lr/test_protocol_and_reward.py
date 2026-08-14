@@ -56,7 +56,7 @@ class ProtocolAndRewardTest(unittest.TestCase):
         ).strip()
         self.assertEqual(
             output,
-            "a8-lr-30-claim-source-v1 A8_LR30_CS hotpotqa-local-reasoning-claim-source-v1 claim_source",
+            "a8-lr-30-claim-source-v2 A8_LR30_CS hotpotqa-local-reasoning-claim-source-v1 claim_source",
         )
 
     def test_non_finish_completion_scores_zero(self):
