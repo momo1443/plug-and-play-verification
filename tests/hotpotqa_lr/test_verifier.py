@@ -52,7 +52,107 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual([audit.grounding_valid for audit in audits], [1, 1])
         self.assertEqual([audit.inference_valid for audit in audits], [1, 1])
         self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
+        self.assertEqual([audit.novelty_valid for audit in audits], [1, 1])
         self.assertEqual(audits[0].canonical_reason_step, {"claim": "June Miller", "source": "passage:1"})
+        self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
+
+    def test_claim_source_repeated_search_query_gets_no_local_credit(self):
+        text = "Henry Miller married June Miller in 1924."
+        audits = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller",
+                        "source": "passage:1",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller nationality",
+                    "available_artifacts": _artifact("passage:1", text),
+                },
+                {
+                    "reason_step": {
+                        "claim": "June Miller",
+                        "source": "passage:1",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller nationality",
+                    "available_artifacts": _artifact("passage:1", text),
+                },
+            ],
+            question="What was the nationality of Henry Miller's spouse?",
+        )
+        self.assertEqual([audit.own_valid for audit in audits], [1, 1])
+        self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
+        self.assertEqual([audit.novelty_valid for audit in audits], [1, 0])
+        self.assertIn("query_repeated", audits[1].errors)
+        self.assertIn("claim_repeated", audits[1].errors)
+        self.assertIn("source_repeated", audits[1].errors)
+        self.assertAlmostEqual(audits[0].raw_local_credit, 1 / 3)
+        self.assertEqual(audits[1].raw_local_credit, 0.0)
+        self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 1 / 3)
+
+    def test_claim_source_repeated_source_gets_no_second_search_credit(self):
+        text = "June Miller was an American writer and a photographer."
+        audits = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer",
+                        "source": "passage:2",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller was an American writer",
+                    "available_artifacts": _artifact("passage:2", text),
+                },
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer and a photographer",
+                        "source": "passage:2",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller was an American writer and a photographer",
+                    "available_artifacts": _artifact("passage:2", text),
+                },
+            ],
+            question="What nationality was June Miller?",
+        )
+        self.assertEqual([audit.own_valid for audit in audits], [1, 1])
+        self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
+        self.assertEqual([audit.novelty_valid for audit in audits], [1, 0])
+        self.assertNotIn("claim_repeated", audits[1].errors)
+        self.assertIn("source_repeated", audits[1].errors)
+        self.assertAlmostEqual(audits[0].raw_local_credit, 1 / 3)
+        self.assertEqual(audits[1].raw_local_credit, 0.0)
+        self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 1 / 3)
+
+    def test_claim_source_finish_can_reuse_search_evidence(self):
+        text = "June Miller was an American writer and a photographer."
+        audits = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer",
+                        "source": "passage:2",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller was an American writer",
+                    "available_artifacts": _artifact("passage:2", text),
+                },
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer",
+                        "source": "passage:2",
+                    },
+                    "action_type": "finish",
+                    "action_value": "American",
+                    "available_artifacts": _artifact("passage:2", text),
+                },
+            ],
+            question="What nationality was June Miller?",
+        )
+        self.assertEqual([audit.own_valid for audit in audits], [1, 1])
+        self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
+        self.assertEqual([audit.novelty_valid for audit in audits], [1, 1])
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
 
     def test_claim_source_fails_closed_when_source_or_claim_is_invalid(self):
