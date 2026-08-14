@@ -5,7 +5,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$HERE/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 
-export HOTPOTQA_REWARD_ARM=A8_LR30
+export HOTPOTQA_REWARD_ARM=A8_LR30_CS
+export HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source
 export HOTPOTQA_RUN_MODE=main
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1,3,4,5,6}"
@@ -21,7 +22,7 @@ export HOTPOTQA_DATA_SHUFFLE=false
 export HOTPOTQA_SAVE_FREQ=50
 export HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP=2
 export HOTPOTQA_SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
-export RUN_ID="${RUN_ID:-qwen35-4b_a8_lr30_main30k_n4_1500step_5gpu_vllm020_save50_$(date +%Y%m%d-%H%M%S)}"
+export RUN_ID="${RUN_ID:-qwen35-4b_a8_lr30_claimsource_main30k_n4_1500step_5gpu_vllm020_save50_$(date +%Y%m%d-%H%M%S)}"
 export HOTPOTQA_OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 
 exec bash "$PROJECT_DIR/examples/hotpotqa/run_rlvr.sh"

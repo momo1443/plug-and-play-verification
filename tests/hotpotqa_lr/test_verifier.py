@@ -20,6 +20,90 @@ def _artifact(artifact_id: str, text: str) -> dict[str, dict[str, str]]:
 
 
 class LocalReasoningVerifierTest(unittest.TestCase):
+    def test_claim_source_reason_step_receives_grounded_credit(self):
+        first_text = "Henry Miller married June Miller in 1924."
+        second_text = "June Miller was an American writer."
+        audits = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller",
+                        "source": "passage:1",
+                    },
+                    "action_type": "search",
+                    "action_value": "June Miller nationality",
+                    "available_artifacts": _artifact("passage:1", first_text),
+                },
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer.",
+                        "source": "passage:2",
+                    },
+                    "action_type": "finish",
+                    "action_value": "American",
+                    "available_artifacts": {
+                        **_artifact("passage:1", first_text),
+                        **_artifact("passage:2", second_text),
+                    },
+                },
+            ],
+            question="What was the nationality of Henry Miller's spouse?",
+        )
+        self.assertEqual([audit.grounding_valid for audit in audits], [1, 1])
+        self.assertEqual([audit.inference_valid for audit in audits], [1, 1])
+        self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
+        self.assertEqual(audits[0].canonical_reason_step, {"claim": "June Miller", "source": "passage:1"})
+        self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
+
+    def test_claim_source_fails_closed_when_source_or_claim_is_invalid(self):
+        text = "June Miller was an American writer."
+        missing_source = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller was an American writer.",
+                        "source": "passage:missing",
+                    },
+                    "action_type": "finish",
+                    "action_value": "American",
+                    "available_artifacts": _artifact("passage:2", text),
+                }
+            ],
+            question="q",
+        )[0]
+        absent_claim = verify_trajectory(
+            [
+                {
+                    "reason_step": {
+                        "claim": "June Miller was a French writer.",
+                        "source": "passage:2",
+                    },
+                    "action_type": "finish",
+                    "action_value": "French",
+                    "available_artifacts": _artifact("passage:2", text),
+                }
+            ],
+            question="q",
+        )[0]
+        malformed = verify_trajectory(
+            [
+                {
+                    "reason_step": {"claim": "June Miller was an American writer."},
+                    "action_type": "finish",
+                    "action_value": "American",
+                    "available_artifacts": _artifact("passage:2", text),
+                }
+            ],
+            question="q",
+        )[0]
+        self.assertEqual(missing_source.own_valid, 0)
+        self.assertIn("artifact_unknown:passage:missing", missing_source.errors)
+        self.assertEqual(absent_claim.own_valid, 0)
+        self.assertIn("claim_not_exact:passage:2", absent_claim.errors)
+        self.assertEqual(malformed.own_valid, 0)
+        self.assertIn("reason_step_fields_invalid", malformed.errors)
+        self.assertIn("source_invalid", malformed.errors)
+
     def test_valid_two_hop_reward_is_not_terminal_gated(self):
         first_text = "Henry Miller married June Miller in 1924."
         second_text = "June Miller was an American writer."

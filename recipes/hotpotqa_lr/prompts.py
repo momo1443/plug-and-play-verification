@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 
+from recipes.hotpotqa_lr.dsl import REASON_STEP_FORMAT, REASON_STEP_FORMAT_CLAIM_SOURCE
+
 LR_SYSTEM_PROMPT = (
     "You are a research agent. Answer the user query using Wikipedia search evidence and the "
     "local reasoning tool protocol. Output exactly one tool call per turn and no prose."
 )
 
-LR_USER_PROMPT = """### User Query
+_LR_USER_PROMPT_DSL = """### User Query
 {user_query}
 
 ### Prior Searches
@@ -32,6 +34,36 @@ When the evidence supports the minimal answer, call finish with status `answer`,
 one grounded reason_step. Avoid repeated queries.
 """
 
+_LR_USER_PROMPT_CLAIM_SOURCE = """### User Query
+{user_query}
+
+### Prior Searches
+{history_actions}
+
+### Retrieved Artifacts
+{passage_list}
+
+### Reasoning Ledger
+{reasoning_ledger}
+
+### Recent Tool Format Issues
+{tool_feedback}
+
+Use a new search when evidence is missing. The first search is a bootstrap query. Every later
+search must declare one reason_step with exactly this JSON shape:
+{{"claim": "a short fact copied or directly stated by the source artifact", "source": "passage:<id>"}}
+The claim must be grounded in the visible source artifact. Do not output refs, ops, premises,
+inputs, outputs, verifier results, or reasoning prose.
+When the evidence supports the minimal answer, call finish with status `answer`, the answer, and
+one grounded claim/source reason_step. Avoid repeated queries.
+"""
+
+LR_USER_PROMPT = (
+    _LR_USER_PROMPT_CLAIM_SOURCE
+    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
+    else _LR_USER_PROMPT_DSL
+)
+
 LR_FINISH_AVAILABLE_PROMPT = """You may call search again, or call finish now. Output exactly one
 tool call and no surrounding text."""
 
@@ -48,7 +80,7 @@ _PREMISE_SCHEMA = {
     "additionalProperties": False,
 }
 
-REASON_STEP_SCHEMA = {
+LEGACY_REASON_STEP_SCHEMA = {
     "type": "object",
     "properties": {
         "ref": {"type": "string", "pattern": "^r[1-9][0-9]*$"},
@@ -79,6 +111,30 @@ REASON_STEP_SCHEMA = {
     "required": ["ref", "op", "premises", "inputs", "output"],
     "additionalProperties": False,
 }
+
+CLAIM_SOURCE_REASON_STEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "claim": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short factual claim copied or directly stated by the source artifact.",
+        },
+        "source": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Visible artifact id such as passage:37.",
+        },
+    },
+    "required": ["claim", "source"],
+    "additionalProperties": False,
+}
+
+REASON_STEP_SCHEMA = (
+    CLAIM_SOURCE_REASON_STEP_SCHEMA
+    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
+    else LEGACY_REASON_STEP_SCHEMA
+)
 
 BOOTSTRAP_SEARCH_SCHEMA = {
     "type": "function",
