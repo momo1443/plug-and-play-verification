@@ -114,6 +114,9 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
 
     def test_a8_lr_has_standalone_source_and_previous_hyperparameters(self):
         launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr.sh").read_text(encoding="utf-8")
+        claim_source_launcher = (
+            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source.sh"
+        ).read_text(encoding="utf-8")
         generic_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa_lr/prepare_run.py").read_text(encoding="utf-8")
 
@@ -121,15 +124,23 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/answer_certificate_verifier.py").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/certificate_forest.py").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/task_sufficiency_verifier.py").exists())
-        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR50", launcher)
-        self.assertIn("HOTPOTQA_NUM_GPUS=6", launcher)
-        self.assertIn("HOTPOTQA_AGENT_WORKERS=6", launcher)
-        self.assertIn("HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION=0.25", launcher)
-        self.assertIn("HOTPOTQA_ROLLOUT_N=4", launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", launcher)
+        self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-5}"', launcher)
+        self.assertIn('HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-5}"', launcher)
+        self.assertIn(
+            'HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.20}"',
+            launcher,
+        )
+        self.assertIn('HOTPOTQA_ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"', launcher)
         self.assertIn("HOTPOTQA_TOTAL_TRAINING_STEPS=1500", launcher)
         self.assertIn("HOTPOTQA_SAVE_FREQ=50", launcher)
-        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR50", generic_launcher)
-        self.assertIn('"formula": "0.5 * terminal_em + 0.5 * local_reward"', preflight)
+        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR30", generic_launcher)
+        self.assertIn("A8_LR30_CS", generic_launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", claim_source_launcher)
+        self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source", claim_source_launcher)
+        self.assertIn('"contract_id": LR_CONTRACT_VERSION', preflight)
+        self.assertIn('f"{PRIMARY_CONTRACT.terminal_weight:.1f} * terminal_em + "', preflight)
+        self.assertIn('"reason_step_format": REASON_STEP_FORMAT', preflight)
         self.assertIn('"process_is_terminal_em_gated": False', preflight)
         self.assertIn('"gold_answer_visible_to_verifier": False', preflight)
         self.assertIn('"gold_evidence_visible_to_verifier": False', preflight)
@@ -187,7 +198,9 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_validation.sh").read_text(encoding="utf-8")
         evaluator = (PROJECT_ROOT.parent / "scripts/evaluate_hotpotqa_full_validation.sh").read_text(encoding="utf-8")
 
-        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR50", launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", launcher)
+        self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT", launcher)
         self.assertIn("recipes/hotpotqa_lr/base.yaml", launcher)
         self.assertIn("recipes/hotpotqa_lr/reward_fn.py", launcher)
         self.assertIn("default_agent_flow=hotpotqa_local_reasoning_agent", launcher)

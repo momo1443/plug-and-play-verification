@@ -1,12 +1,34 @@
-"""Closed data model for the first HotpotQA local-reasoning DSL."""
+"""Data models for HotpotQA local-reasoning reason_step records."""
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-DSL_VERSION = "hotpotqa-local-reasoning-dsl-v1"
+REASON_STEP_FORMAT_ENV = "HOTPOTQA_LR_REASON_STEP_FORMAT"
+REASON_STEP_FORMAT_DSL = "dsl"
+REASON_STEP_FORMAT_CLAIM_SOURCE = "claim_source"
+SUPPORTED_REASON_STEP_FORMATS = frozenset(
+    {REASON_STEP_FORMAT_DSL, REASON_STEP_FORMAT_CLAIM_SOURCE}
+)
+
+
+def _resolve_reason_step_format() -> str:
+    value = os.environ.get(REASON_STEP_FORMAT_ENV, REASON_STEP_FORMAT_DSL).strip().lower()
+    if value not in SUPPORTED_REASON_STEP_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_REASON_STEP_FORMATS))
+        raise ValueError(f"{REASON_STEP_FORMAT_ENV} must be one of {supported}, got {value!r}")
+    return value
+
+
+REASON_STEP_FORMAT = _resolve_reason_step_format()
+DSL_VERSION = (
+    "hotpotqa-local-reasoning-claim-source-v1"
+    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
+    else "hotpotqa-local-reasoning-dsl-v1"
+)
 REASON_REF_PATTERN = re.compile(r"r[1-9][0-9]*")
 OPERATIONS = frozenset(
     {
@@ -46,12 +68,45 @@ class ReasonStep:
         }
 
 
-def parse_reason_step(value: Any) -> tuple[ReasonStep | None, tuple[str, ...]]:
-    """Parse the closed schema without repairing malformed actor output."""
+@dataclass(frozen=True)
+class ClaimSourceStep:
+    claim: str
+    source: str
+
+    def record(self) -> dict[str, str]:
+        return {"claim": self.claim, "source": self.source}
+
+
+ParsedReasonStep = ReasonStep | ClaimSourceStep
+
+
+def _parse_claim_source_step(value: Mapping[str, Any]) -> tuple[ClaimSourceStep | None, tuple[str, ...]]:
+    errors: list[str] = []
+    if set(value) != {"claim", "source"}:
+        errors.append("reason_step_fields_invalid")
+
+    claim = value.get("claim")
+    if not isinstance(claim, str) or not claim.strip():
+        errors.append("claim_invalid")
+        claim = ""
+    else:
+        claim = " ".join(claim.split())
+
+    source = value.get("source")
+    if not isinstance(source, str) or not source.strip():
+        errors.append("source_invalid")
+        source = ""
+    else:
+        source = source.strip()
+
+    step = ClaimSourceStep(claim=claim, source=source)
+    return (step if not errors else None), tuple(errors)
+
+
+def _parse_legacy_dsl_step(value: Mapping[str, Any]) -> tuple[ReasonStep | None, tuple[str, ...]]:
+    """Parse the closed v1 DSL without repairing malformed actor output."""
 
     errors: list[str] = []
-    if not isinstance(value, Mapping):
-        return None, ("reason_step_not_object",)
     required = {"ref", "op", "premises", "inputs", "output"}
     if set(value) != required:
         errors.append("reason_step_fields_invalid")
@@ -111,3 +166,13 @@ def parse_reason_step(value: Any) -> tuple[ReasonStep | None, tuple[str, ...]]:
         output=dict(output),
     )
     return (step if not errors else None), tuple(errors)
+
+
+def parse_reason_step(value: Any) -> tuple[ParsedReasonStep | None, tuple[str, ...]]:
+    """Parse the closed schema without repairing malformed actor output."""
+
+    if not isinstance(value, Mapping):
+        return None, ("reason_step_not_object",)
+    if "claim" in value or "source" in value:
+        return _parse_claim_source_step(value)
+    return _parse_legacy_dsl_step(value)

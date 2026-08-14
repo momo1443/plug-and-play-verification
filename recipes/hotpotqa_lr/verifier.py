@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from recipes.hotpotqa_lr.dsl import DSL_VERSION, ReasonStep, parse_reason_step
+from recipes.hotpotqa_lr.dsl import DSL_VERSION, ClaimSourceStep, ReasonStep, parse_reason_step
 from recipes.hotpotqa_lr.reward_fn import normalize_answer
 
 VERIFIER_VERSION = "hotpotqa-local-reasoning-verifier-v1"
@@ -54,6 +54,18 @@ def _action_contains(action_type: str, action_value: str, conclusion: str) -> bo
     if action_type == "finish":
         return normalized_conclusion == normalized_action
     return f" {normalized_conclusion} " in f" {normalized_action} "
+
+
+def _claim_source_finish_contains_answer(action_type: str, action_value: str, claim: str) -> bool:
+    if action_type != "finish":
+        return False
+    normalized_claim = normalize_answer(claim)
+    normalized_answer = normalize_answer(action_value)
+    return bool(
+        normalized_claim
+        and normalized_answer
+        and f" {normalized_answer} " in f" {normalized_claim} "
+    )
 
 
 @dataclass(frozen=True)
@@ -165,38 +177,54 @@ def _base_audit(
 
     if parsed is not None:
         canonical = parsed.record()
-        ref = parsed.ref
-        inputs = parsed.inputs
-        if ref in prior_by_ref:
-            errors.append("ref_duplicate")
-        for input_ref in inputs:
-            ancestor = prior_by_ref.get(input_ref)
-            if ancestor is None:
-                errors.append(f"input_unknown:{input_ref}")
-                continue
-            ancestors.add(input_ref)
-            ancestors.update(ancestor.ancestor_refs)
-
-        for premise in parsed.premises:
-            artifact = available_artifacts.get(premise.artifact_id)
+        if isinstance(parsed, ClaimSourceStep):
+            ref = f"cs{transition_index}"
+            conclusion = parsed.claim
+            artifact = available_artifacts.get(parsed.source)
             if artifact is None:
-                errors.append(f"artifact_unknown:{premise.artifact_id}")
-                continue
-            text = artifact.get("text")
-            digest = artifact.get("content_sha256")
-            if not isinstance(text, str) or digest != artifact_content_sha256(text):
-                errors.append(f"artifact_snapshot_invalid:{premise.artifact_id}")
-            elif premise.span not in text:
-                errors.append(f"span_not_exact:{premise.artifact_id}")
-
-        conclusion, output_errors = _output_value(parsed)
-        errors.extend(output_errors)
-        grounding_valid = int(not errors)
-        inference_errors = _inference_errors(parsed, conclusion, prior_by_ref, question)
-        if inference_errors:
-            errors.extend(inference_errors)
+                errors.append(f"artifact_unknown:{parsed.source}")
+            else:
+                text = artifact.get("text")
+                digest = artifact.get("content_sha256")
+                if not isinstance(text, str) or digest != artifact_content_sha256(text):
+                    errors.append(f"artifact_snapshot_invalid:{parsed.source}")
+                elif parsed.claim not in text:
+                    errors.append(f"claim_not_exact:{parsed.source}")
+            grounding_valid = int(not errors)
+            inference_valid = grounding_valid
         else:
-            inference_valid = 1
+            ref = parsed.ref
+            inputs = parsed.inputs
+            if ref in prior_by_ref:
+                errors.append("ref_duplicate")
+            for input_ref in inputs:
+                ancestor = prior_by_ref.get(input_ref)
+                if ancestor is None:
+                    errors.append(f"input_unknown:{input_ref}")
+                    continue
+                ancestors.add(input_ref)
+                ancestors.update(ancestor.ancestor_refs)
+
+            for premise in parsed.premises:
+                artifact = available_artifacts.get(premise.artifact_id)
+                if artifact is None:
+                    errors.append(f"artifact_unknown:{premise.artifact_id}")
+                    continue
+                text = artifact.get("text")
+                digest = artifact.get("content_sha256")
+                if not isinstance(text, str) or digest != artifact_content_sha256(text):
+                    errors.append(f"artifact_snapshot_invalid:{premise.artifact_id}")
+                elif premise.span not in text:
+                    errors.append(f"span_not_exact:{premise.artifact_id}")
+
+            conclusion, output_errors = _output_value(parsed)
+            errors.extend(output_errors)
+            grounding_valid = int(not errors)
+            inference_errors = _inference_errors(parsed, conclusion, prior_by_ref, question)
+            if inference_errors:
+                errors.extend(inference_errors)
+            else:
+                inference_valid = 1
 
     invalid_ancestors = sum(
         1 for ancestor_ref in ancestors if prior_by_ref[ancestor_ref].own_valid == 0
@@ -277,6 +305,13 @@ def verify_trajectory(
         and audit.conclusion
         and any(
             _action_contains(action_type, action_value, audit.conclusion)
+            or (
+                isinstance(audit.canonical_reason_step, Mapping)
+                and set(audit.canonical_reason_step) == {"claim", "source"}
+                and _claim_source_finish_contains_answer(
+                    action_type, action_value, audit.conclusion
+                )
+            )
             for action_type, action_value in action_sinks
         )
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed manifest preparation for the primary A8-LR-50 run."""
+"""Fail-closed manifest preparation for A8-LR runs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from recipes.hotpotqa_lr.dsl import DSL_VERSION
+from recipes.hotpotqa_lr.dsl import DSL_VERSION, REASON_STEP_FORMAT
 from recipes.hotpotqa_lr.prompts import (
     BOOTSTRAP_TOOL_SCHEMAS,
     FINISH_TOOL_SCHEMAS,
@@ -24,7 +24,7 @@ from recipes.hotpotqa_lr.prompts import (
     LR_USER_PROMPT,
     SEARCH_OR_FINISH_TOOL_SCHEMAS,
 )
-from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, PRIMARY_CONTRACT
+from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, LR_REWARD_ARM, PRIMARY_CONTRACT
 from recipes.hotpotqa_lr.verifier import VERIFIER_VERSION
 
 MANIFEST_VERSION = "hotpotqa-a8-lr-run-v1"
@@ -148,8 +148,8 @@ def main() -> None:
         raise ValueError("A8-LR requires batch 20 and exactly 1,500 steps")
     if args.rollout_n != 4 or args.grpo_micro_batch_size != 2:
         raise ValueError("A8-LR requires rollout n=4 and micro-batch/GPU=2")
-    if args.num_gpus != 6 or args.agent_workers != 6:
-        raise ValueError("A8-LR main run requires six GPUs and six agent workers")
+    if args.num_gpus != 5 or args.agent_workers != 5:
+        raise ValueError("A8-LR-30 main run requires five GPUs and five agent workers")
     if _parse_bool(args.data_shuffle):
         raise ValueError("A8-LR train data must not be shuffled")
     if not _parse_bool(args.actor_use_dynamic_bsz):
@@ -158,8 +158,8 @@ def main() -> None:
         raise ValueError("A8-LR must retain actor-loss reference KL")
     if args.reference_kl_loss_coef != 0.001 or args.reference_kl_loss_type != "low_var_kl":
         raise ValueError("A8-LR reference KL must remain low_var_kl at 0.001")
-    if args.vllm_gpu_memory_utilization != 0.25:
-        raise ValueError("A8-LR must match the previous run's vLLM utilization 0.25")
+    if args.vllm_gpu_memory_utilization != 0.20:
+        raise ValueError("A8-LR-30 requires vLLM utilization 0.20")
     if args.save_freq != 50 or args.max_actor_ckpt_to_keep != 2:
         raise ValueError("A8-LR must save every 50 steps and retain two actor checkpoints")
     if args.gamma != 1.0:
@@ -184,6 +184,7 @@ def main() -> None:
         "recipes/hotpotqa_lr/prepare_run.py",
         "examples/hotpotqa/run_rlvr.sh",
         "examples/hotpotqa_lr/run_lr.sh",
+        "examples/hotpotqa_lr/run_lr_claim_source.sh",
     ]
     code_hashes = {}
     for relative in code_paths:
@@ -212,7 +213,7 @@ def main() -> None:
         "contract_version": MANIFEST_VERSION,
         "status": "prepared",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "arm": "A8-LR-50",
+        "arm": LR_REWARD_ARM.replace("_", "-"),
         "run_mode": "main",
         "output_dir": str(output_dir),
         "model": _model_identity(model_path),
@@ -244,7 +245,10 @@ def main() -> None:
         },
         "reward_contract": {
             "contract_id": LR_CONTRACT_VERSION,
-            "formula": "0.5 * terminal_em + 0.5 * local_reward",
+            "formula": (
+                f"{PRIMARY_CONTRACT.terminal_weight:.1f} * terminal_em + "
+                f"{PRIMARY_CONTRACT.process_weight:.1f} * local_reward"
+            ),
             "terminal_weight": PRIMARY_CONTRACT.terminal_weight,
             "process_weight": PRIMARY_CONTRACT.process_weight,
             "reward_horizon": PRIMARY_CONTRACT.reward_horizon,
@@ -254,11 +258,13 @@ def main() -> None:
             "gold_evidence_visible_to_verifier": False,
             "verifier_version": VERIFIER_VERSION,
             "dsl_version": DSL_VERSION,
+            "reason_step_format": REASON_STEP_FORMAT,
         },
         "actor_contract": {
             "first_search_is_uncredited_bootstrap": True,
             "max_searches": 3,
             "max_agent_flow_turns": 4,
+            "reason_step_format": REASON_STEP_FORMAT,
             "prompt_sha256": prompt_hashes,
             "tool_schema_sha256": schema_hashes,
         },

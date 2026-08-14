@@ -12,11 +12,24 @@ PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
 case "$ARM" in
-    A1|A2|A3|A6|A7|A9|A8_LR50) ;;
+    A1|A2|A3|A6|A7|A9|A8_LR30|A8_LR30_CS) ;;
     *) echo "Unsupported HOTPOTQA_REWARD_ARM: $ARM" >&2; exit 2 ;;
 esac
+if [[ "$ARM" == "A8_LR30_CS" ]]; then
+    export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-claim_source}"
+    if [[ "$HOTPOTQA_LR_REASON_STEP_FORMAT" != "claim_source" ]]; then
+        echo "A8_LR30_CS requires HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source" >&2
+        exit 2
+    fi
+elif [[ "$ARM" == "A8_LR30" ]]; then
+    export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-dsl}"
+    if [[ "$HOTPOTQA_LR_REASON_STEP_FORMAT" != "dsl" ]]; then
+        echo "A8_LR30 requires HOTPOTQA_LR_REASON_STEP_FORMAT=dsl; use A8_LR30_CS for claim_source" >&2
+        exit 2
+    fi
+fi
 
-if [[ "$ARM" == "A8_LR50" ]]; then
+if [[ "$ARM" == A8_LR30* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_lr/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
@@ -101,8 +114,9 @@ REFERENCE_KL_LOSS_TYPE=low_var_kl
 KL_IN_REWARD=false
 MAX_PROMPT_LENGTH=8192
 MAX_RESPONSE_LENGTH=1024
-MAX_MODEL_LENGTH=12288
-MAX_NUM_SEQS="$((TRAIN_BATCH_SIZE * ROLLOUT_N))"
+MAX_MODEL_LENGTH="${HOTPOTQA_VLLM_MAX_MODEL_LEN:-12288}"
+MAX_NUM_BATCHED_TOKENS="${HOTPOTQA_VLLM_MAX_NUM_BATCHED_TOKENS:-$MAX_MODEL_LENGTH}"
+MAX_NUM_SEQS="${HOTPOTQA_VLLM_MAX_NUM_SEQS:-$((TRAIN_BATCH_SIZE * ROLLOUT_N))}"
 VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.40}"
 VLLM_ENABLE_SLEEP_MODE="${HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false}"
 VLLM_FREE_CACHE_ENGINE="${HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false}"
@@ -142,6 +156,12 @@ if ! [[ "$ACTOR_MAX_TOKEN_LEN_PER_GPU" =~ ^[1-9][0-9]*$ ]]; then
     echo "ACTOR_MAX_TOKEN_LEN_PER_GPU must be a positive integer, got $ACTOR_MAX_TOKEN_LEN_PER_GPU" >&2
     exit 2
 fi
+for int_name in MAX_MODEL_LENGTH MAX_NUM_BATCHED_TOKENS MAX_NUM_SEQS; do
+    if ! [[ "${!int_name}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "$int_name must be a positive integer, got ${!int_name}" >&2
+        exit 2
+    fi
+done
 case "$RESUME_MODE" in
     disable|auto)
         if [[ -n "$RESUME_FROM_PATH" ]]; then
@@ -236,7 +256,7 @@ case "$SKIP_PREFLIGHT" in
     *) echo "HOTPOTQA_SKIP_PREFLIGHT must be 0 or 1, got: $SKIP_PREFLIGHT" >&2; exit 2 ;;
 esac
 if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; then
-    if [[ "$ARM" == "A8_LR50" ]]; then
+    if [[ "$ARM" == A8_LR30* ]]; then
         "$PYTHON_BIN" -m recipes.hotpotqa_lr.prepare_run \
         --project-dir "$PROJECT_DIR" \
         --train-path "$TRAIN_PATH" \
@@ -374,7 +394,7 @@ fi
     actor_rollout_ref.rollout.free_cache_engine="$VLLM_FREE_CACHE_ENGINE" \
     actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.max_model_len="$MAX_MODEL_LENGTH" \
-    actor_rollout_ref.rollout.max_num_batched_tokens="$MAX_MODEL_LENGTH" \
+    actor_rollout_ref.rollout.max_num_batched_tokens="$MAX_NUM_BATCHED_TOKENS" \
     actor_rollout_ref.rollout.max_num_seqs="$MAX_NUM_SEQS" \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.language_model_only=True \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \

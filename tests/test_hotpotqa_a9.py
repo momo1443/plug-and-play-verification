@@ -414,7 +414,7 @@ class A9RewardAndLauncherTest(unittest.TestCase):
         )
         reward_arm = (PROJECT_ROOT / "recipes/hotpotqa/reward_arm.py").read_text(encoding="utf-8")
         self.assertIn("HOTPOTQA_REWARD_ARM=A9", launcher)
-        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR50", shared)
+        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR30", shared)
         self.assertIn('RewardArm.A9: A9_VERIFIER_VERSION', preflight)
         self.assertIn('"process_is_terminal_em_gated": False', preflight)
         self.assertIn('"a9_probe_seed": a9_probe_seed', preflight)

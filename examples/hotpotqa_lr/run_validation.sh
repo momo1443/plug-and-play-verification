@@ -18,7 +18,19 @@ PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
 export HOTPOTQA_FORMAL_A0=0
 export HOTPOTQA_FORMAL_EXPERIMENT=1
-export HOTPOTQA_REWARD_ARM=A8_LR50
+export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-dsl}"
+case "$HOTPOTQA_LR_REASON_STEP_FORMAT" in
+    dsl)
+        export HOTPOTQA_REWARD_ARM=A8_LR30
+        ;;
+    claim_source)
+        export HOTPOTQA_REWARD_ARM=A8_LR30_CS
+        ;;
+    *)
+        echo "HOTPOTQA_LR_REASON_STEP_FORMAT must be dsl or claim_source" >&2
+        exit 2
+        ;;
+esac
 export HOTPOTQA_VALIDATION_INTERFACE=lr
 export HOTPOTQA_ENABLE_THINKING=false
 export HOTPOTQA_FORCE_FIRST_SEARCH=false
@@ -95,7 +107,7 @@ find "$MODEL_PATH" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep
     exit 2
 }
 
-RUN_ID="${RUN_ID:-qwen35-4b_a8-lr50_native_full7405_${NUM_GPUS}gpu_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-qwen35-4b_a8-lr30_native_full7405_${NUM_GPUS}gpu_$(date +%Y%m%d-%H%M%S)}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 export RAY_TMPDIR="${RAY_TMPDIR:-/tmp/ar1-lrval-$$}"
 mkdir -p "$VALIDATION_DATA_DIR"
@@ -130,7 +142,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from recipes.hotpotqa.prepare_formal_rlvr_run import _model_identity, _package_versions
+from recipes.hotpotqa_lr.dsl import DSL_VERSION, REASON_STEP_FORMAT
 from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL
+from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, LR_REWARD_ARM
 
 
 def sha256(path: Path) -> str:
@@ -155,8 +169,10 @@ if selected != 7_405:
 code_paths = [
     "recipes/hotpotqa_lr/agent_flow.py",
     "recipes/hotpotqa_lr/base.yaml",
+    "recipes/hotpotqa_lr/dsl.py",
     "recipes/hotpotqa_lr/prompts.py",
     "recipes/hotpotqa_lr/protocol.py",
+    "recipes/hotpotqa_lr/reward_contract.py",
     "recipes/hotpotqa_lr/reward_fn.py",
     "recipes/hotpotqa_lr/verifier.py",
     "agent_r1/trainer/streaming_agent_validation.py",
@@ -168,10 +184,15 @@ manifest = {
     "status": "prepared",
     "created_at_utc": datetime.now(timezone.utc).isoformat(),
     "run_id": os.environ["RUN_ID"],
-    "arm": "A8-LR-50",
+    "arm": LR_REWARD_ARM.replace("_", "-"),
     "run_mode": "validation_only",
     "validation_interface": "lr_native",
     "final_answer_protocol": LR_FINISH_PROTOCOL,
+    "reward_contract": {
+        "contract_id": LR_CONTRACT_VERSION,
+        "dsl_version": DSL_VERSION,
+        "reason_step_format": REASON_STEP_FORMAT,
+    },
     "checkpoint": os.environ.get("SOURCE_CHECKPOINT", ""),
     "output_dir": str(output_dir.resolve()),
     "output_jsonl": str((output_dir / "0.jsonl").resolve()),
