@@ -120,6 +120,8 @@ MAX_NUM_SEQS="${HOTPOTQA_VLLM_MAX_NUM_SEQS:-$((TRAIN_BATCH_SIZE * ROLLOUT_N))}"
 VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.40}"
 VLLM_ENABLE_SLEEP_MODE="${HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false}"
 VLLM_FREE_CACHE_ENGINE="${HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false}"
+VLLM_KV_CACHE_MEMORY_BYTES="${HOTPOTQA_VLLM_KV_CACHE_MEMORY_BYTES:-}"
+LR_EM_WARMUP_STEPS="${HOTPOTQA_LR_EM_WARMUP_STEPS:-0}"
 DATA_SHUFFLE="${HOTPOTQA_DATA_SHUFFLE:-false}"
 MODEL_ENABLE_GRADIENT_CHECKPOINTING="${HOTPOTQA_ENABLE_GRADIENT_CHECKPOINTING:-true}"
 ACTOR_USE_DYNAMIC_BSZ="${HOTPOTQA_ACTOR_USE_DYNAMIC_BSZ:-true}"
@@ -162,6 +164,15 @@ for int_name in MAX_MODEL_LENGTH MAX_NUM_BATCHED_TOKENS MAX_NUM_SEQS; do
         exit 2
     fi
 done
+if [[ -n "$VLLM_KV_CACHE_MEMORY_BYTES" ]] && ! [[ "$VLLM_KV_CACHE_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+    echo "HOTPOTQA_VLLM_KV_CACHE_MEMORY_BYTES must be a positive integer, got $VLLM_KV_CACHE_MEMORY_BYTES" >&2
+    exit 2
+fi
+if ! [[ "$LR_EM_WARMUP_STEPS" =~ ^[0-9]+$ ]]; then
+    echo "HOTPOTQA_LR_EM_WARMUP_STEPS must be a non-negative integer, got $LR_EM_WARMUP_STEPS" >&2
+    exit 2
+fi
+export HOTPOTQA_LR_EM_WARMUP_STEPS="$LR_EM_WARMUP_STEPS"
 case "$RESUME_MODE" in
     disable|auto)
         if [[ -n "$RESUME_FROM_PATH" ]]; then
@@ -282,6 +293,7 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --max-actor-ckpt-to-keep "$MAX_ACTOR_CKPT_TO_KEEP" \
         --num-gpus "$NUM_GPUS" \
         --agent-workers "$AGENT_WORKERS" \
+        --em-warmup-steps "$LR_EM_WARMUP_STEPS" \
         --gamma "$GRPO_GAMMA"
     else
         "$PYTHON_BIN" -m recipes.hotpotqa.prepare_formal_rlvr_run \
@@ -334,6 +346,10 @@ fi
 HYDRA_CONFIG_ARGS=()
 if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" == "1" ]]; then
     HYDRA_CONFIG_ARGS=(--cfg job)
+fi
+VLLM_ENGINE_EXTRA_ARGS=()
+if [[ -n "$VLLM_KV_CACHE_MEMORY_BYTES" ]]; then
+    VLLM_ENGINE_EXTRA_ARGS+=(+actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_memory_bytes="$VLLM_KV_CACHE_MEMORY_BYTES")
 fi
 
 # Upstream verl ActorConfig retains ppo_* field names below; they carry GRPO batch settings.
@@ -398,6 +414,7 @@ fi
     actor_rollout_ref.rollout.max_num_seqs="$MAX_NUM_SEQS" \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.language_model_only=True \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
+    "${VLLM_ENGINE_EXTRA_ARGS[@]}" \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.multi_turn.max_parallel_calls=1 \

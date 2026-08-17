@@ -731,6 +731,7 @@ class AgentFlowWorkerBase:
             try:
                 output: AgentFlowOutput = await agent_flow.run(
                     sampling_params,
+                    _agent_r1_global_step=trajectory["step"],
                     _agent_r1_is_validation=is_validation,
                     **kwargs,
                 )

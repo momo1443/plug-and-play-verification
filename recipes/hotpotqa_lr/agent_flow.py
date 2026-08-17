@@ -49,10 +49,42 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _coerce_nonnegative_int(value: Any, *, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}") from exc
+    if parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+    return parsed
+
+
+def optimizer_reward_schedule(
+    *, global_step: int, is_validation: bool, em_warmup_steps: int
+) -> tuple[float, float, str]:
+    if is_validation:
+        return 1.0, 0.0, "validation_terminal_em"
+    if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
+        return 1.0, 0.0, "em_warmup"
+    return PRIMARY_CONTRACT.terminal_weight, PRIMARY_CONTRACT.process_weight, "lr30"
+
+
 def _format_history(actions: list[str]) -> str:
     if not actions:
         return "None"
     return "\n".join(f"[Search {index}] {query}" for index, query in enumerate(actions, start=1))
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, set):
+        return sorted(_json_safe(item) for item in value)
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    return value
 
 
 def _format_ledger(transitions: list[dict[str, Any]]) -> str:
@@ -63,10 +95,10 @@ def _format_ledger(transitions: list[dict[str, Any]]) -> str:
         lines.append(
             json.dumps(
                 {
-                    "reason_step": transition.get("reason_step"),
+                    "reason_step": _json_safe(transition.get("reason_step")),
                     "action": {
                         "type": transition.get("action_type"),
-                        "value": transition.get("action_value"),
+                        "value": _json_safe(transition.get("action_value")),
                     },
                 },
                 ensure_ascii=False,
@@ -135,6 +167,10 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         self.max_steps = int(kwargs.get("max_steps", 4))
         self.max_parallel_calls = int(kwargs.get("max_parallel_calls", 1))
         self.reward_horizon = int(kwargs.get("reward_horizon", PRIMARY_CONTRACT.reward_horizon))
+        self.em_warmup_steps = _coerce_nonnegative_int(
+            kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_LR_EM_WARMUP_STEPS", 0)),
+            name="em_warmup_steps",
+        )
         self.dependency_taint_gamma = float(
             kwargs.get("dependency_taint_gamma", PRIMARY_CONTRACT.dependency_taint_gamma)
         )
@@ -334,6 +370,12 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         raw_prompt = list(kwargs["raw_prompt"])
         question = str(raw_prompt[0]["content"]).strip()
         is_validation = bool(kwargs.get("_agent_r1_is_validation", False))
+        global_step = int(kwargs.get("_agent_r1_global_step", -1))
+        terminal_weight, process_weight, reward_phase = optimizer_reward_schedule(
+            global_step=global_step,
+            is_validation=is_validation,
+            em_warmup_steps=self.em_warmup_steps,
+        )
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
             raise ValueError("HotpotQA extra_info must be a mapping")
@@ -454,13 +496,9 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 )
                 trajectory_audit = trajectory_audit_record(audits)
                 local_reward = float(trajectory_audit["local_reward"])
-                weighted_local = 0.0 if is_validation else PRIMARY_CONTRACT.process_weight * local_reward
+                weighted_local = process_weight * local_reward
                 for audit, flow_step_index in zip(audits, transition_flow_step_indices, strict=True):
-                    weighted_credit = (
-                        0.0
-                        if is_validation
-                        else PRIMARY_CONTRACT.process_weight * audit.raw_local_credit
-                    )
+                    weighted_credit = process_weight * audit.raw_local_credit
                     if flow_step_index < len(steps):
                         steps[flow_step_index].reward_score = weighted_credit
                         step_info = steps[flow_step_index].extra_fields.get("reward_extra_info", {})
@@ -469,21 +507,17 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                                 "local_reasoning_step": audit.record(),
                                 "raw_local_credit": audit.raw_local_credit,
                                 "weighted_local_credit": weighted_credit,
+                                "optimizer_reward_phase": reward_phase,
+                                "optimizer_process_weight": process_weight,
+                                "optimizer_terminal_weight": terminal_weight,
+                                "training_global_step": global_step,
                             }
                         )
                         steps[flow_step_index].extra_fields["reward_extra_info"] = step_info
-                terminal_component = (
-                    terminal_em
-                    if is_validation
-                    else PRIMARY_CONTRACT.terminal_weight * terminal_em
-                )
+                terminal_component = terminal_weight * terminal_em
                 finish_weighted_credit = 0.0
                 if audits and transition_flow_step_indices[-1] == len(steps):
-                    finish_weighted_credit = (
-                        0.0
-                        if is_validation
-                        else PRIMARY_CONTRACT.process_weight * audits[-1].raw_local_credit
-                    )
+                    finish_weighted_credit = process_weight * audits[-1].raw_local_credit
                 final_step.reward_score = terminal_component + finish_weighted_credit
                 reward_info = final_step.extra_fields.get("reward_extra_info", {})
                 reward_info.update(
@@ -494,6 +528,11 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                         "local_reward": local_reward,
                         "optimizer_local_component": weighted_local,
                         "optimizer_total_reward": terminal_component + weighted_local,
+                        "optimizer_reward_phase": reward_phase,
+                        "optimizer_terminal_weight": terminal_weight,
+                        "optimizer_process_weight": process_weight,
+                        "lr_em_warmup_steps": self.em_warmup_steps,
+                        "training_global_step": global_step,
                         "local_reasoning_audit": trajectory_audit,
                         "finish_protocol_valid": bool(finish and finish.envelope_valid),
                         "minimum_search_requirement_met": bool(actions),
