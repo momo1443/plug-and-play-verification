@@ -115,6 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actor-ckpt-to-keep", type=int, required=True)
     parser.add_argument("--num-gpus", type=int, required=True)
     parser.add_argument("--agent-workers", type=int, required=True)
+    parser.add_argument("--em-warmup-steps", type=int, default=0)
     parser.add_argument("--gamma", type=float, required=True)
     return parser
 
@@ -148,8 +149,8 @@ def main() -> None:
         raise ValueError("A8-LR requires batch 20 and exactly 1,500 steps")
     if args.rollout_n != 4 or args.grpo_micro_batch_size != 2:
         raise ValueError("A8-LR requires rollout n=4 and micro-batch/GPU=2")
-    if args.num_gpus != 5 or args.agent_workers != 5:
-        raise ValueError("A8-LR-30 main run requires five GPUs and five agent workers")
+    if args.num_gpus not in {5, 6} or args.agent_workers != args.num_gpus:
+        raise ValueError("A8-LR-30 main run requires five or six GPUs with matching agent workers")
     if _parse_bool(args.data_shuffle):
         raise ValueError("A8-LR train data must not be shuffled")
     if not _parse_bool(args.actor_use_dynamic_bsz):
@@ -162,6 +163,8 @@ def main() -> None:
         raise ValueError("A8-LR-30 requires vLLM utilization 0.20")
     if args.save_freq != 50 or args.max_actor_ckpt_to_keep != 2:
         raise ValueError("A8-LR must save every 50 steps and retain two actor checkpoints")
+    if args.em_warmup_steps < 0:
+        raise ValueError("A8-LR EM warmup steps must be non-negative")
     if args.gamma != 1.0:
         raise ValueError("Trainer gamma must remain 1.0")
 
@@ -184,7 +187,9 @@ def main() -> None:
         "recipes/hotpotqa_lr/prepare_run.py",
         "examples/hotpotqa/run_rlvr.sh",
         "examples/hotpotqa_lr/run_lr.sh",
+        "examples/hotpotqa_lr/run_lr_em100.sh",
         "examples/hotpotqa_lr/run_lr_claim_source.sh",
+        "examples/hotpotqa_lr/run_lr_claim_source_em100.sh",
     ]
     code_hashes = {}
     for relative in code_paths:
@@ -238,6 +243,7 @@ def main() -> None:
             "actor_lr": 1e-6,
             "data_shuffle": False,
             "total_training_steps": args.total_training_steps,
+            "em_warmup_steps": args.em_warmup_steps,
             "save_freq": args.save_freq,
             "max_actor_ckpt_to_keep": args.max_actor_ckpt_to_keep,
             "trainer_gamma": args.gamma,
@@ -259,6 +265,15 @@ def main() -> None:
             "verifier_version": VERIFIER_VERSION,
             "dsl_version": DSL_VERSION,
             "reason_step_format": REASON_STEP_FORMAT,
+            "schedule": {
+                "type": "em_warmup_then_lr30" if args.em_warmup_steps else "constant_lr30",
+                "em_warmup_steps": args.em_warmup_steps,
+                "warmup_formula": "1.0 * terminal_em + 0.0 * local_reward",
+                "post_warmup_formula": (
+                    f"{PRIMARY_CONTRACT.terminal_weight:.1f} * terminal_em + "
+                    f"{PRIMARY_CONTRACT.process_weight:.1f} * local_reward"
+                ),
+            },
         },
         "actor_contract": {
             "first_search_is_uncredited_bootstrap": True,

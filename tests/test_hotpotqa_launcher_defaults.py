@@ -114,8 +114,14 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
 
     def test_a8_lr_has_standalone_source_and_previous_hyperparameters(self):
         launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr.sh").read_text(encoding="utf-8")
+        em100_dsl_launcher = (
+            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_em100.sh"
+        ).read_text(encoding="utf-8")
         claim_source_launcher = (
             PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source.sh"
+        ).read_text(encoding="utf-8")
+        em100_launcher = (
+            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source_em100.sh"
         ).read_text(encoding="utf-8")
         generic_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa_lr/prepare_run.py").read_text(encoding="utf-8")
@@ -125,6 +131,11 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/certificate_forest.py").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/task_sufficiency_verifier.py").exists())
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", em100_dsl_launcher)
+        self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT=dsl", em100_dsl_launcher)
+        self.assertIn("HOTPOTQA_LR_EM_WARMUP_STEPS", em100_dsl_launcher)
+        self.assertIn("a8_lr30_em100", em100_dsl_launcher)
+        self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-6}"', em100_dsl_launcher)
         self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-5}"', launcher)
         self.assertIn('HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-5}"', launcher)
         self.assertIn(
@@ -138,8 +149,14 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("A8_LR30_CS", generic_launcher)
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", claim_source_launcher)
         self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source", claim_source_launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", em100_launcher)
+        self.assertIn("HOTPOTQA_LR_EM_WARMUP_STEPS", em100_launcher)
+        self.assertIn("claimsource_em100", em100_launcher)
+        self.assertIn("--em-warmup-steps", generic_launcher)
         self.assertIn('"contract_id": LR_CONTRACT_VERSION', preflight)
         self.assertIn('f"{PRIMARY_CONTRACT.terminal_weight:.1f} * terminal_em + "', preflight)
+        self.assertIn('"em_warmup_steps": args.em_warmup_steps', preflight)
+        self.assertIn('"warmup_formula": "1.0 * terminal_em + 0.0 * local_reward"', preflight)
         self.assertIn('"reason_step_format": REASON_STEP_FORMAT', preflight)
         self.assertIn('"process_is_terminal_em_gated": False', preflight)
         self.assertIn('"gold_answer_visible_to_verifier": False', preflight)

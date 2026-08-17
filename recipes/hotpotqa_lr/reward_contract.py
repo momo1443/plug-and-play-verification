@@ -1,19 +1,11 @@
-"""Frozen optimizer reward contract for the current HotpotQA A8-LR experiment."""
+"""Frozen optimizer reward contract for the primary A8-LR experiment."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recipes.hotpotqa_lr.dsl import REASON_STEP_FORMAT, REASON_STEP_FORMAT_CLAIM_SOURCE
-
-LR_REWARD_ARM = (
-    "A8_LR30_CS" if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE else "A8_LR30"
-)
-LR_CONTRACT_VERSION = (
-    "a8-lr-30-claim-source-v2"
-    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
-    else "a8-lr-30-v1"
-)
+LR_REWARD_ARM = "A8_LR30"
+LR_CONTRACT_VERSION = "a8-lr-30-v1"
 
 
 @dataclass(frozen=True)
