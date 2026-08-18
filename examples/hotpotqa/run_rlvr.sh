@@ -12,24 +12,37 @@ PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
 case "$ARM" in
-    A1|A2|A3|A6|A7|A9|A8_LR30|A8_LR30_CS) ;;
+    A1|A2|A3|A6|A7|A9|A8_LR30|A8_LR30_CS|A8_LR_BASE|A8_LR_BASE_CS) ;;
     *) echo "Unsupported HOTPOTQA_REWARD_ARM: $ARM" >&2; exit 2 ;;
 esac
-if [[ "$ARM" == "A8_LR30_CS" ]]; then
+if [[ "$ARM" == "A8_LR30_CS" || "$ARM" == "A8_LR_BASE_CS" ]]; then
     export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-claim_source}"
     if [[ "$HOTPOTQA_LR_REASON_STEP_FORMAT" != "claim_source" ]]; then
         echo "A8_LR30_CS requires HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source" >&2
         exit 2
     fi
-elif [[ "$ARM" == "A8_LR30" ]]; then
+elif [[ "$ARM" == "A8_LR30" || "$ARM" == "A8_LR_BASE" ]]; then
     export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-dsl}"
     if [[ "$HOTPOTQA_LR_REASON_STEP_FORMAT" != "dsl" ]]; then
         echo "A8_LR30 requires HOTPOTQA_LR_REASON_STEP_FORMAT=dsl; use A8_LR30_CS for claim_source" >&2
         exit 2
     fi
 fi
+if [[ "$ARM" == "A8_LR_BASE" || "$ARM" == "A8_LR_BASE_CS" ]]; then
+    export HOTPOTQA_LR_REWARD_MODE="${HOTPOTQA_LR_REWARD_MODE:-terminal_only}"
+    [[ "$HOTPOTQA_LR_REWARD_MODE" == "terminal_only" ]] || {
+        echo "$ARM requires HOTPOTQA_LR_REWARD_MODE=terminal_only" >&2
+        exit 2
+    }
+elif [[ "$ARM" == A8_LR30* ]]; then
+    export HOTPOTQA_LR_REWARD_MODE="${HOTPOTQA_LR_REWARD_MODE:-lr30}"
+    [[ "$HOTPOTQA_LR_REWARD_MODE" == "lr30" ]] || {
+        echo "$ARM requires HOTPOTQA_LR_REWARD_MODE=lr30" >&2
+        exit 2
+    }
+fi
 
-if [[ "$ARM" == A8_LR30* ]]; then
+if [[ "$ARM" == A8_LR* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_lr/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
@@ -122,6 +135,7 @@ VLLM_ENABLE_SLEEP_MODE="${HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false}"
 VLLM_FREE_CACHE_ENGINE="${HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false}"
 VLLM_KV_CACHE_MEMORY_BYTES="${HOTPOTQA_VLLM_KV_CACHE_MEMORY_BYTES:-}"
 LR_EM_WARMUP_STEPS="${HOTPOTQA_LR_EM_WARMUP_STEPS:-0}"
+LR_REWARD_MODE="${HOTPOTQA_LR_REWARD_MODE:-lr30}"
 DATA_SHUFFLE="${HOTPOTQA_DATA_SHUFFLE:-false}"
 MODEL_ENABLE_GRADIENT_CHECKPOINTING="${HOTPOTQA_ENABLE_GRADIENT_CHECKPOINTING:-true}"
 ACTOR_USE_DYNAMIC_BSZ="${HOTPOTQA_ACTOR_USE_DYNAMIC_BSZ:-true}"
@@ -136,6 +150,13 @@ SAVE_FREQ="${HOTPOTQA_SAVE_FREQ:-100}"
 MAX_ACTOR_CKPT_TO_KEEP="${HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP:-2}"
 RESUME_MODE="${HOTPOTQA_RESUME_MODE:-disable}"
 RESUME_FROM_PATH="${HOTPOTQA_RESUME_FROM_PATH:-}"
+CALIBRATION_REPORT="${HOTPOTQA_LR_CALIBRATION_REPORT:-}"
+ALLOW_UNCALIBRATED_LAUNCH="${HOTPOTQA_LR_ALLOW_UNCALIBRATED_LAUNCH:-0}"
+EXPERIMENT_SEED="${HOTPOTQA_SEED:-42}"
+if ! [[ "$EXPERIMENT_SEED" =~ ^[0-9]+$ ]]; then
+    echo "HOTPOTQA_SEED must be a non-negative integer, got $EXPERIMENT_SEED" >&2
+    exit 2
+fi
 
 for bool_name in \
     VLLM_ENABLE_SLEEP_MODE VLLM_FREE_CACHE_ENGINE DATA_SHUFFLE \
@@ -172,6 +193,10 @@ if ! [[ "$LR_EM_WARMUP_STEPS" =~ ^[0-9]+$ ]]; then
     echo "HOTPOTQA_LR_EM_WARMUP_STEPS must be a non-negative integer, got $LR_EM_WARMUP_STEPS" >&2
     exit 2
 fi
+case "$ALLOW_UNCALIBRATED_LAUNCH" in
+    0|1) ;;
+    *) echo "HOTPOTQA_LR_ALLOW_UNCALIBRATED_LAUNCH must be 0 or 1" >&2; exit 2 ;;
+esac
 export HOTPOTQA_LR_EM_WARMUP_STEPS="$LR_EM_WARMUP_STEPS"
 case "$RESUME_MODE" in
     disable|auto)
@@ -258,18 +283,23 @@ fi
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
 
-# The immutable training artifacts have already been validated by the formal-run
-# preflight. Avoid hashing them again for every A1/A2/A3 launch. Set
-# HOTPOTQA_SKIP_PREFLIGHT=0 explicitly when a fresh manifest is required.
-SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-1}"
+# Formal launches fail closed by default. Config-only rendering is the only path
+# that intentionally avoids artifact and live-resource checks.
+SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
 case "$SKIP_PREFLIGHT" in
     0|1) ;;
     *) echo "HOTPOTQA_SKIP_PREFLIGHT must be 0 or 1, got: $SKIP_PREFLIGHT" >&2; exit 2 ;;
 esac
+if [[ "$ARM" == A8_LR* && "$SKIP_PREFLIGHT" == "1" ]]; then
+    echo "A8-LR-v2 preflight cannot be skipped" >&2
+    exit 2
+fi
 if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; then
-    if [[ "$ARM" == A8_LR30* ]]; then
+    if [[ "$ARM" == A8_LR* ]]; then
         "$PYTHON_BIN" -m recipes.hotpotqa_lr.prepare_run \
         --project-dir "$PROJECT_DIR" \
+        --arm "$ARM" \
+        --reward-mode "$LR_REWARD_MODE" \
         --train-path "$TRAIN_PATH" \
         --validation-path "$VAL_PATH" \
         --corpus-dir "$HOTPOTQA_CORPUS_DATA_ROOT" \
@@ -289,12 +319,19 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --reference-kl-loss-coef "$REFERENCE_KL_LOSS_COEF" \
         --reference-kl-loss-type "$REFERENCE_KL_LOSS_TYPE" \
         --vllm-gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
+        --vllm-max-model-len "$MAX_MODEL_LENGTH" \
+        --vllm-max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+        --vllm-max-num-seqs "$MAX_NUM_SEQS" \
+        --vllm-kv-cache-memory-bytes "$VLLM_KV_CACHE_MEMORY_BYTES" \
         --save-freq "$SAVE_FREQ" \
         --max-actor-ckpt-to-keep "$MAX_ACTOR_CKPT_TO_KEEP" \
         --num-gpus "$NUM_GPUS" \
         --agent-workers "$AGENT_WORKERS" \
         --em-warmup-steps "$LR_EM_WARMUP_STEPS" \
-        --gamma "$GRPO_GAMMA"
+        --gamma "$GRPO_GAMMA" \
+        --calibration-report "$CALIBRATION_REPORT" \
+        --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
+        --seed "$EXPERIMENT_SEED"
     else
         "$PYTHON_BIN" -m recipes.hotpotqa.prepare_formal_rlvr_run \
         --project_dir "$PROJECT_DIR" \
@@ -364,6 +401,7 @@ fi
     data.val_files="$VAL_PATH" \
     data.train_batch_size="$TRAIN_BATCH_SIZE" \
     data.shuffle="$DATA_SHUFFLE" \
+    data.seed="$EXPERIMENT_SEED" \
     data.train_max_samples="$TRAIN_MAX_SAMPLES" \
     data.val_batch_size="$VAL_BATCH_SIZE" \
     data.val_max_samples="$VAL_MAX_SAMPLES" \
@@ -394,6 +432,7 @@ fi
     actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean \
     actor_rollout_ref.actor.fsdp_config.param_offload="$ACTOR_PARAM_OFFLOAD" \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload="$ACTOR_OPTIMIZER_OFFLOAD" \
+    actor_rollout_ref.actor.fsdp_config.seed="$EXPERIMENT_SEED" \
     actor_rollout_ref.actor.checkpoint.save_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.actor.checkpoint.load_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.rollout.name=vllm \
@@ -414,6 +453,7 @@ fi
     actor_rollout_ref.rollout.max_num_seqs="$MAX_NUM_SEQS" \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.language_model_only=True \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.seed="$EXPERIMENT_SEED" \
     "${VLLM_ENGINE_EXTRA_ARGS[@]}" \
     actor_rollout_ref.rollout.multi_turn.enable=True \
     actor_rollout_ref.rollout.multi_turn.format=hermes \

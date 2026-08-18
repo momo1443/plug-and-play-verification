@@ -32,7 +32,14 @@ from recipes.hotpotqa_lr.prompts import (
     SEARCH_OR_FINISH_TOOL_SCHEMAS,
 )
 from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL, extract_tool_calls, parse_finish
-from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, PRIMARY_CONTRACT
+from recipes.hotpotqa_lr.reward_contract import (
+    LR_CONTRACT_VERSION,
+    LR_REWARD_MODE,
+    PRIMARY_CONTRACT,
+    REWARD_MODE_LR30,
+    REWARD_MODE_TERMINAL_ONLY,
+    resolve_reward_mode,
+)
 from recipes.hotpotqa_lr.verifier import (
     artifact_content_sha256,
     artifact_id_for_passage,
@@ -60,10 +67,16 @@ def _coerce_nonnegative_int(value: Any, *, name: str) -> int:
 
 
 def optimizer_reward_schedule(
-    *, global_step: int, is_validation: bool, em_warmup_steps: int
+    *,
+    global_step: int,
+    is_validation: bool,
+    em_warmup_steps: int,
+    reward_mode: str = REWARD_MODE_LR30,
 ) -> tuple[float, float, str]:
     if is_validation:
         return 1.0, 0.0, "validation_terminal_em"
+    if resolve_reward_mode(reward_mode) == REWARD_MODE_TERMINAL_ONLY:
+        return 1.0, 0.0, "terminal_only"
     if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
         return 1.0, 0.0, "em_warmup"
     return PRIMARY_CONTRACT.terminal_weight, PRIMARY_CONTRACT.process_weight, "lr30"
@@ -167,6 +180,9 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         self.max_steps = int(kwargs.get("max_steps", 4))
         self.max_parallel_calls = int(kwargs.get("max_parallel_calls", 1))
         self.reward_horizon = int(kwargs.get("reward_horizon", PRIMARY_CONTRACT.reward_horizon))
+        self.reward_mode = resolve_reward_mode(
+            kwargs.get("reward_mode", os.environ.get("HOTPOTQA_LR_REWARD_MODE", LR_REWARD_MODE))
+        )
         self.em_warmup_steps = _coerce_nonnegative_int(
             kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_LR_EM_WARMUP_STEPS", 0)),
             name="em_warmup_steps",
@@ -204,6 +220,8 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             failures.append(f"max_parallel_calls={self.max_parallel_calls}, expected 1")
         if self.reward_horizon != PRIMARY_CONTRACT.reward_horizon:
             failures.append(f"reward_horizon={self.reward_horizon}, expected 3")
+        if self.reward_mode == REWARD_MODE_TERMINAL_ONLY and self.em_warmup_steps:
+            failures.append("terminal_only BASE cannot set em_warmup_steps")
         if self.dependency_taint_gamma != PRIMARY_CONTRACT.dependency_taint_gamma:
             failures.append(
                 f"dependency_taint_gamma={self.dependency_taint_gamma}, expected 0.3"
@@ -362,6 +380,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             "reward_extra_info": {
                 "num_tool_steps": len(actions),
                 "lr_contract_id": LR_CONTRACT_VERSION,
+                "lr_reward_mode": self.reward_mode,
                 "judge_invalid": False,
             },
         }
@@ -375,6 +394,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             global_step=global_step,
             is_validation=is_validation,
             em_warmup_steps=self.em_warmup_steps,
+            reward_mode=self.reward_mode,
         )
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
@@ -488,6 +508,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 )
                 final_step = await self._postprocess(final_step, **kwargs)
                 terminal_em = float(final_step.reward_score)
+                # Later actions can establish coupling, so replay at terminal and backfill each step.
                 audits = verify_trajectory(
                     transitions,
                     question=question,
@@ -529,9 +550,12 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                         "optimizer_local_component": weighted_local,
                         "optimizer_total_reward": terminal_component + weighted_local,
                         "optimizer_reward_phase": reward_phase,
+                        "verifier_timing": "terminal_trajectory_replay",
+                        "process_credit_application": "backfill_to_transition_steps",
                         "optimizer_terminal_weight": terminal_weight,
                         "optimizer_process_weight": process_weight,
                         "lr_em_warmup_steps": self.em_warmup_steps,
+                        "lr_reward_mode": self.reward_mode,
                         "training_global_step": global_step,
                         "local_reasoning_audit": trajectory_audit,
                         "finish_protocol_valid": bool(finish and finish.envelope_valid),

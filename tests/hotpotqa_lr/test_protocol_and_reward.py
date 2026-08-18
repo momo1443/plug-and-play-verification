@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import unittest
 import os
 import subprocess
 import sys
+import unittest
 
-from recipes.hotpotqa_lr.protocol import extract_tool_calls, parse_finish
-from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, compose_reward
-from recipes.hotpotqa_lr.reward_fn import compute_score
 from recipes.hotpotqa_lr.agent_flow import optimizer_reward_schedule
+from recipes.hotpotqa_lr.protocol import extract_tool_calls, parse_finish
+from recipes.hotpotqa_lr.reward_contract import (
+    LR_CONTRACT_VERSION,
+    REWARD_MODE_TERMINAL_ONLY,
+    compose_reward,
+)
+from recipes.hotpotqa_lr.reward_fn import compute_score
 
 
 class ProtocolAndRewardTest(unittest.TestCase):
@@ -51,9 +55,18 @@ class ProtocolAndRewardTest(unittest.TestCase):
             optimizer_reward_schedule(global_step=50, is_validation=True, em_warmup_steps=100),
             (1.0, 0.0, "validation_terminal_em"),
         )
+        self.assertEqual(
+            optimizer_reward_schedule(
+                global_step=500,
+                is_validation=False,
+                em_warmup_steps=0,
+                reward_mode=REWARD_MODE_TERMINAL_ONLY,
+            ),
+            (1.0, 0.0, "terminal_only"),
+        )
 
     def test_lr30_contract_is_current_a8_lr_contract(self):
-        self.assertEqual(LR_CONTRACT_VERSION, "a8-lr-30-v1")
+        self.assertEqual(LR_CONTRACT_VERSION, "a8-lr-dsl-v2")
 
     def test_claim_source_contract_is_opt_in(self):
         env = dict(os.environ)
@@ -75,7 +88,7 @@ class ProtocolAndRewardTest(unittest.TestCase):
         ).strip()
         self.assertEqual(
             output,
-            "a8-lr-30-claim-source-v2 A8_LR30_CS hotpotqa-local-reasoning-claim-source-v1 claim_source",
+            "a8-lr-claim-source-v2 A8_LR30_CS hotpotqa-local-reasoning-claim-source-v1 claim_source",
         )
 
     def test_non_finish_completion_scores_zero(self):

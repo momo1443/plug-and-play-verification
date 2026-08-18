@@ -7,10 +7,21 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from recipes.hotpotqa_lr.dsl import DSL_VERSION, ReasonStep, parse_reason_step
+from recipes.hotpotqa_lr.dsl import (
+    DSL_VERSION,
+    REASON_STEP_FORMAT,
+    REASON_STEP_FORMAT_CLAIM_SOURCE,
+    ClaimSourceStep,
+    ReasonStep,
+    parse_reason_step,
+)
 from recipes.hotpotqa_lr.reward_fn import normalize_answer
 
-VERIFIER_VERSION = "hotpotqa-local-reasoning-verifier-v1"
+VERIFIER_VERSION = (
+    "hotpotqa-local-reasoning-claim-source-novelty-v2"
+    if REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE
+    else "hotpotqa-local-reasoning-verifier-v2"
+)
 
 
 def artifact_content_sha256(text: str) -> str:
@@ -56,6 +67,14 @@ def _action_contains(action_type: str, action_value: str, conclusion: str) -> bo
     return f" {normalized_conclusion} " in f" {normalized_action} "
 
 
+def _claim_source_finish_contains_answer(action_type: str, action_value: str, claim: str) -> bool:
+    if action_type != "finish":
+        return False
+    normalized_claim = normalize_answer(claim)
+    normalized_answer = normalize_answer(action_value)
+    return bool(normalized_claim and normalized_answer and f" {normalized_answer} " in f" {normalized_claim} ")
+
+
 @dataclass(frozen=True)
 class LocalStepAudit:
     transition_index: int
@@ -73,6 +92,8 @@ class LocalStepAudit:
     invalid_ancestor_count: int
     dependency_factor: float
     action_coupled: int
+    novelty_valid: int
+    credit_eligible: int
     raw_local_credit: float
     errors: tuple[str, ...]
     canonical_digest_sha256: str
@@ -96,6 +117,8 @@ class LocalStepAudit:
             "invalid_ancestor_count": self.invalid_ancestor_count,
             "dependency_factor": self.dependency_factor,
             "action_coupled": self.action_coupled,
+            "novelty_valid": self.novelty_valid,
+            "credit_eligible": self.credit_eligible,
             "raw_local_credit": self.raw_local_credit,
             "errors": list(self.errors),
             "canonical_digest_sha256": self.canonical_digest_sha256,
@@ -165,42 +188,56 @@ def _base_audit(
 
     if parsed is not None:
         canonical = parsed.record()
-        ref = parsed.ref
-        inputs = parsed.inputs
-        if ref in prior_by_ref:
-            errors.append("ref_duplicate")
-        for input_ref in inputs:
-            ancestor = prior_by_ref.get(input_ref)
-            if ancestor is None:
-                errors.append(f"input_unknown:{input_ref}")
-                continue
-            ancestors.add(input_ref)
-            ancestors.update(ancestor.ancestor_refs)
-
-        for premise in parsed.premises:
-            artifact = available_artifacts.get(premise.artifact_id)
+        if isinstance(parsed, ClaimSourceStep):
+            ref = f"cs{transition_index}"
+            conclusion = parsed.claim
+            artifact = available_artifacts.get(parsed.source)
             if artifact is None:
-                errors.append(f"artifact_unknown:{premise.artifact_id}")
-                continue
-            text = artifact.get("text")
-            digest = artifact.get("content_sha256")
-            if not isinstance(text, str) or digest != artifact_content_sha256(text):
-                errors.append(f"artifact_snapshot_invalid:{premise.artifact_id}")
-            elif premise.span not in text:
-                errors.append(f"span_not_exact:{premise.artifact_id}")
-
-        conclusion, output_errors = _output_value(parsed)
-        errors.extend(output_errors)
-        grounding_valid = int(not errors)
-        inference_errors = _inference_errors(parsed, conclusion, prior_by_ref, question)
-        if inference_errors:
-            errors.extend(inference_errors)
+                errors.append(f"artifact_unknown:{parsed.source}")
+            else:
+                text = artifact.get("text")
+                digest = artifact.get("content_sha256")
+                if not isinstance(text, str) or digest != artifact_content_sha256(text):
+                    errors.append(f"artifact_snapshot_invalid:{parsed.source}")
+                elif parsed.claim not in text:
+                    errors.append(f"claim_not_exact:{parsed.source}")
+            grounding_valid = int(not errors)
+            inference_valid = grounding_valid
         else:
-            inference_valid = 1
+            ref = parsed.ref
+            inputs = parsed.inputs
+            if ref in prior_by_ref:
+                errors.append("ref_duplicate")
+            for input_ref in inputs:
+                ancestor = prior_by_ref.get(input_ref)
+                if ancestor is None:
+                    errors.append(f"input_unknown:{input_ref}")
+                    continue
+                ancestors.add(input_ref)
+                ancestors.update(ancestor.ancestor_refs)
 
-    invalid_ancestors = sum(
-        1 for ancestor_ref in ancestors if prior_by_ref[ancestor_ref].own_valid == 0
-    )
+            for premise in parsed.premises:
+                artifact = available_artifacts.get(premise.artifact_id)
+                if artifact is None:
+                    errors.append(f"artifact_unknown:{premise.artifact_id}")
+                    continue
+                text = artifact.get("text")
+                digest = artifact.get("content_sha256")
+                if not isinstance(text, str) or digest != artifact_content_sha256(text):
+                    errors.append(f"artifact_snapshot_invalid:{premise.artifact_id}")
+                elif premise.span not in text:
+                    errors.append(f"span_not_exact:{premise.artifact_id}")
+
+            conclusion, output_errors = _output_value(parsed)
+            errors.extend(output_errors)
+            grounding_valid = int(not errors)
+            inference_errors = _inference_errors(parsed, conclusion, prior_by_ref, question)
+            if inference_errors:
+                errors.extend(inference_errors)
+            else:
+                inference_valid = 1
+
+    invalid_ancestors = sum(1 for ancestor_ref in ancestors if prior_by_ref[ancestor_ref].own_valid == 0)
     dependency_factor = float(dependency_taint_gamma) ** invalid_ancestors
     own_valid = grounding_valid * inference_valid
     seed_record = {
@@ -231,6 +268,8 @@ def _base_audit(
         invalid_ancestor_count=invalid_ancestors,
         dependency_factor=dependency_factor,
         action_coupled=0,
+        novelty_valid=1,
+        credit_eligible=1,
         raw_local_credit=0.0,
         errors=tuple(errors),
         canonical_digest_sha256=_canonical_sha256(seed_record),
@@ -277,6 +316,11 @@ def verify_trajectory(
         and audit.conclusion
         and any(
             _action_contains(action_type, action_value, audit.conclusion)
+            or (
+                isinstance(audit.canonical_reason_step, Mapping)
+                and set(audit.canonical_reason_step) == {"claim", "source"}
+                and _claim_source_finish_contains_answer(action_type, action_value, audit.conclusion)
+            )
             for action_type, action_value in action_sinks
         )
     }
@@ -291,24 +335,72 @@ def verify_trajectory(
                         changed = True
 
     finalized: list[LocalStepAudit] = []
+    seen_search_queries: set[str] = set()
+    credited_search_conclusions: set[str] = set()
+    credited_search_sources: set[str] = set()
     for audit in audits:
         action_coupled = int(bool(audit.ref and audit.ref in coupled_refs))
         horizon_ok = audit.transition_index <= reward_horizon
+        novelty_valid = 1
+        credit_eligible = 1
+        errors = list(audit.errors)
+        canonical = audit.canonical_reason_step
+        if isinstance(canonical, Mapping) and canonical.get("op") == "select_exact_span":
+            credit_eligible = 0
+            errors.append("operation_not_creditable:select_exact_span")
+
+        sources: set[str] = set()
+        is_claim_source = isinstance(canonical, Mapping) and set(canonical) == {"claim", "source"}
+        if is_claim_source:
+            source = canonical.get("source")
+            if isinstance(source, str) and source:
+                sources.add(source)
+        elif isinstance(canonical, Mapping):
+            premises = canonical.get("premises")
+            if isinstance(premises, list):
+                sources.update(
+                    str(premise["artifact_id"])
+                    for premise in premises
+                    if isinstance(premise, Mapping) and premise.get("artifact_id")
+                )
+
+        normalized_conclusion = normalize_answer(audit.conclusion or "")
+        if audit.action_type == "search":
+            normalized_query = normalize_answer(audit.action_value)
+            if normalized_query and normalized_query in seen_search_queries:
+                novelty_valid = 0
+                errors.append("query_repeated")
+            if normalized_conclusion and normalized_conclusion in credited_search_conclusions:
+                novelty_valid = 0
+                errors.append("claim_repeated" if is_claim_source else "conclusion_repeated")
+            if sources & credited_search_sources:
+                novelty_valid = 0
+                errors.append("source_repeated")
+            if normalized_query:
+                seen_search_queries.add(normalized_query)
+
         credit = (
             audit.own_valid
             * audit.dependency_factor
             * action_coupled
+            * novelty_valid
+            * credit_eligible
             / float(reward_horizon)
             if horizon_ok
             else 0.0
         )
-        errors = list(audit.errors)
+        if audit.action_type == "search" and credit > 0:
+            if normalized_conclusion:
+                credited_search_conclusions.add(normalized_conclusion)
+            credited_search_sources.update(sources)
         if not horizon_ok:
             errors.append("reward_horizon_exceeded")
         record = audit.record()
         record.update(
             {
                 "action_coupled": action_coupled,
+                "novelty_valid": novelty_valid,
+                "credit_eligible": credit_eligible,
                 "raw_local_credit": credit,
                 "errors": errors,
             }
@@ -317,6 +409,8 @@ def verify_trajectory(
             replace(
                 audit,
                 action_coupled=action_coupled,
+                novelty_valid=novelty_valid,
+                credit_eligible=credit_eligible,
                 raw_local_credit=float(credit),
                 errors=tuple(errors),
                 canonical_digest_sha256=_canonical_sha256(record),
@@ -338,12 +432,10 @@ def trajectory_audit_record(audits: Sequence[LocalStepAudit]) -> dict[str, Any]:
         "local_reward": float(local_reward),
         "mean_grounding": (sum(audit.grounding_valid for audit in audits) / count if count else 0.0),
         "mean_inference": (sum(audit.inference_valid for audit in audits) / count if count else 0.0),
-        "mean_dependency_factor": (
-            sum(audit.dependency_factor for audit in audits) / count if count else 0.0
-        ),
-        "mean_action_coupling": (
-            sum(audit.action_coupled for audit in audits) / count if count else 0.0
-        ),
+        "mean_dependency_factor": (sum(audit.dependency_factor for audit in audits) / count if count else 0.0),
+        "mean_action_coupling": (sum(audit.action_coupled for audit in audits) / count if count else 0.0),
+        "mean_novelty": (sum(audit.novelty_valid for audit in audits) / count if count else 0.0),
+        "mean_credit_eligibility": (sum(audit.credit_eligible for audit in audits) / count if count else 0.0),
         "mean_invalid_ancestor_count": (
             sum(audit.invalid_ancestor_count for audit in audits) / count if count else 0.0
         ),

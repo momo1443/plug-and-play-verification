@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+from recipes.hotpotqa_lr.dsl import (
+    REASON_STEP_FORMAT,
+    REASON_STEP_FORMAT_CLAIM_SOURCE,
+    REASON_STEP_FORMAT_DSL,
+)
 from recipes.hotpotqa_lr.verifier import (
     artifact_content_sha256,
     trajectory_audit_record,
@@ -20,6 +25,7 @@ def _artifact(artifact_id: str, text: str) -> dict[str, dict[str, str]]:
 
 
 class LocalReasoningVerifierTest(unittest.TestCase):
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE, "claim/source verifier only")
     def test_claim_source_reason_step_receives_grounded_credit(self):
         first_text = "Henry Miller married June Miller in 1924."
         second_text = "June Miller was an American writer."
@@ -56,6 +62,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(audits[0].canonical_reason_step, {"claim": "June Miller", "source": "passage:1"})
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE, "claim/source verifier only")
     def test_claim_source_repeated_search_query_gets_no_local_credit(self):
         text = "Henry Miller married June Miller in 1924."
         audits = verify_trajectory(
@@ -91,6 +98,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(audits[1].raw_local_credit, 0.0)
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 1 / 3)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE, "claim/source verifier only")
     def test_claim_source_repeated_source_gets_no_second_search_credit(self):
         text = "June Miller was an American writer and a photographer."
         audits = verify_trajectory(
@@ -125,6 +133,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(audits[1].raw_local_credit, 0.0)
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 1 / 3)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE, "claim/source verifier only")
     def test_claim_source_finish_can_reuse_search_evidence(self):
         text = "June Miller was an American writer and a photographer."
         audits = verify_trajectory(
@@ -155,6 +164,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual([audit.novelty_valid for audit in audits], [1, 1])
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_CLAIM_SOURCE, "claim/source verifier only")
     def test_claim_source_fails_closed_when_source_or_claim_is_invalid(self):
         text = "June Miller was an American writer."
         missing_source = verify_trajectory(
@@ -204,6 +214,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertIn("reason_step_fields_invalid", malformed.errors)
         self.assertIn("source_invalid", malformed.errors)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
     def test_valid_two_hop_reward_is_not_terminal_gated(self):
         first_text = "Henry Miller married June Miller in 1924."
         second_text = "June Miller was an American writer."
@@ -213,9 +224,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
                     "reason_step": {
                         "ref": "r1",
                         "op": "extract_bridge_entity",
-                        "premises": [
-                            {"artifact_id": "passage:1", "span": first_text}
-                        ],
+                        "premises": [{"artifact_id": "passage:1", "span": first_text}],
                         "inputs": [],
                         "output": {"bridge_entity": "June Miller"},
                     },
@@ -227,9 +236,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
                     "reason_step": {
                         "ref": "r2",
                         "op": "extract_answer_candidate",
-                        "premises": [
-                            {"artifact_id": "passage:2", "span": second_text}
-                        ],
+                        "premises": [{"artifact_id": "passage:2", "span": second_text}],
                         "inputs": ["r1"],
                         "output": {"answer_candidate": "American"},
                     },
@@ -248,6 +255,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual([audit.action_coupled for audit in audits], [1, 1])
         self.assertAlmostEqual(trajectory_audit_record(audits)["local_reward"], 2 / 3)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
     def test_invalid_ancestor_is_tainted_but_independent_branch_recovers(self):
         text = "June Miller was an American writer."
         artifacts = _artifact("passage:2", text)
@@ -298,6 +306,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(audits[2].invalid_ancestor_count, 0)
         self.assertTrue(trajectory_audit_record(audits)["self_correction"])
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
     def test_unknown_artifact_and_sha_mismatch_fail_closed(self):
         raw = {
             "ref": "r1",
@@ -323,9 +332,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
                     "reason_step": raw,
                     "action_type": "finish",
                     "action_value": "answer",
-                    "available_artifacts": {
-                        "passage:1": {"text": "answer", "content_sha256": "bad"}
-                    },
+                    "available_artifacts": {"passage:1": {"text": "answer", "content_sha256": "bad"}},
                 }
             ],
             question="q",
@@ -333,6 +340,7 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(unknown.grounding_valid, 0)
         self.assertEqual(mismatch.grounding_valid, 0)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
     def test_direct_coupling_can_target_a_later_sink(self):
         text = "The bridge entity is June Miller."
         audits = verify_trajectory(
@@ -361,28 +369,54 @@ class LocalReasoningVerifierTest(unittest.TestCase):
         self.assertEqual(audits[0].action_coupled, 1)
         self.assertGreater(audits[0].raw_local_credit, 0.0)
 
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
     def test_fixed_horizon_zeros_fourth_transition(self):
-        text = "alpha"
         transitions = []
         for index in range(1, 5):
+            text = f"answer {index}"
             transitions.append(
                 {
                     "reason_step": {
                         "ref": f"r{index}",
-                        "op": "select_exact_span",
-                        "premises": [{"artifact_id": "passage:1", "span": text}],
+                        "op": "extract_answer_candidate",
+                        "premises": [{"artifact_id": f"passage:{index}", "span": text}],
                         "inputs": [],
-                        "output": {"text": text},
+                        "output": {"answer_candidate": text},
                     },
                     "action_type": "search",
-                    "action_value": f"alpha {index}",
-                    "available_artifacts": _artifact("passage:1", text),
+                    "action_value": text,
+                    "available_artifacts": _artifact(f"passage:{index}", text),
                 }
             )
         audits = verify_trajectory(transitions, question="q")
         self.assertAlmostEqual(sum(audit.raw_local_credit for audit in audits), 1.0)
         self.assertEqual(audits[-1].raw_local_credit, 0.0)
         self.assertIn("reward_horizon_exceeded", audits[-1].errors)
+
+    @unittest.skipUnless(REASON_STEP_FORMAT == REASON_STEP_FORMAT_DSL, "DSL verifier only")
+    def test_select_exact_span_repetition_is_parseable_but_never_creditable(self):
+        text = "June Miller was an American writer."
+        transitions = []
+        for index, action_type in enumerate(("search", "search", "finish"), start=1):
+            transitions.append(
+                {
+                    "reason_step": {
+                        "ref": f"r{index}",
+                        "op": "select_exact_span",
+                        "premises": [{"artifact_id": "passage:2", "span": text}],
+                        "inputs": [],
+                        "output": {"text": "American"},
+                    },
+                    "action_type": action_type,
+                    "action_value": "American",
+                    "available_artifacts": _artifact("passage:2", text),
+                }
+            )
+        audits = verify_trajectory(transitions, question="What nationality was June Miller?")
+        self.assertEqual([audit.own_valid for audit in audits], [1, 1, 1])
+        self.assertEqual([audit.credit_eligible for audit in audits], [0, 0, 0])
+        self.assertEqual([audit.raw_local_credit for audit in audits], [0.0, 0.0, 0.0])
+        self.assertTrue(all("operation_not_creditable:select_exact_span" in audit.errors for audit in audits))
 
 
 if __name__ == "__main__":
