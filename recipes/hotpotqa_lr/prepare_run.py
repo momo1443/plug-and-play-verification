@@ -168,8 +168,8 @@ def main() -> None:
         raise ValueError("A8-LR requires all 7,405 validation rows")
     if args.train_batch_size != 20 or args.total_training_steps != 1_500:
         raise ValueError("A8-LR requires batch 20 and exactly 1,500 steps")
-    if args.rollout_n != 4 or args.grpo_micro_batch_size != 2:
-        raise ValueError("A8-LR requires rollout n=4 and micro-batch/GPU=2")
+    if args.rollout_n != 4 or args.grpo_micro_batch_size not in (1, 2):
+        raise ValueError("A8-LR requires rollout n=4 and micro-batch/GPU=1 or 2")
     reward_mode = resolve_reward_mode(args.reward_mode)
     active_contract = contract_for_mode(reward_mode)
     expected_arm = expected_reward_arm(REASON_STEP_FORMAT, reward_mode)
