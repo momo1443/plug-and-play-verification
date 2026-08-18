@@ -112,19 +112,20 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.40", launcher)
         self.assertIn("create_judge_from_env", flow)
 
-    def test_a8_lr_has_standalone_source_and_previous_hyperparameters(self):
+    def test_a8_lr_v2_has_matched_resources_base_and_fail_closed_preflight(self):
         launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr.sh").read_text(encoding="utf-8")
-        em100_dsl_launcher = (
-            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_em100.sh"
-        ).read_text(encoding="utf-8")
-        claim_source_launcher = (
-            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source.sh"
-        ).read_text(encoding="utf-8")
-        em100_launcher = (
-            PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source_em100.sh"
-        ).read_text(encoding="utf-8")
+        em100_dsl_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_em100.sh").read_text(encoding="utf-8")
+        claim_source_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source.sh").read_text(
+            encoding="utf-8"
+        )
+        em100_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source_em100.sh").read_text(
+            encoding="utf-8"
+        )
         generic_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa_lr/prepare_run.py").read_text(encoding="utf-8")
+        common = (PROJECT_ROOT / "examples/hotpotqa_lr/common_v2.sh").read_text(encoding="utf-8")
+        base_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_base.sh").read_text(encoding="utf-8")
+        calibration_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_calibration.sh").read_text(encoding="utf-8")
 
         self.assertFalse((PROJECT_ROOT / "examples/hotpotqa/run_a8.sh").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/answer_certificate_verifier.py").exists())
@@ -134,27 +135,41 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", em100_dsl_launcher)
         self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT=dsl", em100_dsl_launcher)
         self.assertIn("HOTPOTQA_LR_EM_WARMUP_STEPS", em100_dsl_launcher)
-        self.assertIn("a8_lr30_em100", em100_dsl_launcher)
-        self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-6}"', em100_dsl_launcher)
-        self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-5}"', launcher)
-        self.assertIn('HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-5}"', launcher)
-        self.assertIn(
-            'HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.20}"',
-            launcher,
-        )
-        self.assertIn('HOTPOTQA_ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"', launcher)
-        self.assertIn("HOTPOTQA_TOTAL_TRAINING_STEPS=1500", launcher)
-        self.assertIn("HOTPOTQA_SAVE_FREQ=50", launcher)
+        self.assertIn("a8v2_lr30_em100_main30k", em100_dsl_launcher)
+        for arm_launcher in (launcher, em100_dsl_launcher, claim_source_launcher, em100_launcher):
+            self.assertIn('source "$HERE/common_v2.sh"', arm_launcher)
+        self.assertIn('HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-6}"', common)
+        self.assertIn('HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-6}"', common)
+        self.assertIn("HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION", common)
+        self.assertIn('HOTPOTQA_VLLM_MAX_MODEL_LEN="${HOTPOTQA_VLLM_MAX_MODEL_LEN:-8192}"', common)
+        self.assertIn('HOTPOTQA_VLLM_MAX_NUM_BATCHED_TOKENS="${HOTPOTQA_VLLM_MAX_NUM_BATCHED_TOKENS:-8192}"', common)
+        self.assertIn('HOTPOTQA_VLLM_MAX_NUM_SEQS="${HOTPOTQA_VLLM_MAX_NUM_SEQS:-20}"', common)
+        self.assertIn("HOTPOTQA_TOTAL_TRAINING_STEPS=1500", common)
+        self.assertIn("HOTPOTQA_SAVE_FREQ=50", common)
+        self.assertIn("A8-LR-v2 preflight cannot be skipped", common)
+        self.assertNotIn("2147483648", common + launcher + em100_dsl_launcher)
         self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR30", generic_launcher)
         self.assertIn("A8_LR30_CS", generic_launcher)
+        self.assertIn("A8_LR_BASE", generic_launcher)
+        self.assertIn("HOTPOTQA_LR_REWARD_MODE=terminal_only", base_launcher)
+        self.assertIn("HOTPOTQA_LR_CALIBRATION_REPORT", common)
+        self.assertIn("HOTPOTQA_LR_ALLOW_UNCALIBRATED_LAUNCH", common)
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", claim_source_launcher)
         self.assertIn("HOTPOTQA_LR_REASON_STEP_FORMAT=claim_source", claim_source_launcher)
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30_CS", em100_launcher)
         self.assertIn("HOTPOTQA_LR_EM_WARMUP_STEPS", em100_launcher)
         self.assertIn("claimsource_em100", em100_launcher)
+        self.assertIn("HOTPOTQA_VAL_MAX_SAMPLES=64", calibration_launcher)
+        self.assertIn("HOTPOTQA_VAL_N=8", calibration_launcher)
+        self.assertIn("HOTPOTQA_NUM_GPUS=6", calibration_launcher)
+        self.assertIn("HOTPOTQA_TRAIN_BATCH_SIZE=12", calibration_launcher)
+        self.assertIn("HOTPOTQA_VLLM_MAX_MODEL_LEN=8192", calibration_launcher)
+        self.assertIn("HOTPOTQA_VLLM_MAX_NUM_BATCHED_TOKENS=8192", calibration_launcher)
+        self.assertIn("HOTPOTQA_VLLM_MAX_NUM_SEQS=20", calibration_launcher)
+        self.assertNotIn("HOTPOTQA_MIN_CPUS", calibration_launcher)
         self.assertIn("--em-warmup-steps", generic_launcher)
         self.assertIn('"contract_id": LR_CONTRACT_VERSION', preflight)
-        self.assertIn('f"{PRIMARY_CONTRACT.terminal_weight:.1f} * terminal_em + "', preflight)
+        self.assertIn("active_contract.terminal_weight", preflight)
         self.assertIn('"em_warmup_steps": args.em_warmup_steps', preflight)
         self.assertIn('"warmup_formula": "1.0 * terminal_em + 0.0 * local_reward"', preflight)
         self.assertIn('"reason_step_format": REASON_STEP_FORMAT', preflight)
@@ -162,6 +177,14 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"gold_answer_visible_to_verifier": False', preflight)
         self.assertIn('"gold_evidence_visible_to_verifier": False', preflight)
         self.assertIn('"first_search_is_uncredited_bootstrap": True', preflight)
+        self.assertIn('"verifier_timing": "terminal_trajectory_replay"', preflight)
+        self.assertIn('"process_credit_application": "backfill_to_transition_steps"', preflight)
+        self.assertIn("RUNTIME_REFERENCE_RUN", preflight)
+        self.assertIn("automatic KV-cache sizing", preflight)
+        self.assertNotIn("validate_cpu_preflight", preflight)
+        self.assertIn("calibration gates did not pass", preflight)
+        self.assertIn('"status": "waived_by_user"', preflight)
+        self.assertIn("--allow-uncalibrated-launch", generic_launcher)
 
     def test_manifest_uses_one_reward_contract_and_hashes_the_actual_arm(self):
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
@@ -222,13 +245,13 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("recipes/hotpotqa_lr/reward_fn.py", launcher)
         self.assertIn("default_agent_flow=hotpotqa_local_reasoning_agent", launcher)
         self.assertIn("HOTPOTQA_STREAMING_METRIC_KEYS=acc,terminal_em", launcher)
-        self.assertIn("actor_rollout_ref.rollout.val_kwargs.n=1", launcher)
-        self.assertIn("actor_rollout_ref.rollout.val_kwargs.do_sample=false", launcher)
-        self.assertIn("actor_rollout_ref.rollout.val_kwargs.temperature=0", launcher)
+        self.assertIn('actor_rollout_ref.rollout.val_kwargs.n="$VAL_N"', launcher)
+        self.assertIn('actor_rollout_ref.rollout.val_kwargs.do_sample="$VAL_DO_SAMPLE"', launcher)
+        self.assertIn('actor_rollout_ref.rollout.val_kwargs.temperature="$VAL_TEMPERATURE"', launcher)
         self.assertIn("actor_rollout_ref.rollout.load_format=auto", launcher)
         self.assertIn('"initial_weight_sync": "skipped_source_loaded"', launcher)
-        self.assertIn('HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false', launcher)
-        self.assertIn('HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false', launcher)
+        self.assertIn("HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false", launcher)
+        self.assertIn("HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false", launcher)
         self.assertIn("--interface raw|lr", evaluator)
         self.assertIn("examples/hotpotqa_lr/run_validation.sh", evaluator)
 

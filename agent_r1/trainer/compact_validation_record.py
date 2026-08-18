@@ -110,6 +110,7 @@ def build_validation_record(
     evidence_schema_version: Any,
     search_steps: Any,
     local_reasoning_transitions: Any = None,
+    local_reasoning_audit: Any = None,
     executed_queries: Any = None,
     num_turns: Any = None,
     sample_key: Any = None,
@@ -141,6 +142,9 @@ def build_validation_record(
     normalized_local_transitions = _to_builtin(local_reasoning_transitions)
     if not isinstance(normalized_local_transitions, list):
         normalized_local_transitions = []
+    normalized_local_audit = _to_builtin(local_reasoning_audit)
+    if not isinstance(normalized_local_audit, dict):
+        normalized_local_audit = {}
 
     normalized_queries = _to_builtin(executed_queries)
     if not isinstance(normalized_queries, list):
@@ -201,6 +205,7 @@ def build_validation_record(
             "evidence_metrics": normalized_metrics,
             "search_steps": normalized_search_steps,
             "local_reasoning_transitions": normalized_local_transitions,
+            "local_reasoning_audit": normalized_local_audit,
         }
     )
     return record

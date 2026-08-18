@@ -216,6 +216,12 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
                             last,
                             [],
                         ),
+                        local_reasoning_audit=_step_field(
+                            output_batch.non_tensor_batch,
+                            "local_reasoning_audit",
+                            last,
+                            {},
+                        ),
                         executed_queries=_step_field(
                             output_batch.non_tensor_batch,
                             "executed_search_queries",
