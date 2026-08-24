@@ -12,7 +12,7 @@ PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
 case "$ARM" in
-    A1|A2|A3|A6|A7|A9|A8_LR30|A8_LR30_CS|A8_LR_BASE|A8_LR_BASE_CS) ;;
+    A1|A2|A3|A6|A7|A9|A9_CERT_MIX|A8_LR30|A8_LR30_CS|A8_LR_BASE|A8_LR_BASE_CS) ;;
     *) echo "Unsupported HOTPOTQA_REWARD_ARM: $ARM" >&2; exit 2 ;;
 esac
 if [[ "$ARM" == "A8_LR30_CS" || "$ARM" == "A8_LR_BASE_CS" ]]; then
@@ -41,11 +41,18 @@ elif [[ "$ARM" == A8_LR30* ]]; then
         exit 2
     }
 fi
+if [[ "$ARM" == A9* ]]; then
+    :  # A9 now runs as a single cert-mix arm; no subarm selection needed
+fi
 
 if [[ "$ARM" == A8_LR* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_lr/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
+elif [[ "$ARM" == A9* ]]; then
+    AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/base.yaml"
+    DEFAULT_AGENT_FLOW=hotpotqa_certificate_agent
+    REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
 else
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_agent
@@ -330,6 +337,41 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --em-warmup-steps "$LR_EM_WARMUP_STEPS" \
         --gamma "$GRPO_GAMMA" \
         --calibration-report "$CALIBRATION_REPORT" \
+        --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
+        --seed "$EXPERIMENT_SEED"
+    elif [[ "$ARM" == A9* ]]; then
+        "$PYTHON_BIN" -m recipes.hotpotqa_a9.prepare_run \
+        --project-dir "$PROJECT_DIR" \
+        --arm "$ARM" \
+        --train-path "$TRAIN_PATH" \
+        --validation-path "$VAL_PATH" \
+        --corpus-dir "$HOTPOTQA_CORPUS_DATA_ROOT" \
+        --evidence-sidecar-path "$HOTPOTQA_EVIDENCE_SIDECAR" \
+        --model-path "$HOTPOTQA_MODEL_PATH" \
+        --output-dir "$OUTPUT_DIR" \
+        --train-max-samples "$TRAIN_MAX_SAMPLES" \
+        --val-max-samples "$VAL_MAX_SAMPLES" \
+        --train-batch-size "$TRAIN_BATCH_SIZE" \
+        --rollout-n "$ROLLOUT_N" \
+        --total-training-steps "$TOTAL_TRAINING_STEPS" \
+        --grpo-micro-batch-size "$GRPO_MICRO_BATCH_SIZE" \
+        --data-shuffle "$DATA_SHUFFLE" \
+        --actor-use-dynamic-bsz "$ACTOR_USE_DYNAMIC_BSZ" \
+        --actor-max-token-len-per-gpu "$ACTOR_MAX_TOKEN_LEN_PER_GPU" \
+        --reference-kl-enabled "$REFERENCE_KL_ENABLED" \
+        --reference-kl-loss-coef "$REFERENCE_KL_LOSS_COEF" \
+        --reference-kl-loss-type "$REFERENCE_KL_LOSS_TYPE" \
+        --vllm-gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
+        --vllm-max-model-len "$MAX_MODEL_LENGTH" \
+        --vllm-max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+        --vllm-max-num-seqs "$MAX_NUM_SEQS" \
+        --vllm-kv-cache-memory-bytes "$VLLM_KV_CACHE_MEMORY_BYTES" \
+        --save-freq "$SAVE_FREQ" \
+        --max-actor-ckpt-to-keep "$MAX_ACTOR_CKPT_TO_KEEP" \
+        --num-gpus "$NUM_GPUS" \
+        --agent-workers "$AGENT_WORKERS" \
+        --em-warmup-steps "$LR_EM_WARMUP_STEPS" \
+        --gamma "$GRPO_GAMMA" \
         --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
         --seed "$EXPERIMENT_SEED"
     else

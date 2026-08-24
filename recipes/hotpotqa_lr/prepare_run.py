@@ -191,8 +191,8 @@ def main() -> None:
         raise ValueError("A8-LR-v2 requires the 2026-08-14 A8 vLLM runtime shape 8192/8192/20")
     if str(args.vllm_kv_cache_memory_bytes).strip():
         raise ValueError("A8-LR-v2 requires automatic KV-cache sizing; explicit bytes are forbidden")
-    if args.save_freq != 50 or args.max_actor_ckpt_to_keep != 2:
-        raise ValueError("A8-LR must save every 50 steps and retain two actor checkpoints")
+    if args.save_freq <= 0 or args.save_freq > 50 or args.max_actor_ckpt_to_keep != 2:
+        raise ValueError("A8-LR save_freq must be 1-50 and retain two actor checkpoints")
     if args.em_warmup_steps < 0:
         raise ValueError("A8-LR EM warmup steps must be non-negative")
     if reward_mode == REWARD_MODE_TERMINAL_ONLY and args.em_warmup_steps != 0:

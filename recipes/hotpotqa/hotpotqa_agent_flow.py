@@ -10,6 +10,8 @@ covered by accumulated passages, then applies the same |new_llm_covered| /
 check that rewards each model-generated search producing a non-empty
 observation at 1/3 per step, while keeping the same 0.5/0.5 combined-reward
     contract and terminal EM.
+
+A9 now uses its own certificate-grounded agent flow (recipes/hotpotqa_a9/).
 """
 
 from __future__ import annotations
@@ -29,16 +31,6 @@ from transformers import AutoProcessor, AutoTokenizer
 
 from agent_r1.agent_flow.agent_flow import AgentFlowBase, AgentFlowOutput, AgentFlowStep, register
 from agent_r1.reward_loop.reward_loop import RewardLoopWorker
-from recipes.hotpotqa.a9_behavioral_verifier import (
-    CandidateScore,
-    ProbePlan,
-    build_probe_plan,
-    encode_action_candidate,
-    extract_candidate_score,
-    invalid_verification,
-    verify_behavioral_scores,
-    visible_probe_inputs_valid,
-)
 from recipes.hotpotqa.env.search_tool import (
     DEFAULT_HOTPOTQA_EMBEDDING_MODEL,
     HotpotQASearchToolLegacy,
@@ -266,11 +258,15 @@ class HotpotQAAgentFlow(AgentFlowBase):
         # verifier with a weak execution check that rewards each model-generated
         # search producing a non-empty observation at 1/3 per step, while
         # keeping the same 0.5/0.5 combined-reward contract and terminal EM.
-        # A9 replaces the optimizer-visible process score with a gold-free
-        # behavioral sensitivity/invariance verifier, keeping the same 0.5/0.5
-        # reward weights and raw search/final protocol.
+        # A9 has moved to recipes/hotpotqa_a9/ (certificate-grounded agent flow).
         # Validation always reports EM.
         self.reward_arm = resolve_reward_arm(os.environ.get("HOTPOTQA_REWARD_ARM"), formal_a0=self.formal_a0)
+        if self.reward_arm is RewardArm.A9:
+            raise ValueError(
+                "A9 now uses the certificate-grounded agent flow. "
+                "Set HOTPOTQA_REWARD_ARM=A9_CERT_MIX "
+                "and use recipes/hotpotqa_a9/ instead of the shared HotpotQA agent flow."
+            )
         # A6: frozen LLM judge configuration. The server is lazily started on the
         # first call to run() because __init__ is synchronous.
         # If a shared_judge_server was passed from the AgentFlowWorker,
@@ -323,195 +319,6 @@ class HotpotQAAgentFlow(AgentFlowBase):
                 failures.append("official evidence schema is not active")
             if failures:
                 raise ValueError("Formal HotpotQA invariant failure: " + "; ".join(failures))
-
-    @staticmethod
-    def _a9_passage_records(passages: list[tuple[str, Passage]]) -> list[dict[str, Any]]:
-        """Expose only observation fields to the gold-free A9 verifier."""
-
-        return [
-            {"retrieval_query": query, "text": passage.text}
-            for query, passage in passages
-        ]
-
-    @staticmethod
-    def _passages_from_records(
-        original: list[tuple[str, Passage]],
-        records: Sequence[Mapping[str, Any]],
-    ) -> list[tuple[str, Passage]]:
-        if len(original) != len(records):
-            raise ValueError("A9 counterfactual passage count changed")
-        result: list[tuple[str, Passage]] = []
-        for (query, original_passage), record in zip(original, records):
-            result.append(
-                (
-                    query,
-                    Passage(
-                        pid=original_passage.pid,
-                        title=original_passage.title,
-                        text=str(record.get("text", "")),
-                        score=original_passage.score,
-                        sentence_evidence=[],
-                    ),
-                )
-            )
-        return result
-
-    def _a9_token_length(self, value: str) -> int:
-        return len(self.tokenizer.encode(value, add_special_tokens=False))
-
-    async def _a9_score_candidate(
-        self,
-        *,
-        prompt_ids: list[int],
-        response_text: str,
-        query: str,
-        plan: ProbePlan,
-        candidate: str,
-    ) -> CandidateScore | None:
-        encoding = encode_action_candidate(
-            self.tokenizer,
-            response_text=response_text,
-            query=query,
-            target=plan.target,
-            candidate=candidate,
-        )
-        if encoding is None:
-            return None
-        full_prompt_ids = [*prompt_ids, *encoding.token_ids]
-        output = await self.server_manager.generate(
-            request_id=uuid4().hex,
-            prompt_ids=full_prompt_ids,
-            sampling_params={
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "max_tokens": 1,
-                "prompt_logprobs": 0,
-                "logprobs": False,
-            },
-        )
-        prompt_logprob_ids = output.extra_fields.get("prompt_ids")
-        prompt_logprobs = output.extra_fields.get("prompt_logprobs")
-        policy_snapshot_id = output.extra_fields.get("global_steps")
-        if prompt_logprob_ids is None or prompt_logprobs is None or policy_snapshot_id is None:
-            return None
-        absolute_start = len(prompt_ids) + encoding.target_token_start
-        absolute_end = len(prompt_ids) + encoding.target_token_end
-        return extract_candidate_score(
-            candidate=candidate,
-            full_prompt_token_ids=full_prompt_ids,
-            absolute_target_start=absolute_start,
-            absolute_target_end=absolute_end,
-            prompt_logprob_ids=prompt_logprob_ids,
-            prompt_logprobs=prompt_logprobs,
-            policy_snapshot_id=str(policy_snapshot_id),
-        )
-
-    async def _verify_a9_behavior(
-        self,
-        *,
-        question: str,
-        query: str,
-        response_text: str,
-        passages: list[tuple[str, Passage]],
-        history_actions: list[str],
-        feedback: str,
-        sample_key: str,
-        turn_index: int,
-        expected_policy_snapshot_id: str,
-    ):
-        records = self._a9_passage_records(passages)
-        plan = build_probe_plan(
-            query=query,
-            question=question,
-            history_actions=history_actions,
-            passages=records,
-            sample_key=sample_key,
-            turn_index=turn_index,
-            token_length=self._a9_token_length,
-            probe_seed=int(os.environ.get("HOTPOTQA_A9_PROBE_SEED", "42")),
-        )
-        if plan is None:
-            return invalid_verification("no_valid_probe_plan")
-
-        sensitivity_prompt, _, sensitivity_visible = self._prompt_ids_within_budget(
-            question,
-            self._passages_from_records(passages, plan.sensitivity_passages),
-            history_actions,
-            feedback,
-            final_turn=False,
-            finish_allowed=False,
-        )
-        invariance_prompt, _, invariance_visible = self._prompt_ids_within_budget(
-            question,
-            self._passages_from_records(passages, plan.invariance_passages),
-            history_actions,
-            feedback,
-            final_turn=False,
-            finish_allowed=False,
-        )
-        if not visible_probe_inputs_valid(
-            plan,
-            sensitivity_passages=self._a9_passage_records(sensitivity_visible),
-            invariance_passages=self._a9_passage_records(invariance_visible),
-        ):
-            return invalid_verification("counterfactual_prompt_truncation_changed")
-        scored = await asyncio.gather(
-            self._a9_score_candidate(
-                prompt_ids=sensitivity_prompt,
-                response_text=response_text,
-                query=query,
-                plan=plan,
-                candidate=plan.sensitivity_candidate,
-            ),
-            self._a9_score_candidate(
-                prompt_ids=sensitivity_prompt,
-                response_text=response_text,
-                query=query,
-                plan=plan,
-                candidate=plan.target.surface,
-            ),
-            self._a9_score_candidate(
-                prompt_ids=invariance_prompt,
-                response_text=response_text,
-                query=query,
-                plan=plan,
-                candidate=plan.target.surface,
-            ),
-            self._a9_score_candidate(
-                prompt_ids=invariance_prompt,
-                response_text=response_text,
-                query=query,
-                plan=plan,
-                candidate=plan.distractor_candidate,
-            ),
-        )
-        if any(score is None for score in scored):
-            return invalid_verification("candidate_scoring_failed")
-        source_state_hash = hashlib.sha256(
-            json.dumps(
-                {
-                    "question": question,
-                    "history_actions": history_actions,
-                    "passages": records,
-                    "query": query,
-                    "feedback": feedback,
-                    "turn_index": turn_index,
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        return verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=scored[0],
-            sensitivity_old=scored[1],
-            invariance_target=scored[2],
-            invariance_distractor=scored[3],
-            source_state_hash=source_state_hash,
-            expected_policy_snapshot_id=expected_policy_snapshot_id,
-        )
 
     def _build_messages(
         self,
@@ -902,23 +709,6 @@ class HotpotQAAgentFlow(AgentFlowBase):
 
             if valid_queries:
                 query = valid_queries[0]
-                a9_verification = None
-                if self.reward_arm is RewardArm.A9 and not is_validation:
-                    sampled_policy_snapshot = output.extra_fields.get("global_steps")
-                    if sampled_policy_snapshot is None:
-                        a9_verification = invalid_verification("sampled_action_snapshot_missing")
-                    else:
-                        a9_verification = await self._verify_a9_behavior(
-                            question=question,
-                            query=query,
-                            response_text=response_text,
-                            passages=actor_visible_passages,
-                            history_actions=history_actions,
-                            feedback=feedback,
-                            sample_key=sample_key,
-                            turn_index=step_number,
-                            expected_policy_snapshot_id=str(sampled_policy_snapshot),
-                        )
                 with simple_timer("tool_calls", step_metrics):
                     search_step = self._do_search(
                         query,
@@ -933,23 +723,6 @@ class HotpotQAAgentFlow(AgentFlowBase):
                     evidence_metrics_eligible=not unresolved_gold_facts,
                 )
                 search_step["deterministic_process_reward"] = search_step["audit_process_reward"]
-                if self.reward_arm is RewardArm.A9:
-                    if a9_verification is None:
-                        a9_verification = invalid_verification("validation_probe_disabled")
-                    search_step["a9_behavioral_audit"] = a9_verification.artifact
-                    search_step["a9_eligible_turn"] = a9_verification.eligible
-                    search_step["a9_no_valid_probe"] = a9_verification.no_valid_probe
-                    search_step["a9_sensitivity_pass"] = a9_verification.sensitivity_pass
-                    search_step["a9_invariance_pass"] = a9_verification.invariance_pass
-                    search_step["a9_joint_pass"] = a9_verification.joint_pass
-                    search_step["a9_verdict_class"] = a9_verification.verdict_class
-                    search_step["a9_raw_process_reward"] = a9_verification.raw_process_reward
-                    search_step["a9_process_component_valid"] = (
-                        a9_verification.process_component_valid
-                    )
-                    search_step["audit_process_reward"] = (
-                        a9_verification.optimizer_process_value
-                    )
                 # A6 training: override process reward with LLM judge
                 # fact-ID level coverage, using the same formula as A3.
                 if self.reward_arm == RewardArm.A6 and not is_validation and not trajectory_judge_invalid:
@@ -1090,21 +863,6 @@ class HotpotQAAgentFlow(AgentFlowBase):
                     reward_info["weak_execution"] = weak_audit
                     reward_info["weighted_process"] = float(step_reward)
                     step.extra_fields["reward_extra_info"] = reward_info
-            if step_kind == "search" and self.reward_arm == RewardArm.A9:
-                a9_audit = search_steps[-1].get("a9_behavioral_audit")
-                reward_info = step.extra_fields.get("reward_extra_info", {})
-                reward_info["a9_behavioral"] = a9_audit
-                reward_info["a9_raw_process_reward"] = search_steps[-1].get(
-                    "a9_raw_process_reward"
-                )
-                reward_info["optimizer_process_component"] = float(step_reward)
-                reward_info["a9_process_component_valid"] = bool(
-                    search_steps[-1].get("a9_process_component_valid", False)
-                )
-                reward_info["a9_verdict_class"] = search_steps[-1].get(
-                    "a9_verdict_class"
-                )
-                step.extra_fields["reward_extra_info"] = reward_info
             steps.append(await self._postprocess(step, **kwargs))
             self._record_step_timing(metrics, step_metrics)
 

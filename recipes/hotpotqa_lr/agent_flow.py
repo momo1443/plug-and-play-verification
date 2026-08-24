@@ -89,6 +89,8 @@ def _format_history(actions: list[str]) -> str:
 
 
 def _json_safe(value: Any) -> Any:
+    if value is ...:  # ellipsis from malformed model output
+        return None
     if isinstance(value, set):
         return sorted(_json_safe(item) for item in value)
     if isinstance(value, tuple):
@@ -97,7 +99,12 @@ def _json_safe(value: Any) -> Any:
         return [_json_safe(item) for item in value]
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
-    return value
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    # Fallback: coerce unknown types (e.g. numpy scalars, Ellipsis in
+    # nested containers that slipped through, etc.) to string so that
+    # json.dumps never raises TypeError.
+    return str(value)
 
 
 def _format_ledger(transitions: list[dict[str, Any]]) -> str:
@@ -110,7 +117,7 @@ def _format_ledger(transitions: list[dict[str, Any]]) -> str:
                 {
                     "reason_step": _json_safe(transition.get("reason_step")),
                     "action": {
-                        "type": transition.get("action_type"),
+                        "type": _json_safe(transition.get("action_type")),
                         "value": _json_safe(transition.get("action_value")),
                     },
                 },

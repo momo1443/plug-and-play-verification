@@ -18,11 +18,6 @@ import pyarrow.parquet as pq
 from recipes.hotpotqa.evidence import EVIDENCE_SCHEMA_VERSION, OfficialEvidenceStore
 from recipes.hotpotqa.final_answer_protocol import resolve_final_answer_protocol
 from recipes.hotpotqa.judge_prompts import JUDGE_VERSION as JUDGE_PROMPT_VERSION
-from recipes.hotpotqa.a9_behavioral_verifier import (
-    A9_ENTITY_LIBRARY_PATH,
-    A9_PROBE_GENERATOR_VERSION,
-    A9_VERIFIER_VERSION,
-)
 from recipes.hotpotqa.process_verifier import PROCESS_VERIFIER_VERSION, WEAK_EXECUTION_VERIFIER_VERSION
 from recipes.hotpotqa.reward_arm import (
     RewardArm,
@@ -103,7 +98,6 @@ def _reward_description(contract: TrainingRewardContract, *, arm: RewardArm | No
     process_label = {
         RewardArm.A6: JUDGE_PROMPT_VERSION,
         RewardArm.A7: WEAK_EXECUTION_VERIFIER_VERSION,
-        RewardArm.A9: A9_VERIFIER_VERSION,
     }.get(arm, PROCESS_VERIFIER_VERSION)
     components: list[str] = []
     for weight, label in (
@@ -147,13 +141,6 @@ def _code_hashes(project_dir: Path, arm: RewardArm) -> dict[str, str]:
         "examples/hotpotqa/run_rlvr.sh",
         f"examples/hotpotqa/run_{arm.value.lower()}.sh",
     ]
-    if arm is RewardArm.A9:
-        paths.extend(
-            [
-                "recipes/hotpotqa/a9_behavioral_verifier.py",
-                "recipes/hotpotqa/a9_entity_library.json",
-            ]
-        )
     hashes: dict[str, str] = {}
     for relative_path in paths:
         path = project_dir / relative_path
@@ -361,7 +348,6 @@ def prepare_formal_rlvr_run(
         RewardArm.A3,
         RewardArm.A6,
         RewardArm.A7,
-        RewardArm.A9,
     }
     if reward_arm not in trainable_arms:
         raise ValueError(
@@ -483,12 +469,6 @@ def prepare_formal_rlvr_run(
             f"CUDA_VISIBLE_DEVICES exposes {len(cuda_devices)} devices, expected {num_gpus}: {cuda_devices}"
         )
     judge_manifest = _judge_manifest_config(project_dir, reward_arm)
-    a9_probe_seed = None
-    if reward_arm is RewardArm.A9:
-        try:
-            a9_probe_seed = int(os.environ.get("HOTPOTQA_A9_PROBE_SEED", "42"))
-        except ValueError as exc:
-            raise ValueError("HOTPOTQA_A9_PROBE_SEED must be an integer") from exc
 
     manifest = {
         "contract_version": CONTRACT_VERSION,
@@ -509,47 +489,11 @@ def prepare_formal_rlvr_run(
                 if reward_arm == RewardArm.A6
                 else WEAK_EXECUTION_VERIFIER_VERSION
                 if reward_arm == RewardArm.A7
-                else A9_VERIFIER_VERSION
-                if reward_arm == RewardArm.A9
                 else PROCESS_VERIFIER_VERSION
             ),
             "process_reward_weight": reward_contract.process_weight,
             "process_reward_max_executed_searches": 3 if reward_arm is RewardArm.A7 else None,
             "process_is_terminal_em_gated": False,
-            "gold_answer_visible_to_process_verifier": False if reward_arm is RewardArm.A9 else None,
-            "gold_evidence_visible_to_process_verifier": False if reward_arm is RewardArm.A9 else None,
-            "a9_probe_generator_version": (
-                A9_PROBE_GENERATOR_VERSION if reward_arm is RewardArm.A9 else None
-            ),
-            "a9_probe_seed": a9_probe_seed,
-            "a9_entity_library_path": (
-                str(A9_ENTITY_LIBRARY_PATH.resolve()) if reward_arm is RewardArm.A9 else None
-            ),
-            "a9_entity_library_sha256": (
-                _sha256(A9_ENTITY_LIBRARY_PATH) if reward_arm is RewardArm.A9 else None
-            ),
-            "a9_probe_count_per_eligible_turn": 2 if reward_arm is RewardArm.A9 else None,
-            "a9_process_score": (
-                "binary: 1 if both pass, 0 if both fail, mask if partial/invalid"
-                if reward_arm is RewardArm.A9
-                else None
-            ),
-            "a9_verdict_classes": (
-                {
-                    "A": "valid; both probes pass; optimizer value 1",
-                    "B": "valid; both probes fail; optimizer value 0",
-                    "C": "probe construction or scoring invalid; process component masked",
-                    "D": "valid partial result; raw diagnostic 0.5; process component masked",
-                }
-                if reward_arm is RewardArm.A9
-                else None
-            ),
-            "a9_invalid_process_handling": (
-                "mask partial or invalid local process component; keep trajectory and terminal EM"
-                if reward_arm is RewardArm.A9
-                else None
-            ),
-            "a9_validation_probe_enabled": False if reward_arm is RewardArm.A9 else None,
             "terminal_reward": "terminal exact match",
             "terminal_reward_weight": reward_contract.terminal_weight,
             "final_response_mask": reward_contract.final_response_mask,
