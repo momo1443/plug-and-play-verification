@@ -17,6 +17,7 @@ class RewardArm(str, Enum):
     A6 = "A6"
     A7 = "A7"
     A9 = "A9"
+    A9_CERT_MIX = "A9_CERT_MIX"
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,8 @@ _TRAINING_REWARD_CONTRACTS = {
     RewardArm.A3: TrainingRewardContract(0.5, 0.5, 1),
     RewardArm.A6: TrainingRewardContract(0.5, 0.5, 1),
     RewardArm.A7: TrainingRewardContract(0.5, 0.5, 1),
-    RewardArm.A9: TrainingRewardContract(0.5, 0.5, 1),
+    RewardArm.A9: TrainingRewardContract(0.2, 0.8, 1),
+    RewardArm.A9_CERT_MIX: TrainingRewardContract(0.2, 0.8, 1),
 }
 
 def training_reward_contract(arm: RewardArm) -> TrainingRewardContract:
@@ -74,11 +76,6 @@ def search_step_reward(
     if is_validation:
         return 0.0
     reward = float(process_reward) if process_reward is not None else 0.0
-    if arm is RewardArm.A9 and reward not in (0.0, 1.0):
-        raise ValueError(
-            "A9 optimizer process reward must be a known binary verdict; "
-            "partial and invalid probes must be masked before weighting"
-        )
     return training_reward_contract(arm).process_weight * reward
 
 

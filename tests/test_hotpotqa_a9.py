@@ -1,443 +1,353 @@
-import asyncio
+"""Tests for A9 certificate-grounded RLVR components."""
+
 import dataclasses
 import json
 import os
-import subprocess
-import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import patch
 
-from transformers import AutoTokenizer
-
-from recipes.hotpotqa.a9_behavioral_verifier import (
-    A9_VERIFIER_VERSION,
-    CandidateScore,
-    build_probe_plan,
-    encode_action_candidate,
-    extract_candidate_score,
-    load_entity_library,
-    parse_target_slot,
-    replay_behavioral_artifact,
-    verify_behavioral_scores,
-    visible_probe_inputs_valid,
+from recipes.hotpotqa_a9.dsl import (
+    FinishCertificate,
+    SearchCertificate,
+    parse_finish_certificate,
+    parse_search_certificate,
 )
-from recipes.hotpotqa.hotpotqa_agent_flow import HotpotQAAgentFlow, _visible_passages
-from recipes.hotpotqa.prepare_formal_rlvr_run import prepare_formal_rlvr_run
+from recipes.hotpotqa_a9.protocol import (
+    parse_finish_call,
+    parse_search_call,
+)
+from recipes.hotpotqa_a9.reward_contract import (
+    CONTRACT_CERT_MIX,
+    CONTRACT_CERT_ONLY,
+    CONTRACT_PROTOCOL_NULL,
+    contract_for_subarm,
+    resolve_subarm,
+)
+from recipes.hotpotqa_a9.verifier import (
+    trajectory_audit_record,
+    verify_coupling,
+    verify_grounding,
+    verify_trajectory,
+)
 from recipes.hotpotqa.reward_arm import (
     RewardArm,
-    parse_reward_arm,
-    scale_terminal_reward,
     search_step_reward,
     training_reward_contract,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = PROJECT_ROOT.parent
+
+# Tool-call XML delimiters matching the LR protocol regex.
+# Built with chr() to avoid encoding issues with angle brackets in tooling.
+_TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+_TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
 
 
-def _passages():
-    return [
-        {
-            "pid": 10,
-            "title": "Henry Miller",
-            "text": "Henry Miller married June Miller in 1924. She was an American writer.",
-            "score": 1.0,
-            "sentence_evidence": [],
+# -- Certificate Parsing --
+
+
+class CertificateParsingTest(unittest.TestCase):
+    def test_search_certificate_valid_fields(self):
+        cert, errors = parse_search_certificate(
+            {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"}
+        )
+        self.assertIsNotNone(cert)
+        self.assertEqual(errors, ())
+        self.assertEqual(cert.source_id, "passage:17")
+        self.assertEqual(cert.support_span, "Henry Miller married June Miller")
+        self.assertEqual(cert.target, "June Miller")
+
+    def test_search_certificate_missing_field(self):
+        cert, errors = parse_search_certificate(
+            {"source_id": "passage:17", "support_span": "some text"}
+        )
+        self.assertIsNone(cert)
+        self.assertIn("certificate_fields_invalid", errors)
+
+    def test_search_certificate_extra_field(self):
+        cert, errors = parse_search_certificate(
+            {"source_id": "passage:17", "support_span": "s", "target": "t", "extra": 1}
+        )
+        self.assertIsNone(cert)
+        self.assertIn("certificate_fields_invalid", errors)
+
+    def test_search_certificate_not_object(self):
+        cert, errors = parse_search_certificate("not a dict")
+        self.assertIsNone(cert)
+        self.assertIn("certificate_not_object", errors)
+
+    def test_search_certificate_empty_source_id(self):
+        cert, errors = parse_search_certificate(
+            {"source_id": "", "support_span": "s", "target": "t"}
+        )
+        self.assertIsNone(cert)
+        self.assertIn("source_id_invalid", errors)
+
+    def test_finish_certificate_valid_fields(self):
+        cert, errors = parse_finish_certificate(
+            {"source_id": "passage:42", "support_span": "June Miller was an American", "answer_span": "American"}
+        )
+        self.assertIsNotNone(cert)
+        self.assertEqual(errors, ())
+        self.assertEqual(cert.source_id, "passage:42")
+        self.assertEqual(cert.answer_span, "American")
+
+    def test_finish_certificate_missing_answer_span(self):
+        cert, errors = parse_finish_certificate(
+            {"source_id": "passage:42", "support_span": "some text"}
+        )
+        self.assertIsNone(cert)
+        self.assertIn("certificate_fields_invalid", errors)
+
+
+# -- Protocol Parsing --
+
+
+class ProtocolTest(unittest.TestCase):
+    def _make_search_json(self, query, cert=None):
+        args = {"query": query}
+        if cert is not None:
+            args["certificate"] = cert
+        inner = json.dumps({"name": "search", "arguments": args})
+        return _TOOL_OPEN + "\n" + inner + "\n" + _TOOL_CLOSE
+
+    def _make_finish_json(self, answer, cert=None):
+        args = {"status": "answer", "answer": answer}
+        if cert is not None:
+            args["certificate"] = cert
+        inner = json.dumps({"name": "finish", "arguments": args})
+        return _TOOL_OPEN + "\n" + inner + "\n" + _TOOL_CLOSE
+
+    def test_search_call_parse_with_valid_certificate(self):
+        text = self._make_search_json(
+            "June Miller nationality",
+            {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"}
+        )
+        audit = parse_search_call(text)
+        self.assertIsNotNone(audit.query)
+        self.assertEqual(audit.query, "June Miller nationality")
+        self.assertIsNotNone(audit.certificate)
+
+    def test_search_call_parse_with_invalid_certificate_still_extracts_query(self):
+        text = self._make_search_json(
+            "June Miller nationality",
+            {"bad": "field"}
+        )
+        audit = parse_search_call(text)
+        self.assertIsNotNone(audit.query)
+        self.assertEqual(audit.query, "June Miller nationality")
+        self.assertIsNone(audit.certificate)
+
+    def test_finish_call_parse_with_invalid_certificate_still_extracts_answer(self):
+        text = self._make_finish_json(
+            "American",
+            {"bad": "field"}
+        )
+        audit = parse_finish_call(text)
+        self.assertIsNotNone(audit.answer)
+        self.assertEqual(audit.answer, "American")
+        self.assertIsNone(audit.certificate)
+
+    def test_unparseable_call_returns_none_query(self):
+        audit = parse_search_call("some random text without tool calls")
+        self.assertIsNone(audit.query)
+
+
+# -- Verifier --
+
+
+class VerifierTest(unittest.TestCase):
+    def _make_artifacts(self):
+        return {
+            "passage:17": {
+                "artifact_id": "passage:17",
+                "passage_id": "17",
+                "title": "Henry Miller",
+                "text": "Henry Miller married June Miller in 1924. She was an American writer.",
+                "content_sha256": None,
+            },
         }
-    ]
 
-
-class A9FormalPreparationTest(unittest.TestCase):
-    def test_formal_preflight_accepts_a9_as_a_trainable_arm(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            with self.assertRaisesRegex(FileNotFoundError, "Required RLVR artifact"):
-                prepare_formal_rlvr_run(
-                    project_dir=PROJECT_ROOT,
-                    arm="A9",
-                    run_mode="main",
-                    train_path=temp_root / "train.parquet",
-                    validation_path=temp_root / "validation.parquet",
-                    corpus_dir=temp_root / "corpus",
-                    evidence_sidecar_path=temp_root / "evidence.sqlite",
-                    model_path=temp_root / "model",
-                    output_dir=temp_root / "output",
-                    train_max_samples=30_000,
-                    val_max_samples=7_405,
-                    train_batch_size=20,
-                    rollout_n=4,
-                    total_training_steps=1_500,
-                    num_gpus=8,
-                    agent_workers=8,
-                    gamma=1.0,
-                )
-
-
-class A9ProbeConstructionTest(unittest.TestCase):
-    def test_target_is_observation_grounded_and_typed(self):
-        target = parse_target_slot("June Miller nationality", _passages())
-        self.assertIsNotNone(target)
-        self.assertEqual(target.surface, "June Miller")
-        self.assertEqual(target.entity_type, "person")
-        self.assertEqual(target.suffix, "nationality")
-
-    def test_first_search_without_observation_is_ineligible(self):
-        self.assertIsNone(parse_target_slot("June Miller nationality", []))
-
-    def test_title_metadata_does_not_ground_a_target(self):
-        passages = [{**_passages()[0], "text": "An American writer was born in 1902."}]
-        self.assertIsNone(parse_target_slot("June Miller nationality", passages))
-
-    def test_prompt_visibility_uses_the_same_passage_budget(self):
-        from recipes.hotpotqa.env.search_tool import Passage
-
-        passages = [
-            ("q1", Passage(pid=1, title="Hidden title", text="Visible One", score=1.0)),
-            ("q2", Passage(pid=2, title="Hidden title", text="Visible Two", score=1.0)),
-        ]
-        visible = _visible_passages(passages, max_chars=40)
-        self.assertEqual([item[1].text for item in visible], ["Visible One"])
-
-    def test_probe_plan_is_deterministic_and_collision_free(self):
-        kwargs = dict(
-            query="June Miller nationality",
-            question="What nationality was Henry Miller's wife?",
-            history_actions=["Henry Miller wife"],
-            passages=_passages(),
-            sample_key="train:17",
-            turn_index=2,
-            token_length=lambda value: len(value.split()),
-            probe_seed=42,
-        )
-        first = build_probe_plan(**kwargs)
-        second = build_probe_plan(**kwargs)
-        self.assertEqual(first, second)
-        self.assertIsNotNone(first)
-        sensitivity_text = json.dumps(first.sensitivity_passages)
-        invariance_text = json.dumps(first.invariance_passages)
-        self.assertNotIn("June Miller", sensitivity_text)
-        self.assertIn(first.sensitivity_candidate, sensitivity_text)
-        self.assertIn("June Miller", invariance_text)
-        self.assertIn(first.distractor_candidate, invariance_text)
-        self.assertNotEqual(first.sensitivity_candidate, first.distractor_candidate)
-        self.assertTrue(
-            visible_probe_inputs_valid(
-                first,
-                sensitivity_passages=first.sensitivity_passages,
-                invariance_passages=first.invariance_passages,
-            )
+    def setUp(self):
+        from recipes.hotpotqa_lr.verifier import artifact_content_sha256
+        self.artifacts = self._make_artifacts()
+        self.artifacts["passage:17"]["content_sha256"] = artifact_content_sha256(
+            self.artifacts["passage:17"]["text"]
         )
 
-    def test_visible_probe_check_rejects_truncated_target(self):
-        plan = build_probe_plan(
-            query="June Miller nationality",
-            question="What nationality was Henry Miller's wife?",
-            history_actions=["Henry Miller wife"],
-            passages=_passages(),
-            sample_key="train:17",
-            turn_index=2,
-            token_length=lambda value: len(value.split()),
-        )
-        self.assertIsNotNone(plan)
-        truncated_invariance = [dict(record) for record in plan.invariance_passages]
-        truncated_invariance[0]["text"] = plan.distractor_sentence
-        self.assertFalse(
-            visible_probe_inputs_valid(
-                plan,
-                sensitivity_passages=plan.sensitivity_passages,
-                invariance_passages=truncated_invariance,
-            )
-        )
+    def test_grounding_valid_when_span_in_artifact(self):
+        cert = SearchCertificate(source_id="passage:17", support_span="Henry Miller married June Miller", target="June Miller")
+        self.assertTrue(verify_grounding(cert, self.artifacts))
 
-    def test_entity_library_is_versioned_and_complete(self):
-        version, library = load_entity_library()
-        self.assertEqual(version, "hotpotqa-a9-entity-library-v1")
-        self.assertEqual(set(library), {"person", "place", "organization", "work"})
-        self.assertTrue(all(len(values) >= 4 for values in library.values()))
+    def test_grounding_invalid_when_span_not_in_artifact(self):
+        cert = SearchCertificate(source_id="passage:17", support_span="This text does not appear", target="June Miller")
+        self.assertFalse(verify_grounding(cert, self.artifacts))
 
-    def test_gold_arguments_are_rejected_by_probe_api(self):
-        with self.assertRaises(TypeError):
-            build_probe_plan(
-                query="June Miller nationality",
-                question="Question",
-                history_actions=[],
-                passages=_passages(),
-                sample_key="train:1",
-                turn_index=2,
-                token_length=lambda value: len(value.split()),
-                gold_evidence_ids=["forbidden"],
-            )
+    def test_grounding_invalid_when_source_not_found(self):
+        cert = SearchCertificate(source_id="passage:999", support_span="anything", target="anything")
+        self.assertFalse(verify_grounding(cert, self.artifacts))
 
+    def test_coupling_search_target_matches_query(self):
+        cert = SearchCertificate(source_id="passage:17", support_span="Henry Miller married June Miller", target="June Miller")
+        self.assertTrue(verify_coupling("search", "June Miller nationality", cert))
 
-class A9ScoringTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.tokenizer = AutoTokenizer.from_pretrained(
-            WORKSPACE_ROOT / "models/Qwen3.5-4B",
-            local_files_only=True,
-        )
+    def test_coupling_search_target_not_in_query(self):
+        cert = SearchCertificate(source_id="passage:17", support_span="Henry Miller married June Miller", target="Eleanor")
+        self.assertFalse(verify_coupling("search", "June Miller nationality", cert))
 
-    def test_action_candidate_encoding_covers_only_target_tokens(self):
-        target = parse_target_slot("June Miller nationality", _passages())
-        self.assertIsNotNone(target)
-        response = '<tool_call>{"name":"search","arguments":{"query":"June Miller nationality"}}</tool_call>'
-        encoding = encode_action_candidate(
-            self.tokenizer,
-            response_text=response,
-            query="June Miller nationality",
-            target=target,
-            candidate="Eleanor Hartley",
-        )
-        self.assertIsNotNone(encoding)
-        target_ids = encoding.token_ids[encoding.target_token_start : encoding.target_token_end]
-        self.assertEqual(
-            self.tokenizer.decode(target_ids),
-            "Eleanor Hartley",
-        )
+    def test_coupling_finish_answer_matches(self):
+        cert = FinishCertificate(source_id="passage:17", support_span="She was an American writer", answer_span="American")
+        self.assertTrue(verify_coupling("finish", "American", cert))
 
-    def test_prompt_logprob_alignment_and_average(self):
-        full_ids = [11, 12, 13, 14, 15, 16]
-        prompt_ids = [[12], [13], [14], [15], [16], [0]]
-        prompt_logprobs = [[-0.1], [-0.2], [-0.3], [-0.4], [-0.6], [0.0]]
-        score = extract_candidate_score(
-            candidate="candidate",
-            full_prompt_token_ids=full_ids,
-            absolute_target_start=3,
-            absolute_target_end=5,
-            prompt_logprob_ids=prompt_ids,
-            prompt_logprobs=prompt_logprobs,
-            policy_snapshot_id="step-8",
-        )
-        self.assertIsNotNone(score)
-        self.assertEqual(score.token_ids, (14, 15))
-        self.assertEqual(score.token_logprobs, (-0.3, -0.4))
-        self.assertAlmostEqual(score.token_average_logprob, -0.35)
+    def test_coupling_finish_answer_mismatch(self):
+        cert = FinishCertificate(source_id="passage:17", support_span="She was an American writer", answer_span="British")
+        self.assertFalse(verify_coupling("finish", "American", cert))
 
-    def test_prompt_logprob_mismatch_fails_closed(self):
-        score = extract_candidate_score(
-            candidate="candidate",
-            full_prompt_token_ids=[11, 12, 13],
-            absolute_target_start=1,
-            absolute_target_end=2,
-            prompt_logprob_ids=[[99], [13], [0]],
-            prompt_logprobs=[[-0.1], [-0.2], [0.0]],
-            policy_snapshot_id="step-8",
-        )
-        self.assertIsNone(score)
+    def test_trajectory_credit_with_all_valid(self):
+        transitions = [{
+            "certificate": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "certificate_parsed": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "action_type": "search",
+            "action_value": "June Miller nationality",
+            "available_artifacts": self.artifacts,
+        }]
+        audits = verify_trajectory(transitions, reward_horizon=3)
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0].grounding_valid, 1)
+        self.assertEqual(audits[0].coupling_valid, 1)
+        self.assertEqual(audits[0].own_valid, 1)
+        self.assertAlmostEqual(audits[0].raw_local_credit, 1.0 / 3.0)
 
-    def test_agent_flow_candidate_scoring_uses_verl_prompt_logprob_contract(self):
-        plan = build_probe_plan(
-            query="June Miller nationality",
-            question="What nationality was Henry Miller's wife?",
-            history_actions=["Henry Miller wife"],
-            passages=_passages(),
-            sample_key="train:17",
-            turn_index=2,
-            token_length=lambda value: len(self.tokenizer.encode(value, add_special_tokens=False)),
-        )
-        self.assertIsNotNone(plan)
-        response = '<tool_call>{"name":"search","arguments":{"query":"June Miller nationality"}}</tool_call>'
+    def test_trajectory_zero_credit_on_parse_failure(self):
+        transitions = [{
+            "certificate": {"bad": "field"},
+            "certificate_parsed": None,
+            "action_type": "search",
+            "action_value": "June Miller nationality",
+            "available_artifacts": self.artifacts,
+        }]
+        audits = verify_trajectory(transitions, reward_horizon=3)
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0].own_valid, 0)
+        self.assertEqual(audits[0].raw_local_credit, 0.0)
 
-        class FakeServer:
-            sampling_params = None
+    def test_trajectory_audit_record(self):
+        transitions = [{
+            "certificate": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "certificate_parsed": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "action_type": "search",
+            "action_value": "June Miller nationality",
+            "available_artifacts": self.artifacts,
+        }]
+        audits = verify_trajectory(transitions, reward_horizon=3)
+        record = trajectory_audit_record(audits)
+        self.assertAlmostEqual(record["local_reward"], 1.0 / 3.0)
+        self.assertEqual(record["parsed_certificate_count"], 1)
+        self.assertEqual(record["credited_transition_count"], 1)
 
-            async def generate(self, *, request_id, prompt_ids, sampling_params):
-                self.sampling_params = sampling_params
-                return SimpleNamespace(
-                    extra_fields={
-                        "prompt_ids": [[token_id] for token_id in prompt_ids[1:]] + [[0]],
-                        "prompt_logprobs": [[-0.25] for _ in prompt_ids[1:]] + [[0.0]],
-                        "global_steps": 7,
-                    }
-                )
-
-        flow = object.__new__(HotpotQAAgentFlow)
-        flow.tokenizer = self.tokenizer
-        flow.server_manager = FakeServer()
-        prompt_ids = self.tokenizer.encode("prefix", add_special_tokens=False)
-        score = asyncio.run(
-            flow._a9_score_candidate(
-                prompt_ids=prompt_ids,
-                response_text=response,
-                query="June Miller nationality",
-                plan=plan,
-                candidate=plan.sensitivity_candidate,
-            )
-        )
-        self.assertIsNotNone(score)
-        self.assertEqual(score.policy_snapshot_id, "7")
-        self.assertEqual(score.token_average_logprob, -0.25)
-        self.assertEqual(flow.server_manager.sampling_params["prompt_logprobs"], 0)
-        self.assertEqual(flow.server_manager.sampling_params["max_tokens"], 1)
-
-    def test_behavioral_reward_has_three_levels_and_replay_hash(self):
-        plan = build_probe_plan(
-            query="June Miller nationality",
-            question="What nationality was Henry Miller's wife?",
-            history_actions=["Henry Miller wife"],
-            passages=_passages(),
-            sample_key="train:17",
-            turn_index=2,
-            token_length=lambda value: len(value.split()),
-        )
-        self.assertIsNotNone(plan)
-
-        def score(candidate, value):
-            return CandidateScore(candidate, (1,), (value,), value, "step-9")
-
-        partial = verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=score(plan.sensitivity_candidate, -0.1),
-            sensitivity_old=score(plan.target.surface, -1.0),
-            invariance_target=score(plan.target.surface, -1.0),
-            invariance_distractor=score(plan.distractor_candidate, -0.1),
-            source_state_hash="state",
-            expected_policy_snapshot_id="step-9",
-        )
-        self.assertEqual(partial.raw_process_reward, 0.5)
-        self.assertFalse(partial.joint_pass)
-        self.assertFalse(partial.process_component_valid)
-        self.assertEqual(partial.optimizer_process_value, 0.0)
-        self.assertEqual(partial.verdict_class, "D")
-        self.assertEqual(partial.artifact["schema_version"], A9_VERIFIER_VERSION)
-        self.assertEqual(len(partial.artifact["replay_hash"]), 64)
-        self.assertFalse(partial.artifact["validity_checks"]["gold_inputs_used"])
-        self.assertTrue(replay_behavioral_artifact(partial.artifact))
-
-        tampered = json.loads(json.dumps(partial.artifact))
-        tampered["raw_process_reward"] = 1.0
-        self.assertFalse(replay_behavioral_artifact(tampered))
-
-        full = verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=score(plan.sensitivity_candidate, -0.1),
-            sensitivity_old=score(plan.target.surface, -1.0),
-            invariance_target=score(plan.target.surface, -0.1),
-            invariance_distractor=score(plan.distractor_candidate, -1.0),
-            source_state_hash="state",
-            expected_policy_snapshot_id="step-9",
-        )
-        self.assertEqual(full.raw_process_reward, 1.0)
-        self.assertTrue(full.joint_pass)
-        self.assertTrue(full.process_component_valid)
-        self.assertEqual(full.optimizer_process_value, 1.0)
-        self.assertEqual(full.verdict_class, "A")
-
-        failed = verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=score(plan.sensitivity_candidate, -1.0),
-            sensitivity_old=score(plan.target.surface, -0.1),
-            invariance_target=score(plan.target.surface, -1.0),
-            invariance_distractor=score(plan.distractor_candidate, -0.1),
-            source_state_hash="state",
-            expected_policy_snapshot_id="step-9",
-        )
-        self.assertEqual(failed.raw_process_reward, 0.0)
-        self.assertTrue(failed.process_component_valid)
-        self.assertEqual(failed.optimizer_process_value, 0.0)
-        self.assertEqual(failed.verdict_class, "B")
-
-    def test_snapshot_mismatch_fails_closed(self):
-        plan = build_probe_plan(
-            query="June Miller nationality",
-            question="Question",
-            history_actions=[],
-            passages=_passages(),
-            sample_key="train:1",
-            turn_index=2,
-            token_length=lambda value: len(value.split()),
-        )
-        self.assertIsNotNone(plan)
-        left = CandidateScore("left", (1,), (-0.1,), -0.1, "step-1")
-        right = CandidateScore("right", (2,), (-0.2,), -0.2, "step-2")
-        result = verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=left,
-            sensitivity_old=right,
-            invariance_target=left,
-            invariance_distractor=left,
-            source_state_hash="state",
-            expected_policy_snapshot_id="step-1",
-        )
-        self.assertFalse(result.eligible)
-        self.assertIsNone(result.raw_process_reward)
-        self.assertFalse(result.process_component_valid)
-        self.assertEqual(result.optimizer_process_value, 0.0)
-        self.assertEqual(result.verdict_class, "C")
-
-    def test_sampled_action_snapshot_mismatch_fails_closed(self):
-        plan = build_probe_plan(
-            query="June Miller nationality",
-            question="Question",
-            history_actions=[],
-            passages=_passages(),
-            sample_key="train:1",
-            turn_index=2,
-            token_length=lambda value: len(value.split()),
-        )
-        self.assertIsNotNone(plan)
-        score = CandidateScore("candidate", (1,), (-0.1,), -0.1, "step-2")
-        result = verify_behavioral_scores(
-            plan=plan,
-            sensitivity_new=score,
-            sensitivity_old=score,
-            invariance_target=score,
-            invariance_distractor=score,
-            source_state_hash="state",
-            expected_policy_snapshot_id="step-1",
-        )
-        self.assertFalse(result.eligible)
-        self.assertEqual(result.artifact["reason"], "sampled_action_snapshot_mismatch")
+    def test_trajectory_horizon_exceeded(self):
+        base = {
+            "certificate": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "certificate_parsed": {"source_id": "passage:17", "support_span": "Henry Miller married June Miller", "target": "June Miller"},
+            "action_type": "search",
+            "action_value": "June Miller nationality",
+            "available_artifacts": self.artifacts,
+        }
+        transitions = [dict(base) for _ in range(4)]
+        audits = verify_trajectory(transitions, reward_horizon=3)
+        self.assertEqual(len(audits), 4)
+        for i in range(3):
+            self.assertGreater(audits[i].raw_local_credit, 0)
+        self.assertEqual(audits[3].raw_local_credit, 0.0)
+        self.assertIn("reward_horizon_exceeded", audits[3].errors)
 
 
-class A9RewardAndLauncherTest(unittest.TestCase):
-    def test_a9_reward_contract_is_outcome_independent_50_50(self):
-        self.assertIs(parse_reward_arm("a9"), RewardArm.A9)
+# -- Reward Contract --
+
+
+class RewardContractTest(unittest.TestCase):
+    def test_cert_mix_weights(self):
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.8)
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.2)
+
+    def test_protocol_null_weights(self):
+        self.assertAlmostEqual(CONTRACT_PROTOCOL_NULL.terminal_weight, 1.0)
+        self.assertAlmostEqual(CONTRACT_PROTOCOL_NULL.process_weight, 0.0)
+
+    def test_cert_only_weights(self):
+        self.assertAlmostEqual(CONTRACT_CERT_ONLY.terminal_weight, 0.0)
+        self.assertAlmostEqual(CONTRACT_CERT_ONLY.process_weight, 1.0)
+
+    def test_weights_sum_to_one(self):
+        for contract in [CONTRACT_CERT_MIX, CONTRACT_PROTOCOL_NULL, CONTRACT_CERT_ONLY]:
+            self.assertAlmostEqual(contract.terminal_weight + contract.process_weight, 1.0, places=10)
+
+    def test_contract_for_subarm(self):
+        self.assertIs(contract_for_subarm("cert_mix"), CONTRACT_CERT_MIX)
+        self.assertIs(contract_for_subarm("protocol_null"), CONTRACT_PROTOCOL_NULL)
+        self.assertIs(contract_for_subarm("cert_only"), CONTRACT_CERT_ONLY)
+
+    def test_resolve_subarm_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(resolve_subarm(), "cert_mix")
+
+    def test_resolve_subarm_from_env(self):
+        with patch.dict(os.environ, {"HOTPOTQA_A9_SUBARM": "protocol_null"}, clear=True):
+            self.assertEqual(resolve_subarm(), "protocol_null")
+
+    def test_resolve_subarm_invalid(self):
+        with self.assertRaises(ValueError):
+            resolve_subarm("invalid")
+
+
+# -- Reward Arm (reward_arm.py) --
+
+
+class RewardArmTest(unittest.TestCase):
+    def test_a9_contract_updated(self):
         contract = training_reward_contract(RewardArm.A9)
         self.assertEqual(dataclasses.asdict(contract), {
-            "process_weight": 0.5,
-            "terminal_weight": 0.5,
+            "process_weight": 0.2,
+            "terminal_weight": 0.8,
             "final_response_mask": 1,
         })
-        self.assertEqual(search_step_reward(RewardArm.A9, 0.0, is_validation=False), 0.0)
-        with self.assertRaisesRegex(ValueError, "partial and invalid probes must be masked"):
-            search_step_reward(RewardArm.A9, 0.5, is_validation=False)
-        self.assertEqual(search_step_reward(RewardArm.A9, 1.0, is_validation=False), 0.5)
-        self.assertEqual(scale_terminal_reward(RewardArm.A9, 1.0, is_validation=False), 0.5)
 
-    def test_launcher_and_manifest_contain_a9_without_gated_arm(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
+    def test_a9_subarm_contracts(self):
+        for arm, expected_tw, expected_pw in [
+            (RewardArm.A9_CERT_MIX, 0.8, 0.2),
+            (RewardArm.A9_PROTOCOL_NULL, 1.0, 0.0),
+            (RewardArm.A9_CERT_ONLY, 0.0, 1.0),
+        ]:
+            contract = training_reward_contract(arm)
+            self.assertAlmostEqual(contract.terminal_weight, expected_tw)
+            self.assertAlmostEqual(contract.process_weight, expected_pw)
+
+    def test_a9_no_binary_check(self):
+        result = search_step_reward(RewardArm.A9_CERT_MIX, 0.33, is_validation=False)
+        self.assertAlmostEqual(result, 0.33 * 0.2)
+
+
+# -- Launcher Integration --
+
+
+class LauncherTest(unittest.TestCase):
+    def test_rlvr_sh_routes_a9_to_certificate_agent(self):
         shared = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
-        preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(
-            encoding="utf-8"
-        )
-        reward_arm = (PROJECT_ROOT / "recipes/hotpotqa/reward_arm.py").read_text(encoding="utf-8")
-        self.assertIn("HOTPOTQA_REWARD_ARM=A9", launcher)
-        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR30", shared)
-        self.assertIn('RewardArm.A9: A9_VERIFIER_VERSION', preflight)
-        self.assertIn('"process_is_terminal_em_gated": False', preflight)
-        self.assertIn('"a9_probe_seed": a9_probe_seed', preflight)
-        self.assertIn('"a9_verdict_classes":', preflight)
-        self.assertIn('CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1,3,4,5,6,7}"', launcher)
-        self.assertIn("HOTPOTQA_VLLM_ENABLE_SLEEP_MODE=false", launcher)
-        self.assertIn("HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false", launcher)
-        self.assertNotIn("HOTPOTQA_NUM_GPUS", launcher)
-        self.assertNotIn("HOTPOTQA_AGENT_WORKERS", launcher)
-        self.assertNotIn("HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION", launcher)
-        self.assertNotIn("A9_GATED", reward_arm + launcher + preflight)
+        self.assertIn("recipes/hotpotqa_a9/base.yaml", shared)
+        self.assertIn("hotpotqa_certificate_agent", shared)
+        self.assertIn("recipes/hotpotqa_a9/reward_fn.py", shared)
+        self.assertIn("A9_CERT_MIX", shared)
 
-    def test_a9_launcher_rejects_a_separate_pilot_experiment(self):
-        launcher = PROJECT_ROOT / "examples/hotpotqa/run_a9.sh"
-        result = subprocess.run(
-            ["bash", str(launcher)],
-            env={**os.environ, "HOTPOTQA_RUN_MODE": "pilot64"},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("must be main", result.stderr)
+    def test_a9_launcher_sets_subarm_env(self):
+        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
+        self.assertIn("HOTPOTQA_A9_SUBARM", launcher)
+        self.assertIn("cert_mix", launcher)
+        self.assertNotIn("HOTPOTQA_A9_PROBE_SEED", launcher)
+
+    def test_a9_launcher_accepts_subarms(self):
+        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
+        self.assertIn("cert_mix|protocol_null|cert_only", launcher)
 
 
 if __name__ == "__main__":

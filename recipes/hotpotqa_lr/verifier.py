@@ -32,8 +32,23 @@ def artifact_id_for_passage(passage_id: Any) -> str:
     return f"passage:{passage_id}"
 
 
+class _SetSafeEncoder(json.JSONEncoder):
+    """JSON encoder that converts sets to sorted lists for deterministic output."""
+
+    def default(self, o: Any) -> Any:
+        if isinstance(o, set):
+            return sorted(o, key=str)
+        return super().default(o)
+
+
 def _canonical_sha256(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        cls=_SetSafeEncoder,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 

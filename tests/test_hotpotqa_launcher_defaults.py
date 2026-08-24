@@ -148,7 +148,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("HOTPOTQA_SAVE_FREQ=50", common)
         self.assertIn("A8-LR-v2 preflight cannot be skipped", common)
         self.assertNotIn("2147483648", common + launcher + em100_dsl_launcher)
-        self.assertIn("A1|A2|A3|A6|A7|A9|A8_LR30", generic_launcher)
+        self.assertIn("A1|A2|A3|A6|A7|A9|A9_CERT_MIX|A9_PROTOCOL_NULL|A9_CERT_ONLY|A8_LR30", generic_launcher)
         self.assertIn("A8_LR30_CS", generic_launcher)
         self.assertIn("A8_LR_BASE", generic_launcher)
         self.assertIn("HOTPOTQA_LR_REWARD_MODE=terminal_only", base_launcher)

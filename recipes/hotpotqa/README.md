@@ -2,7 +2,7 @@
 
 ## Overview
 
-This recipe runs the retained raw-answer HotpotQA arms with local FAISS/BGE retrieval. The standalone local-reasoning experiment lives under `recipes/hotpotqa_lr/`.
+This recipe runs the retained raw-answer HotpotQA arms with local FAISS/BGE retrieval. The standalone local-reasoning experiment lives under `recipes/hotpotqa_lr/`, and the certificate-grounded A9 experiment lives under `recipes/hotpotqa_a9/`.
 
 | Arm | Role | Optimizer signal |
 |-----|------|------------------|
@@ -12,7 +12,7 @@ This recipe runs the retained raw-answer HotpotQA arms with local FAISS/BGE retr
 | **A3** | Combined agentic RLVR | GRPO + `step_causal`; `0.5 * process + 0.5 * terminal EM`; final-answer tokens remain in policy loss |
 | **A6** | Gold-conditioned semantic verifier | frozen LLM fact-coverage Judge + terminal EM |
 | **A7** | Weak execution control | `1/3` per valid observable search + terminal EM |
-| **A9** | Gold-free behavioral verifier | `0.5 * binary joint probe verdict` per known search + `0.5 * terminal EM`; partial/invalid process verdicts are masked |
+| **A9** | Certificate-grounded agentic RLVR | Minimal machine-checkable certificates per action; three-arm experiment under `recipes/hotpotqa_a9/` |
 
 Official dataset references: https://hotpotqa.github.io/ and https://github.com/StonyBrookNLP/musique. Processed Agent-R1 assets are also available from the [Agent-R1-data ModelScope release](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
 
@@ -25,7 +25,7 @@ Recipe code (`recipes/hotpotqa/`):
 - `reward_arm.py` — frozen reward and final-token mask semantics
 - `reward_fn.py` — terminal exact-match scorer
 - `process_verifier.py` — deterministic evidence process reward
-- `a9_behavioral_verifier.py` / `a9_entity_library.json` — A9 counterfactual probe generator and scorer
+- `a9_behavioral_verifier.py` / `a9_entity_library.json` — **DEPRECATED** A9 counterfactual probe generator (retained for artifact replay; current A9 lives in `recipes/hotpotqa_a9/`)
 - `judge_server.py` — shared frozen-Judge client (local vLLM or remote API) with retries and exact-input cache
 - `final_answer_protocol.py` — raw-final contract for retained arms
 - `prepare_formal_rlvr_run.py` / `validate_formal_a0_artifacts.py` — fail-closed preflight + manifests

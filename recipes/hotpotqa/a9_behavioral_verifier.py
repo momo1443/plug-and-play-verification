@@ -1,4 +1,9 @@
-"""Gold-free behavioral probes for the standalone A9 reward arm."""
+"""DEPRECATED: Gold-free behavioral probes for the standalone A9 reward arm.
+
+This module implements the behavioral-probe A9 verifier (A9-behavioral-v1).
+The current A9 arm uses certificate-grounded verification (recipes/hotpotqa_a9/).
+This file is retained for artifact replay and historical reference only.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Standalone AgentFlow for outcome-independent local reasoning RLVR."""
+"""Certificate-grounded AgentFlow for A9 HotpotQA experiments."""
 
 from __future__ import annotations
 
@@ -22,29 +22,32 @@ from recipes.hotpotqa.env.search_tool import (
 )
 from recipes.hotpotqa.evidence import EVIDENCE_SCHEMA_VERSION, coerce_bool
 from recipes.hotpotqa.output_parsing import split_native_thinking
-from recipes.hotpotqa_lr.prompts import (
+from recipes.hotpotqa_a9.prompts import (
+    A9_FINAL_TURN_PROMPT,
+    A9_FINISH_AVAILABLE_PROMPT,
+    A9_SYSTEM_PROMPT,
+    A9_USER_PROMPT,
     BOOTSTRAP_TOOL_SCHEMAS,
     FINISH_TOOL_SCHEMAS,
-    LR_FINAL_TURN_PROMPT,
-    LR_FINISH_AVAILABLE_PROMPT,
-    LR_SYSTEM_PROMPT,
-    LR_USER_PROMPT,
     SEARCH_OR_FINISH_TOOL_SCHEMAS,
 )
-from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL, extract_tool_calls, parse_finish
-from recipes.hotpotqa_lr.reward_contract import (
-    LR_CONTRACT_VERSION,
-    LR_REWARD_MODE,
-    PRIMARY_CONTRACT,
-    REWARD_MODE_LR30,
-    REWARD_MODE_TERMINAL_ONLY,
-    resolve_reward_mode,
+from recipes.hotpotqa_a9.protocol import (
+    A9_FINISH_PROTOCOL,
+    parse_finish_call,
+    parse_search_call,
 )
+from recipes.hotpotqa_a9.reward_contract import (
+    A9_CONTRACT_VERSION,
+    CONTRACT_CERT_MIX,
+)
+from recipes.hotpotqa_a9.verifier import (
+    trajectory_audit_record,
+    verify_trajectory,
+)
+from recipes.hotpotqa_lr.protocol import extract_tool_calls
 from recipes.hotpotqa_lr.verifier import (
     artifact_content_sha256,
     artifact_id_for_passage,
-    trajectory_audit_record,
-    verify_trajectory,
 )
 from verl.experimental.agent_loop.agent_loop import DictConfigWrap
 from verl.utils.chat_template import apply_chat_template
@@ -71,15 +74,15 @@ def optimizer_reward_schedule(
     global_step: int,
     is_validation: bool,
     em_warmup_steps: int,
-    reward_mode: str = REWARD_MODE_LR30,
+    terminal_weight: float,
+    process_weight: float,
 ) -> tuple[float, float, str]:
+    """Return (terminal_weight, process_weight, phase_label) for this step."""
     if is_validation:
         return 1.0, 0.0, "validation_terminal_em"
-    if resolve_reward_mode(reward_mode) == REWARD_MODE_TERMINAL_ONLY:
-        return 1.0, 0.0, "terminal_only"
     if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
         return 1.0, 0.0, "em_warmup"
-    return PRIMARY_CONTRACT.terminal_weight, PRIMARY_CONTRACT.process_weight, "lr30"
+    return terminal_weight, process_weight, "certificate"
 
 
 def _format_history(actions: list[str]) -> str:
@@ -88,43 +91,31 @@ def _format_history(actions: list[str]) -> str:
     return "\n".join(f"[Search {index}] {query}" for index, query in enumerate(actions, start=1))
 
 
-def _json_safe(value: Any) -> Any:
-    if value is ...:  # ellipsis from malformed model output
-        return None
-    if isinstance(value, set):
-        return sorted(_json_safe(item) for item in value)
-    if isinstance(value, tuple):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    # Fallback: coerce unknown types (e.g. numpy scalars, Ellipsis in
-    # nested containers that slipped through, etc.) to string so that
-    # json.dumps never raises TypeError.
-    return str(value)
-
-
-def _format_ledger(transitions: list[dict[str, Any]]) -> str:
+def _format_certificate_ledger(transitions: list[dict[str, Any]]) -> str:
+    """Format previously parsed certificates for the prompt."""
     if not transitions:
         return "None"
     lines = []
     for transition in transitions:
-        lines.append(
-            json.dumps(
-                {
-                    "reason_step": _json_safe(transition.get("reason_step")),
-                    "action": {
-                        "type": _json_safe(transition.get("action_type")),
-                        "value": _json_safe(transition.get("action_value")),
-                    },
-                },
-                ensure_ascii=False,
-                sort_keys=True,
+        cert = transition.get("certificate_parsed")
+        action_type = transition.get("action_type", "?")
+        action_value = transition.get("action_value", "?")
+        if cert is not None:
+            lines.append(
+                json.dumps(
+                    {"action": {"type": action_type, "value": action_value}, "certificate": cert},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
             )
-        )
+        else:
+            lines.append(
+                json.dumps(
+                    {"action": {"type": action_type, "value": action_value}, "certificate": None},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
     return "\n".join(lines)
 
 
@@ -159,9 +150,9 @@ def _format_passages(
     return "\n".join(lines), artifacts
 
 
-@register("hotpotqa_local_reasoning_agent")
-class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
-    """Four-turn HotpotQA flow with a fixed three-transition reward horizon."""
+@register("hotpotqa_certificate_agent")
+class HotpotQACertificateAgentFlow(AgentFlowBase):
+    """Four-turn HotpotQA flow with certificate-grounded process reward."""
 
     def __init__(
         self,
@@ -186,16 +177,11 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         )
         self.max_steps = int(kwargs.get("max_steps", 4))
         self.max_parallel_calls = int(kwargs.get("max_parallel_calls", 1))
-        self.reward_horizon = int(kwargs.get("reward_horizon", PRIMARY_CONTRACT.reward_horizon))
-        self.reward_mode = resolve_reward_mode(
-            kwargs.get("reward_mode", os.environ.get("HOTPOTQA_LR_REWARD_MODE", LR_REWARD_MODE))
-        )
+        self.reward_horizon = int(kwargs.get("reward_horizon", CONTRACT_CERT_MIX.reward_horizon))
+        self.contract = CONTRACT_CERT_MIX
         self.em_warmup_steps = _coerce_nonnegative_int(
-            kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_LR_EM_WARMUP_STEPS", 0)),
+            kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_A9_EM_WARMUP_STEPS", 100)),
             name="em_warmup_steps",
-        )
-        self.dependency_taint_gamma = float(
-            kwargs.get("dependency_taint_gamma", PRIMARY_CONTRACT.dependency_taint_gamma)
         )
         self.enable_tool_parse_feedback = bool(kwargs.get("enable_tool_parse_feedback", True))
         self.formal_experiment = coerce_bool(
@@ -225,14 +211,8 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             failures.append(f"max_steps={self.max_steps}, expected 4")
         if self.max_parallel_calls != 1:
             failures.append(f"max_parallel_calls={self.max_parallel_calls}, expected 1")
-        if self.reward_horizon != PRIMARY_CONTRACT.reward_horizon:
+        if self.reward_horizon != CONTRACT_CERT_MIX.reward_horizon:
             failures.append(f"reward_horizon={self.reward_horizon}, expected 3")
-        if self.reward_mode == REWARD_MODE_TERMINAL_ONLY and self.em_warmup_steps:
-            failures.append("terminal_only BASE cannot set em_warmup_steps")
-        if self.dependency_taint_gamma != PRIMARY_CONTRACT.dependency_taint_gamma:
-            failures.append(
-                f"dependency_taint_gamma={self.dependency_taint_gamma}, expected 0.3"
-            )
         if self.thinking_mode != "disabled":
             failures.append("thinking must be disabled")
         if not self.search_tool.require_sentence_evidence:
@@ -240,7 +220,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         if self.search_tool.evidence_schema_version != EVIDENCE_SCHEMA_VERSION:
             failures.append("official evidence schema is not active")
         if failures:
-            raise ValueError("A8-LR invariant failure: " + "; ".join(failures))
+            raise ValueError("A9 invariant failure: " + "; ".join(failures))
 
     def _tool_schemas(self, *, bootstrap: bool, final_turn: bool) -> list[dict[str, Any]]:
         if final_turn:
@@ -262,19 +242,19 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         max_chars = self.prompt_length * 3
         while True:
             passage_text, artifacts = _format_passages(passages, max_chars)
-            user_content = LR_USER_PROMPT.format(
+            user_content = A9_USER_PROMPT.format(
                 user_query=question,
                 history_actions=_format_history(actions),
                 passage_list=passage_text,
-                reasoning_ledger=_format_ledger(transitions),
+                certificate_ledger=_format_certificate_ledger(transitions),
                 tool_feedback=feedback.strip() or "None",
             )
             if final_turn:
-                user_content += f"\n\n{LR_FINAL_TURN_PROMPT}"
+                user_content += f"\n\n{A9_FINAL_TURN_PROMPT}"
             elif actions:
-                user_content += f"\n\n{LR_FINISH_AVAILABLE_PROMPT}"
+                user_content += f"\n\n{A9_FINISH_AVAILABLE_PROMPT}"
             messages = [
-                {"role": "system", "content": LR_SYSTEM_PROMPT},
+                {"role": "system", "content": A9_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
             prompt_ids = normalize_token_ids(
@@ -291,7 +271,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 return prompt_ids, user_content, artifacts
             if max_chars <= 400:
                 raise ValueError(
-                    f"A8-LR prompt has {len(prompt_ids)} tokens; limit is {self.prompt_length}"
+                    f"A9 prompt has {len(prompt_ids)} tokens; limit is {self.prompt_length}"
                 )
             max_chars = max(400, int(max_chars * 0.72))
 
@@ -369,11 +349,11 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             "step_kind": step_kind,
             "executed_search_queries": list(actions),
             "search_steps": list(search_steps),
-            "local_reasoning_transitions": list(transitions),
+            "certificate_transitions": list(transitions),
             "qwen_thinking": list(qwen_thinking),
             "thinking_mode": self.thinking_mode,
             "force_first_search": False,
-            "final_answer_protocol": LR_FINISH_PROTOCOL,
+            "final_answer_protocol": A9_FINISH_PROTOCOL,
             "evidence_schema_version": self.search_tool.evidence_schema_version,
             "sample_key": sample_key,
             "base_sample_key": sample_key,
@@ -386,8 +366,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             ),
             "reward_extra_info": {
                 "num_tool_steps": len(actions),
-                "lr_contract_id": LR_CONTRACT_VERSION,
-                "lr_reward_mode": self.reward_mode,
+                "a9_contract_id": A9_CONTRACT_VERSION,
                 "judge_invalid": False,
             },
         }
@@ -401,7 +380,8 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             global_step=global_step,
             is_validation=is_validation,
             em_warmup_steps=self.em_warmup_steps,
-            reward_mode=self.reward_mode,
+            terminal_weight=self.contract.terminal_weight,
+            process_weight=self.contract.process_weight,
         )
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
@@ -466,7 +446,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 )
             response_ids = list(output.token_ids[: self.response_length])
             if not response_ids:
-                raise RuntimeError("vLLM returned an empty A8-LR generation")
+                raise RuntimeError("vLLM returned an empty A9 generation")
             response_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
             if self.thinking_mode == "native":
                 thinking, visible_text, complete = split_native_thinking(response_text)
@@ -476,14 +456,21 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             calls = extract_tool_calls(visible_text) if complete else []
             call = calls[0] if len(calls) == 1 else None
 
-            finish = parse_finish(visible_text) if actions else None
-            terminal = final_turn or (finish is not None and finish.envelope_valid)
+            # ── Finish detection ───────────────────────────────────────────
+            # Parse the finish call if the model has searched at least once.
+            # The key A9 invariant: the answer is always extracted regardless
+            # of whether the certificate parses successfully.
+            finish = parse_finish_call(visible_text) if actions else None
+            terminal = final_turn or (finish is not None and finish.answer is not None)
             if terminal:
-                answer = finish.answer if finish is not None and finish.envelope_valid else None
+                answer = finish.answer if finish is not None else None
                 if answer is not None:
                     transitions.append(
                         {
-                            "reason_step": finish.reason_step,
+                            "certificate": finish.certificate_raw if finish else None,
+                            "certificate_parsed": (
+                                finish.certificate.record() if finish and finish.certificate else None
+                            ),
                             "action_type": "finish",
                             "action_value": answer,
                             "available_artifacts": available_artifacts,
@@ -515,12 +502,10 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 )
                 final_step = await self._postprocess(final_step, **kwargs)
                 terminal_em = float(final_step.reward_score)
-                # Later actions can establish coupling, so replay at terminal and backfill each step.
+                # Verify trajectory and backfill process credit to transition steps.
                 audits = verify_trajectory(
                     transitions,
-                    question=question,
                     reward_horizon=self.reward_horizon,
-                    dependency_taint_gamma=self.dependency_taint_gamma,
                 )
                 trajectory_audit = trajectory_audit_record(audits)
                 local_reward = float(trajectory_audit["local_reward"])
@@ -532,7 +517,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                         step_info = steps[flow_step_index].extra_fields.get("reward_extra_info", {})
                         step_info.update(
                             {
-                                "local_reasoning_step": audit.record(),
+                                "certificate_step_audit": audit.record(),
                                 "raw_local_credit": audit.raw_local_credit,
                                 "weighted_local_credit": weighted_credit,
                                 "optimizer_reward_phase": reward_phase,
@@ -561,11 +546,10 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                         "process_credit_application": "backfill_to_transition_steps",
                         "optimizer_terminal_weight": terminal_weight,
                         "optimizer_process_weight": process_weight,
-                        "lr_em_warmup_steps": self.em_warmup_steps,
-                        "lr_reward_mode": self.reward_mode,
+                        "a9_em_warmup_steps": self.em_warmup_steps,
                         "training_global_step": global_step,
-                        "local_reasoning_audit": trajectory_audit,
-                        "finish_protocol_valid": bool(finish and finish.envelope_valid),
+                        "certificate_audit": trajectory_audit,
+                        "finish_protocol_valid": bool(finish and finish.answer is not None),
                         "minimum_search_requirement_met": bool(actions),
                     }
                 )
@@ -574,15 +558,18 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 self._record_step_timing(metrics, step_metrics)
                 break
 
+            # ── Search detection ───────────────────────────────────────────
+            # The key A9 invariant: the query is always extracted regardless
+            # of whether the certificate parses successfully.
             query = None
-            reason_step: Any = None
+            search_cert_raw: Any = None
+            search_cert_parsed: dict[str, Any] | None = None
             if call is not None and call.get("name") == "search":
-                arguments = call.get("arguments")
-                if isinstance(arguments, Mapping):
-                    raw_query = arguments.get("query")
-                    if isinstance(raw_query, str) and raw_query.strip():
-                        query = raw_query.strip()
-                        reason_step = arguments.get("reason_step")
+                search_audit = parse_search_call(visible_text)
+                query = search_audit.query
+                search_cert_raw = search_audit.certificate_raw
+                if search_audit.certificate is not None:
+                    search_cert_parsed = search_audit.certificate.record()
             if query is not None:
                 with simple_timer("tool_calls", step_metrics):
                     search_step = self._do_search(query, assistant_turn=turn)
@@ -599,7 +586,8 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                 if len(actions) > 1:
                     transitions.append(
                         {
-                            "reason_step": reason_step,
+                            "certificate": search_cert_raw,
+                            "certificate_parsed": search_cert_parsed,
                             "action_type": "search",
                             "action_value": query,
                             "available_artifacts": available_artifacts,
@@ -670,12 +658,17 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         search_step: Mapping[str, Any],
         passages: list[tuple[str, Passage]],
     ) -> None:
+        existing_pids = {p.pid for _, p in passages}
         for record in search_step.get("returned_evidence") or []:
+            pid = int(record["pid"])
+            if pid in existing_pids:
+                continue
+            existing_pids.add(pid)
             passages.append(
                 (
                     query,
                     Passage(
-                        pid=int(record["pid"]),
+                        pid=pid,
                         title=str(record.get("title", "")),
                         text=str(record.get("text", "")),
                         score=float(record.get("score", 0.0)),

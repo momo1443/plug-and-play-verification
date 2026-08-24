@@ -24,6 +24,17 @@ def visible_completion(text: str) -> str:
     return value.strip()
 
 
+def _normalize_literal(obj: Any) -> Any:
+    """Recursively convert sets from ast.literal_eval to sorted lists."""
+    if isinstance(obj, set):
+        return sorted((_normalize_literal(item) for item in obj), key=str)
+    if isinstance(obj, dict):
+        return {str(k): _normalize_literal(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_normalize_literal(item) for item in obj]
+    return obj
+
+
 def _structured(value: str) -> Any:
     raw = value.strip()
     if not raw:
@@ -35,7 +46,8 @@ def _structured(value: str) -> Any:
     if len(raw) > 16_384 or "__" in raw:
         return None
     try:
-        return ast.literal_eval(raw)
+        result = ast.literal_eval(raw)
+        return _normalize_literal(result)
     except (SyntaxError, ValueError):
         return None
 
