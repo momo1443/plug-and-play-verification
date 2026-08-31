@@ -6,9 +6,9 @@ set -euo pipefail
 # target/answer_span}. The verifier checks grounding and coupling only —
 # it does NOT verify selection correctness.
 #
-# Single arm: cert_mix (0.8 EM + 0.2 cert) with 100-step EM warmup.
+# Single arm: cert_mix with 100-step EM warmup and uniform random weights.
 #   Steps   1–100:  1.0 * EM + 0.0 * cert  (cold start / protocol tax control)
-#   Steps 101–1500: 0.8 * EM + 0.2 * cert  (certificate process reward active)
+#   Steps 101–1500: U(0,1) * EM + (1-U(0,1)) * cert  (uniform random per trajectory)
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"

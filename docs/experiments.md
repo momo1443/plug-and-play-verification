@@ -7,7 +7,7 @@ This page summarizes the experimental analysis for Agent-R1. The experiments ask
 
 ## Experimental Setting
 
-We instantiate Agent-R1 with Qwen3-4B on GSM8K, HotpotQA, ALFWorld, and WebShop. These tasks cover arithmetic reasoning with tool interaction, retrieval-based multi-hop question answering, embodied household interaction, and simulated online shopping.
+We instantiate Agent-R1 with Qwen3-4B on GSM8K and HotpotQA. These tasks cover arithmetic reasoning with tool interaction and retrieval-based multi-hop question answering.
 
 For controlled comparisons, GSM8K is used as the main isolation setting. The environment, tool-based interaction format, rollout configuration, and reward definition are fixed, so differences can be attributed more directly to the optimizer or the context-management rule. The reward combines answer accuracy with a format component.
 
@@ -15,23 +15,23 @@ For controlled comparisons, GSM8K is used as the main isolation setting. The env
 
 The table below reports one representative metric for each task. Agent-R1 supports multiple RL methods under the same multi-turn interaction framework.
 
-| Method | GSM8K Acc. (%) | HotpotQA Acc. (%) | ALFWorld SR Seen (%) | ALFWorld SR Unseen (%) | WebShop Score (%) | WebShop SR (%) |
-|---|---:|---:|---:|---:|---:|---:|
-| ReAct | 53.1 | 25.8 | 7.14 | 2.98 | 51.58 | 23.8 |
-| GRPO | **83.3** | **59.4** | **81.29** | **74.58** | 65.83 | 44.2 |
-| PPO | 78.1 | 56.7 | 76.42 | 72.38 | **70.18** | **46.0** |
-| REINFORCE | 78.9 | 52.8 | 73.84 | 69.57 | 63.41 | 41.8 |
-| RLOO | 81.6 | 55.2 | 79.08 | 73.46 | 68.02 | 45.1 |
+| Method | GSM8K Acc. (%) | HotpotQA Acc. (%) |
+|---|---:|---:|
+| ReAct | 53.1 | 25.8 |
+| GRPO | **83.3** | **59.4** |
+| PPO | 78.1 | 56.7 |
+| REINFORCE | 78.9 | 52.8 |
+| RLOO | 81.6 | 55.2 |
 
-All four RL methods outperform the training-free ReAct baseline across these settings. The best optimizer varies by task: GRPO leads on arithmetic reasoning, retrieval QA, and embodied interaction, while PPO is strongest on WebShop. This suggests that Agent-R1 is broad enough to support heterogeneous agent environments while preserving meaningful algorithm-specific behavior.
+All four RL methods outperform the training-free ReAct baseline across these settings. The best optimizer varies by task: GRPO leads on arithmetic reasoning and retrieval QA. This suggests that Agent-R1 is broad enough to support heterogeneous agent environments while preserving meaningful algorithm-specific behavior.
 
 ## Learning Across Tasks
 
-Representative training curves on GSM8K, HotpotQA, and ALFWorld show clear upward trends under the same framework. The learning dynamics differ across tasks: GSM8K improves quickly and stabilizes early, HotpotQA shows slower and more fluctuating gains, and ALFWorld improves in a more stage-wise pattern with late jumps.
+Representative training curves on GSM8K and HotpotQA show clear upward trends under the same framework. The learning dynamics differ across tasks: GSM8K improves quickly and stabilizes early, while HotpotQA shows slower and more fluctuating gains.
 
 This is useful for interpreting Agent-R1 as a framework rather than a single benchmark recipe. The same rollout and training abstraction can transfer across tasks, but each environment still exposes its own optimization dynamics.
 
-<p align="center"><img src="../image/agent-r1-datasets.png" width="900px" alt="Agent-R1 training curves across GSM8K, HotpotQA, and ALFWorld" /></p>
+<p align="center"><img src="../image/agent-r1-datasets.png" width="900px" alt="Agent-R1 training curves across GSM8K and HotpotQA" /></p>
 
 ## Optimizer Comparison on GSM8K
 

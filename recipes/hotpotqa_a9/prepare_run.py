@@ -276,11 +276,14 @@ def main() -> None:
         "reward_contract": {
             "contract_id": A9_CONTRACT_VERSION,
             "formula": (
+                "U(0,1) * terminal_em + (1 - U(0,1)) * local_reward "
+                "(expected: "
                 f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
-                f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
+                f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward)"
             ),
             "terminal_weight": CONTRACT_CERT_MIX.terminal_weight,
             "process_weight": CONTRACT_CERT_MIX.process_weight,
+            "weight_sampling": "uniform_0_1",
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
             "process_is_terminal_em_gated": False,
             "gold_answer_visible_to_verifier": False,
@@ -288,13 +291,10 @@ def main() -> None:
             "verifier_version": VERIFIER_VERSION,
             "certificate_schema_version": CERTIFICATE_SCHEMA_VERSION,
             "schedule": {
-                "type": "em_warmup_then_certificate",
+                "type": "em_warmup_then_certificate_uniform",
                 "em_warmup_steps": args.em_warmup_steps,
                 "warmup_formula": "1.0 * terminal_em + 0.0 * local_reward",
-                "post_warmup_formula": (
-                    f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
-                    f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
-                ),
+                "post_warmup_formula": "U(0,1) * terminal_em + (1 - U(0,1)) * local_reward",
             },
         },
         "actor_contract": {

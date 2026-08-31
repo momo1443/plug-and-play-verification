@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import os
+import random
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,11 +20,8 @@ from recipes.hotpotqa_a9.protocol import (
 )
 from recipes.hotpotqa_a9.reward_contract import (
     CONTRACT_CERT_MIX,
-    CONTRACT_CERT_ONLY,
-    CONTRACT_PROTOCOL_NULL,
-    contract_for_subarm,
-    resolve_subarm,
 )
+from recipes.hotpotqa_a9.agent_flow import optimizer_reward_schedule
 from recipes.hotpotqa_a9.verifier import (
     trajectory_audit_record,
     verify_coupling,
@@ -271,34 +269,103 @@ class RewardContractTest(unittest.TestCase):
         self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.8)
         self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.2)
 
-    def test_protocol_null_weights(self):
-        self.assertAlmostEqual(CONTRACT_PROTOCOL_NULL.terminal_weight, 1.0)
-        self.assertAlmostEqual(CONTRACT_PROTOCOL_NULL.process_weight, 0.0)
+    def test_cert_mix_weights_sum(self):
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight, 1.0, places=10)
 
-    def test_cert_only_weights(self):
-        self.assertAlmostEqual(CONTRACT_CERT_ONLY.terminal_weight, 0.0)
-        self.assertAlmostEqual(CONTRACT_CERT_ONLY.process_weight, 1.0)
 
-    def test_weights_sum_to_one(self):
-        for contract in [CONTRACT_CERT_MIX, CONTRACT_PROTOCOL_NULL, CONTRACT_CERT_ONLY]:
-            self.assertAlmostEqual(contract.terminal_weight + contract.process_weight, 1.0, places=10)
+# -- Uniform Reward Schedule --
 
-    def test_contract_for_subarm(self):
-        self.assertIs(contract_for_subarm("cert_mix"), CONTRACT_CERT_MIX)
-        self.assertIs(contract_for_subarm("protocol_null"), CONTRACT_PROTOCOL_NULL)
-        self.assertIs(contract_for_subarm("cert_only"), CONTRACT_CERT_ONLY)
 
-    def test_resolve_subarm_default(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(resolve_subarm(), "cert_mix")
+class UniformRewardScheduleTest(unittest.TestCase):
+    def test_validation_returns_deterministic(self):
+        tw, pw, phase = optimizer_reward_schedule(
+            global_step=200,
+            is_validation=True,
+            em_warmup_steps=100,
+            terminal_weight=0.8,
+            process_weight=0.2,
+        )
+        self.assertAlmostEqual(tw, 1.0)
+        self.assertAlmostEqual(pw, 0.0)
+        self.assertEqual(phase, "validation_terminal_em")
 
-    def test_resolve_subarm_from_env(self):
-        with patch.dict(os.environ, {"HOTPOTQA_A9_SUBARM": "protocol_null"}, clear=True):
-            self.assertEqual(resolve_subarm(), "protocol_null")
+    def test_warmup_returns_deterministic(self):
+        tw, pw, phase = optimizer_reward_schedule(
+            global_step=50,
+            is_validation=False,
+            em_warmup_steps=100,
+            terminal_weight=0.8,
+            process_weight=0.2,
+        )
+        self.assertAlmostEqual(tw, 1.0)
+        self.assertAlmostEqual(pw, 0.0)
+        self.assertEqual(phase, "em_warmup")
 
-    def test_resolve_subarm_invalid(self):
-        with self.assertRaises(ValueError):
-            resolve_subarm("invalid")
+    def test_certificate_uniform_phase_weights_sum_to_one(self):
+        random.seed(42)
+        for _ in range(1000):
+            tw, pw, phase = optimizer_reward_schedule(
+                global_step=200,
+                is_validation=False,
+                em_warmup_steps=100,
+                terminal_weight=0.8,
+                process_weight=0.2,
+            )
+            self.assertEqual(phase, "certificate_uniform")
+            self.assertAlmostEqual(tw + pw, 1.0, places=10)
+
+    def test_certificate_uniform_terminal_in_range(self):
+        random.seed(42)
+        terminals = []
+        for _ in range(1000):
+            tw, pw, phase = optimizer_reward_schedule(
+                global_step=200,
+                is_validation=False,
+                em_warmup_steps=100,
+                terminal_weight=0.8,
+                process_weight=0.2,
+            )
+            self.assertGreaterEqual(tw, 0.0)
+            self.assertLess(tw, 1.0)
+            self.assertGreater(pw, 0.0)
+            self.assertLessEqual(pw, 1.0)
+            terminals.append(tw)
+        # With 1000 samples from U(0,1), mean should be ~0.5 ± 0.05
+        mean_tw = sum(terminals) / len(terminals)
+        self.assertAlmostEqual(mean_tw, 0.5, delta=0.05)
+
+    def test_certificate_uniform_ignores_contract_weights(self):
+        """The contract terminal_weight/process_weight are NOT used in certificate phase."""
+        random.seed(123)
+        tw1, pw1, _ = optimizer_reward_schedule(
+            global_step=200,
+            is_validation=False,
+            em_warmup_steps=100,
+            terminal_weight=0.8,
+            process_weight=0.2,
+        )
+        # Different contract weights — same seed should give same result
+        random.seed(123)
+        tw2, pw2, _ = optimizer_reward_schedule(
+            global_step=200,
+            is_validation=False,
+            em_warmup_steps=100,
+            terminal_weight=0.5,
+            process_weight=0.5,
+        )
+        self.assertAlmostEqual(tw1, tw2)
+        self.assertAlmostEqual(pw1, pw2)
+
+    def test_no_warmup_goes_straight_to_uniform(self):
+        tw, pw, phase = optimizer_reward_schedule(
+            global_step=1,
+            is_validation=False,
+            em_warmup_steps=0,
+            terminal_weight=0.8,
+            process_weight=0.2,
+        )
+        self.assertEqual(phase, "certificate_uniform")
+        self.assertAlmostEqual(tw + pw, 1.0, places=10)
 
 
 # -- Reward Arm (reward_arm.py) --
@@ -314,14 +381,9 @@ class RewardArmTest(unittest.TestCase):
         })
 
     def test_a9_subarm_contracts(self):
-        for arm, expected_tw, expected_pw in [
-            (RewardArm.A9_CERT_MIX, 0.8, 0.2),
-            (RewardArm.A9_PROTOCOL_NULL, 1.0, 0.0),
-            (RewardArm.A9_CERT_ONLY, 0.0, 1.0),
-        ]:
-            contract = training_reward_contract(arm)
-            self.assertAlmostEqual(contract.terminal_weight, expected_tw)
-            self.assertAlmostEqual(contract.process_weight, expected_pw)
+        contract = training_reward_contract(RewardArm.A9_CERT_MIX)
+        self.assertAlmostEqual(contract.terminal_weight, 0.8)
+        self.assertAlmostEqual(contract.process_weight, 0.2)
 
     def test_a9_no_binary_check(self):
         result = search_step_reward(RewardArm.A9_CERT_MIX, 0.33, is_validation=False)
@@ -339,15 +401,10 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("recipes/hotpotqa_a9/reward_fn.py", shared)
         self.assertIn("A9_CERT_MIX", shared)
 
-    def test_a9_launcher_sets_subarm_env(self):
+    def test_a9_launcher_sets_arm_env(self):
         launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
-        self.assertIn("HOTPOTQA_A9_SUBARM", launcher)
-        self.assertIn("cert_mix", launcher)
-        self.assertNotIn("HOTPOTQA_A9_PROBE_SEED", launcher)
-
-    def test_a9_launcher_accepts_subarms(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
-        self.assertIn("cert_mix|protocol_null|cert_only", launcher)
+        self.assertIn("HOTPOTQA_REWARD_ARM=A9_CERT_MIX", launcher)
+        self.assertIn("HOTPOTQA_A9_EM_WARMUP_STEPS", launcher)
 
 
 if __name__ == "__main__":
