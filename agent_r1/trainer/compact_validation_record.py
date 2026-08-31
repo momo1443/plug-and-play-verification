@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from recipes.hotpotqa.final_answer_protocol import RAW_FINAL_ANSWER_PROTOCOL
+from recipes.hotpotqa_a9.protocol import A9_FINISH_PROTOCOL
 from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL, parse_finish
 
 _USER_QUERY_BLOCK = re.compile(
@@ -56,25 +57,40 @@ def extract_final_answer(
     output_text: str,
     final_answer_protocol: str = RAW_FINAL_ANSWER_PROTOCOL,
 ) -> str | None:
-    """Return the final complete answer tag, or ``None`` for a format failure."""
+    """Return the final complete answer tag, or the full completion as fallback.
+
+    Mirrors the fallback logic in ``summarize_test_accuracy._extract_answer_from_completion``
+    so that models that do not wrap their answer in ``<answer>`` tags still get scored.
+    When *final_answer_protocol* is empty (non-QA environments),
+    returns the full text without attempting tag extraction.
+    """
+    if not final_answer_protocol:
+        return (output_text or "").strip() or None
 
     if final_answer_protocol == LR_FINISH_PROTOCOL:
         finish = parse_finish(output_text)
         return finish.answer if finish.envelope_valid else None
 
+    if final_answer_protocol == A9_FINISH_PROTOCOL:
+        from recipes.hotpotqa_a9.protocol import parse_finish_call as a9_parse_finish
+
+        finish = a9_parse_finish(output_text)
+        return finish.answer if finish.answer is not None else None
+
     text = output_text or ""
-    if "</think>" in text.lower():
-        close_start = text.lower().rfind("</think>")
-        text = text[close_start + len("</think>") :]
+    if "```" in text.lower():
+        close_start = text.lower().rfind("```")
+        text = text[close_start + len("```") :]
     lowered = text.lower()
     close_start = lowered.rfind("</answer>")
-    if close_start < 0:
-        return None
-    open_start = lowered.rfind("<answer>", 0, close_start)
-    if open_start < 0:
-        return None
-    answer_start = open_start + len("<answer>")
-    return text[answer_start:close_start].strip()
+    if close_start >= 0:
+        open_start = lowered.rfind("<answer>", 0, close_start)
+        if open_start >= 0:
+            answer_start = open_start + len("<answer>")
+            return text[answer_start:close_start].strip()
+    # Fallback: return the full (post-thinking) completion so that raw answers
+    # without <answer> tags are still scored by EM / F1.
+    return text.strip()
 
 
 def _to_builtin(value: Any) -> Any:
@@ -126,8 +142,13 @@ def build_validation_record(
     supported_protocols = {
         RAW_FINAL_ANSWER_PROTOCOL,
         LR_FINISH_PROTOCOL,
+        A9_FINISH_PROTOCOL,
     }
-    if normalized_protocol not in supported_protocols:
+    # Allow None / empty string for non-QA environments
+    # that do not use a final-answer protocol.
+    if normalized_protocol in {"None", ""}:
+        normalized_protocol = ""
+    if normalized_protocol and normalized_protocol not in supported_protocols:
         raise ValueError(
             f"Unexpected final-answer protocol {normalized_protocol!r}; "
             f"expected one of {sorted(supported_protocols)!r}"

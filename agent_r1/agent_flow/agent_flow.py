@@ -115,8 +115,8 @@ class AgentFlowStep(BaseModel):
     """Multi-modal data for multi-modal tools."""
     reward_score: Optional[float] = None
     """Reward score for the step."""
-    num_turns: int = 2
-    """Number of chat turns, including user, assistant, tool."""
+    num_turns: int = 0
+    """Number of chat turns, including user, assistant, tool. 0 means unset/unknown."""
     extra_fields: dict[str, Any] = {}
     """Extra fields for dynamic addition."""
 

@@ -42,7 +42,9 @@ elif [[ "$ARM" == A8_LR30* ]]; then
     }
 fi
 if [[ "$ARM" == A9* ]]; then
-    :  # A9 now runs as a single cert-mix arm; no subarm selection needed
+    # A9 uses its own warmup env var; pipe it to the shared LR_EM_WARMUP_STEPS
+    # so preflight/manifest records the correct value.
+    LR_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-100}"
 fi
 
 if [[ "$ARM" == A8_LR* ]]; then

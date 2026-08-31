@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
@@ -77,12 +78,20 @@ def optimizer_reward_schedule(
     terminal_weight: float,
     process_weight: float,
 ) -> tuple[float, float, str]:
-    """Return (terminal_weight, process_weight, phase_label) for this step."""
+    """Return (terminal_weight, process_weight, phase_label) for this step.
+
+    In the certificate phase (post-warmup, non-validation), terminal_weight
+    is sampled uniformly from [0, 1) and process_weight is set to
+    ``1.0 - terminal_weight``.  This stochastic weight assignment replaces
+    the previously fixed 0.8/0.2 split so that each training trajectory
+    receives a random process-vs-terminal balance.
+    """
     if is_validation:
         return 1.0, 0.0, "validation_terminal_em"
     if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
         return 1.0, 0.0, "em_warmup"
-    return terminal_weight, process_weight, "certificate"
+    sampled_terminal = random.random()
+    return sampled_terminal, 1.0 - sampled_terminal, "certificate_uniform"
 
 
 def _format_history(actions: list[str]) -> str:
@@ -383,6 +392,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             terminal_weight=self.contract.terminal_weight,
             process_weight=self.contract.process_weight,
         )
+        weight_sampling = "uniform_0_1" if reward_phase == "certificate_uniform" else "deterministic"
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
             raise ValueError("HotpotQA extra_info must be a mapping")
@@ -523,7 +533,10 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                                 "optimizer_reward_phase": reward_phase,
                                 "optimizer_process_weight": process_weight,
                                 "optimizer_terminal_weight": terminal_weight,
+                                "weight_sampling": weight_sampling,
                                 "training_global_step": global_step,
+                                "a9_process_component_valid": audit.own_valid > 0,
+                                "optimizer_process_component": weighted_credit,
                             }
                         )
                         steps[flow_step_index].extra_fields["reward_extra_info"] = step_info
@@ -546,11 +559,16 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                         "process_credit_application": "backfill_to_transition_steps",
                         "optimizer_terminal_weight": terminal_weight,
                         "optimizer_process_weight": process_weight,
+                        "weight_sampling": weight_sampling,
                         "a9_em_warmup_steps": self.em_warmup_steps,
                         "training_global_step": global_step,
                         "certificate_audit": trajectory_audit,
                         "finish_protocol_valid": bool(finish and finish.answer is not None),
                         "minimum_search_requirement_met": bool(actions),
+                        "a9_process_component_valid": any(
+                            a.own_valid > 0 for a in audits
+                        ),
+                        "optimizer_process_component": weighted_local,
                     }
                 )
                 final_step.extra_fields["reward_extra_info"] = reward_info

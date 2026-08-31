@@ -17,7 +17,7 @@ Unlike single-turn RL pipelines that treat interaction as one growing prompt-res
 ## News
 
 - [2026.05.30] **A substantially revised Agent-R1 technical report is released.** The updated report presents Agent-R1's step-level trajectory representation, flexible context management, and layered abstractions for agentic reinforcement learning. [[Paper](https://arxiv.org/abs/2511.14460)]
-- [2026.05.29] **Agent-R1 integrates [StepPO](https://arxiv.org/abs/2604.18401), expands recipe coverage, and releases processed data.** The framework now includes StepPO-style training support together with recipe integrations for HotpotQA, ALFWorld, WebShop, and academic paper search. Processed datasets are available on [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
+- [2026.05.29] **Agent-R1 integrates [StepPO](https://arxiv.org/abs/2604.18401), expands recipe coverage, and releases processed data.** The framework now includes StepPO-style training support together with recipe integrations for HotpotQA and academic paper search. Processed datasets are available on [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
 - [2026.03.23] **Agent-R1 v0.1.0 is the first official release of the refactored architecture.** It introduces the **Step-level MDP** foundation and new **Layered Abstractions**. The previous implementation is archived on the `legacy` branch.
 - [2026.03.04] **[Claw-R1](https://agentr1.github.io/Claw-R1/) is released.** It extends Agentic RL to general agents such as OpenClaw through a middleware-style design. See [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
 
@@ -129,13 +129,13 @@ Core concepts:
 
 The Agent-R1 report evaluates Qwen3-4B across representative agent scenarios. The table below summarizes the main results; see [Experiments](docs/experiments.md) for the experimental setting, task coverage, optimizer comparison, and context-management analysis.
 
-| Method | GSM8K Acc. (%) | HotpotQA Acc. (%) | ALFWorld SR Seen (%) | ALFWorld SR Unseen (%) | WebShop Score (%) | WebShop SR (%) |
-|---|---:|---:|---:|---:|---:|---:|
-| ReAct | 53.1 | 25.8 | 7.14 | 2.98 | 51.58 | 23.8 |
-| GRPO | **83.3** | **59.4** | **81.29** | **74.58** | 65.83 | 44.2 |
-| PPO | 78.1 | 56.7 | 76.42 | 72.38 | **70.18** | **46.0** |
-| REINFORCE | 78.9 | 52.8 | 73.84 | 69.57 | 63.41 | 41.8 |
-| RLOO | 81.6 | 55.2 | 79.08 | 73.46 | 68.02 | 45.1 |
+| Method | GSM8K Acc. (%) | HotpotQA Acc. (%) |
+|---|---:|---:|
+| ReAct | 53.1 | 25.8 |
+| GRPO | **83.3** | **59.4** |
+| PPO | 78.1 | 56.7 |
+| REINFORCE | 78.9 | 52.8 |
+| RLOO | 81.6 | 55.2 |
 
 ### Training visualization and rollout records
 
