@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed manifest preparation for A9 certificate-grounded runs.
 
-A9 runs as a single cert-mix arm (0.8 terminal EM + 0.2 certificate process)
-with a 100-step EM warmup.  Protocol-null and cert-only sub-arms have been
+A9 runs as a single cert-mix arm (0.4 terminal EM + 0.6 certificate process)
+with a configurable EM warmup.  Protocol-null and cert-only sub-arms have been
 removed.
 """
 
@@ -19,6 +19,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from recipes.hotpotqa.evidence import coerce_bool
 from recipes.hotpotqa_a9.dsl import CERTIFICATE_SCHEMA_VERSION
 from recipes.hotpotqa_a9.prompts import (
     BOOTSTRAP_TOOL_SCHEMAS,
@@ -32,6 +33,7 @@ from recipes.hotpotqa_a9.prompts import (
 from recipes.hotpotqa_a9.reward_contract import (
     A9_CONTRACT_VERSION,
     CONTRACT_CERT_MIX,
+    CONTRACT_FORMAT_STRICT,
 )
 from recipes.hotpotqa_a9.verifier import VERIFIER_VERSION
 
@@ -276,14 +278,15 @@ def main() -> None:
         "reward_contract": {
             "contract_id": A9_CONTRACT_VERSION,
             "formula": (
-                "U(0,1) * terminal_em + (1 - U(0,1)) * local_reward "
-                "(expected: "
                 f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
-                f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward)"
+                f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
             ),
             "terminal_weight": CONTRACT_CERT_MIX.terminal_weight,
             "process_weight": CONTRACT_CERT_MIX.process_weight,
-            "weight_sampling": "uniform_0_1",
+            "weight_sampling": "fixed",
+            "format_gate": CONTRACT_FORMAT_STRICT.format_gate
+            if coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), "HOTPOTQA_A9_FORMAT_GATE")
+            else CONTRACT_CERT_MIX.format_gate,
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
             "process_is_terminal_em_gated": False,
             "gold_answer_visible_to_verifier": False,
@@ -291,10 +294,13 @@ def main() -> None:
             "verifier_version": VERIFIER_VERSION,
             "certificate_schema_version": CERTIFICATE_SCHEMA_VERSION,
             "schedule": {
-                "type": "em_warmup_then_certificate_uniform",
+                "type": "em_warmup_then_certificate_fixed",
                 "em_warmup_steps": args.em_warmup_steps,
                 "warmup_formula": "1.0 * terminal_em + 0.0 * local_reward",
-                "post_warmup_formula": "U(0,1) * terminal_em + (1 - U(0,1)) * local_reward",
+                "post_warmup_formula": (
+                    f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
+                    f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
+                ),
             },
         },
         "actor_contract": {
@@ -303,7 +309,9 @@ def main() -> None:
             "max_agent_flow_turns": 4,
             "verifier_timing": "terminal_trajectory_replay",
             "process_credit_application": "backfill_to_transition_steps",
-            "certificate_parse_failure_blocks_action": False,
+            "certificate_parse_failure_blocks_action": bool(
+                coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), "HOTPOTQA_A9_FORMAT_GATE")
+            ),
             "prompt_sha256": prompt_hashes,
             "tool_schema_sha256": schema_hashes,
         },

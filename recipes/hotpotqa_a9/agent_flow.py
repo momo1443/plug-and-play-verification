@@ -40,6 +40,7 @@ from recipes.hotpotqa_a9.protocol import (
 from recipes.hotpotqa_a9.reward_contract import (
     A9_CONTRACT_VERSION,
     CONTRACT_CERT_MIX,
+    CONTRACT_FORMAT_STRICT,
 )
 from recipes.hotpotqa_a9.verifier import (
     trajectory_audit_record,
@@ -77,21 +78,26 @@ def optimizer_reward_schedule(
     em_warmup_steps: int,
     terminal_weight: float,
     process_weight: float,
+    format_gate: bool = False,
 ) -> tuple[float, float, str]:
     """Return (terminal_weight, process_weight, phase_label) for this step.
 
-    In the certificate phase (post-warmup, non-validation), terminal_weight
-    is sampled uniformly from [0, 1) and process_weight is set to
-    ``1.0 - terminal_weight``.  This stochastic weight assignment replaces
-    the previously fixed 0.8/0.2 split so that each training trajectory
-    receives a random process-vs-terminal balance.
+    Post-warmup behaviour depends on format_gate:
+    - format_gate=False (cert_mix): uses the fixed weights passed via
+      terminal_weight / process_weight (typically 0.4/0.6).
+    - format_gate=True (format_strict): samples w ~ U(0,1) per trajectory,
+      giving terminal_weight=w and process_weight=1-w.  This provides
+      variance that encourages the model to value both signals, while the
+      format gate ensures protocol compliance.
     """
     if is_validation:
         return 1.0, 0.0, "validation_terminal_em"
     if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
         return 1.0, 0.0, "em_warmup"
-    sampled_terminal = random.random()
-    return sampled_terminal, 1.0 - sampled_terminal, "certificate_uniform"
+    if format_gate:
+        w = random.random()
+        return w, 1.0 - w, "certificate_uniform"
+    return terminal_weight, process_weight, "certificate_fixed"
 
 
 def _format_history(actions: list[str]) -> str:
@@ -189,9 +195,17 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
         self.reward_horizon = int(kwargs.get("reward_horizon", CONTRACT_CERT_MIX.reward_horizon))
         self.contract = CONTRACT_CERT_MIX
         self.em_warmup_steps = _coerce_nonnegative_int(
-            kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_A9_EM_WARMUP_STEPS", 100)),
+            kwargs.get("em_warmup_steps", os.environ.get("HOTPOTQA_A9_EM_WARMUP_STEPS", 50)),
             name="em_warmup_steps",
         )
+        self.format_penalty = float(
+            kwargs.get("format_penalty",
+                       os.environ.get("HOTPOTQA_A9_FORMAT_PENALTY", 0.1))
+        )
+        self.contract = CONTRACT_FORMAT_STRICT if coerce_bool(
+            os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"),
+            name="HOTPOTQA_A9_FORMAT_GATE",
+        ) else CONTRACT_CERT_MIX
         self.enable_tool_parse_feedback = bool(kwargs.get("enable_tool_parse_feedback", True))
         self.formal_experiment = coerce_bool(
             os.environ.get("HOTPOTQA_FORMAL_EXPERIMENT", True),
@@ -352,6 +366,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
         gold_evidence_ids: tuple[str, ...],
         unresolved_gold_facts: tuple[dict[str, Any], ...],
         covered: set[str],
+        is_validation: bool = False,
     ) -> dict[str, Any]:
         return {
             "anchor_obs": anchor_obs,
@@ -373,10 +388,12 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             "evidence_metrics": self._evidence_metrics(
                 search_steps, gold_evidence_ids, unresolved_gold_facts, covered
             ),
+            "_agent_r1_is_validation": is_validation,
             "reward_extra_info": {
                 "num_tool_steps": len(actions),
                 "a9_contract_id": A9_CONTRACT_VERSION,
                 "judge_invalid": False,
+                "a9_format_invalid": False,
             },
         }
 
@@ -391,8 +408,9 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             em_warmup_steps=self.em_warmup_steps,
             terminal_weight=self.contract.terminal_weight,
             process_weight=self.contract.process_weight,
+            format_gate=self.contract.format_gate,
         )
-        weight_sampling = "uniform_0_1" if reward_phase == "certificate_uniform" else "deterministic"
+        weight_sampling = "uniform_0_1" if reward_phase == "certificate_uniform" else "fixed"
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
             raise ValueError("HotpotQA extra_info must be a mapping")
@@ -508,6 +526,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                         gold_evidence_ids=gold_evidence_ids,
                         unresolved_gold_facts=unresolved_gold_facts,
                         covered=covered_gold,
+                        is_validation=is_validation,
                     ),
                 )
                 final_step = await self._postprocess(final_step, **kwargs)
@@ -572,6 +591,22 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     }
                 )
                 final_step.extra_fields["reward_extra_info"] = reward_info
+                # ── format_gate: zero all reward when finish is missing ────
+                # If format_gate is enabled and the model failed to produce a
+                # valid finish tool call (answer is None), zero out reward for
+                # every step in the trajectory so the model learns that it MUST
+                # write a compliant finish call to earn any credit.  Suppressed
+                # during EM warmup to avoid cold-start deadlock.
+                format_gate_active = (
+                    self.contract.format_gate
+                    and reward_phase != "em_warmup"
+                    and (finish is None or finish.answer is None)
+                )
+                if format_gate_active:
+                    final_step.reward_score = 0.0
+                    for step in steps:
+                        step.reward_score = 0.0
+                    reward_info["format_gate_triggered"] = True
                 steps.append(final_step)
                 self._record_step_timing(metrics, step_metrics)
                 break
@@ -625,7 +660,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                 response_logprobs=(
                     output.log_probs[: self.response_length] if output.log_probs else None
                 ),
-                reward_score=0.0,
+                reward_score=-self.format_penalty if step_kind == "invalid_tool_call" else 0.0,
                 extra_fields=self._extra_fields(
                     anchor_obs=anchor_obs,
                     step_kind=step_kind,
@@ -639,8 +674,11 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     gold_evidence_ids=gold_evidence_ids,
                     unresolved_gold_facts=unresolved_gold_facts,
                     covered=covered_gold,
+                    is_validation=is_validation,
                 ),
             )
+            if step_kind == "invalid_tool_call":
+                step.extra_fields["reward_extra_info"]["a9_format_invalid"] = True
             steps.append(await self._postprocess(step, **kwargs))
             self._record_step_timing(metrics, step_metrics)
 

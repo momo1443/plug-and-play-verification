@@ -295,6 +295,12 @@ class AgentFlowBase(ABC):
 
     async def _postprocess(self, step: AgentFlowStep, **kwargs) -> _InternalAgentFlowStep:
         step.extra_fields["raw_prompt"] = kwargs["raw_prompt"]
+        # Propagate agent-r1 schedule keys into extra_fields so they reach the
+        # reward function via tool_extra_fields → extra_info.  Without this,
+        # NaiveRewardManager never sees these keys because they only exist at
+        # the top level of non_tensor_batch, which naive.py ignores.
+        step.extra_fields["_agent_r1_global_step"] = kwargs.get("_agent_r1_global_step", -1)
+        step.extra_fields["_agent_r1_is_validation"] = kwargs.get("_agent_r1_is_validation", False)
 
         # TODO(wuxibin): remove padding and use tensordict.
         self.tokenizer.padding_side = "left"
@@ -442,9 +448,11 @@ class AgentFlowBase(ABC):
             mm_token_type_ids = torch.zeros_like(input_ids)
             image_token_id = get_processor_token_id(self.processor, "image")
             video_token_id = get_processor_token_id(self.processor, "video")
-            if image_token_id is not None:
+            has_image_grid = multi_modal_kwargs.get("image_grid_thw") is not None
+            has_video_grid = multi_modal_kwargs.get("video_grid_thw") is not None
+            if image_token_id is not None and has_image_grid:
                 mm_token_type_ids[0][input_ids[0] == image_token_id] = 1
-            if video_token_id is not None:
+            if video_token_id is not None and has_video_grid:
                 mm_token_type_ids[0][input_ids[0] == video_token_id] = 2
             multi_modal_kwargs["mm_token_type_ids"] = mm_token_type_ids
 

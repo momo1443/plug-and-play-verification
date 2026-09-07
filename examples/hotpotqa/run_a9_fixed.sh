@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A9 uniform random weights: terminal_weight ~ U(0,1), process_weight = 1 - terminal_weight
-# 使用 GPU 0,1,4,5,6,7（6 张卡）
+# A9 fixed weights: terminal_weight=0.4, process_weight=0.6
+# Resumes from global_step_150 of the uniform experiment.
+# Uses GPU 0,1,4,5,6,7（6 张卡）
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"
@@ -23,11 +24,15 @@ export HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION=0.25
 export HOTPOTQA_SAVE_FREQ=50
 export HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP=1
 
+# Resume from uniform experiment checkpoint at step 150
+export HOTPOTQA_RESUME_MODE=resume_path
+export HOTPOTQA_RESUME_FROM_PATH="$WORKSPACE_DIR/logs/qwen35-4b_a9_uniform_emwarm100_main30k_n4_1500step_6gpu_vllm025_refkl001_20260902-100414/checkpoints/global_step_150"
+
 # Use local /tmp for Ray (short path to avoid AF_UNIX 107-byte limit)
-export RAY_TMPDIR="/tmp/rwa9uniform$$"
+export RAY_TMPDIR="/tmp/rwa9fixed$$"
 mkdir -p "$RAY_TMPDIR"
 export RAY_TMPDIR
 
-export RUN_ID="${RUN_ID:-qwen35-4b_a9_uniform_emwarm100_main30k_n4_1500step_6gpu_vllm025_refkl001_$(date +%Y%m%d-%H%M%S)}"
+export RUN_ID="${RUN_ID:-qwen35-4b_a9_fixed_tw04_pw06_emwarm50_main30k_n4_1500step_6gpu_vllm025_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
 exec bash "$HERE/run_rlvr.sh"

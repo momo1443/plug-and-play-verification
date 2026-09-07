@@ -363,6 +363,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
         gold_evidence_ids: tuple[str, ...],
         unresolved_gold_facts: tuple[dict[str, Any], ...],
         covered: set[str],
+        is_validation: bool = False,
     ) -> dict[str, Any]:
         return {
             "anchor_obs": anchor_obs,
@@ -384,6 +385,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
             "evidence_metrics": self._evidence_metrics(
                 search_steps, gold_evidence_ids, unresolved_gold_facts, covered
             ),
+            "_agent_r1_is_validation": is_validation,
             "reward_extra_info": {
                 "num_tool_steps": len(actions),
                 "lr_contract_id": LR_CONTRACT_VERSION,
@@ -511,6 +513,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                         gold_evidence_ids=gold_evidence_ids,
                         unresolved_gold_facts=unresolved_gold_facts,
                         covered=covered_gold,
+                        is_validation=is_validation,
                     ),
                 )
                 final_step = await self._postprocess(final_step, **kwargs)
@@ -633,6 +636,7 @@ class HotpotQALocalReasoningAgentFlow(AgentFlowBase):
                     gold_evidence_ids=gold_evidence_ids,
                     unresolved_gold_facts=unresolved_gold_facts,
                     covered=covered_gold,
+                    is_validation=is_validation,
                 ),
             )
             steps.append(await self._postprocess(step, **kwargs))

@@ -47,6 +47,13 @@ def _structured(value: str) -> Any:
         return None
     try:
         result = ast.literal_eval(raw)
+        # ast.literal_eval("4,000") produces a tuple (4, 0) instead of the
+        # intended string "4,000".  Any bare tuple result from literal_eval on
+        # parameter values is almost certainly a misparse — real tuples in tool
+        # arguments come via JSON (which returns a list).  Return the original
+        # string so that the caller keeps the value as-is.
+        if isinstance(result, tuple):
+            return None
         return _normalize_literal(result)
     except (SyntaxError, ValueError):
         return None
@@ -76,7 +83,16 @@ def extract_tool_calls(text: str) -> list[dict[str, Any]]:
                 name = parameter.group(1).strip()
                 raw_value = parameter.group(2).strip()
                 parsed = _structured(raw_value)
-                arguments[name] = raw_value if parsed is None else parsed
+                # For hermes XML parameters, only accept parsed results that
+                # are structured (dict/list); scalars like int/float/bool are
+                # almost always over-parses — tool-call schemas expect strings
+                # for parameters like "answer" and "query", and turning
+                # "1838" into int(1838) breaks isinstance(..., str) checks
+                # downstream.  Nested JSON objects/arrays are preserved.
+                if isinstance(parsed, (dict, list)):
+                    arguments[name] = parsed
+                else:
+                    arguments[name] = raw_value
             calls.append({"name": match.group(1).strip(), "arguments": arguments})
     return calls
 

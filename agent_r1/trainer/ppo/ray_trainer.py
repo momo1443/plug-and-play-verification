@@ -236,7 +236,10 @@ def build_trajectory_dump_entries(
             "score": scores[idx],
         }
         for key, values in aligned_reward_infos.items():
-            step_entry[key] = values[idx]
+            # Skip keys that would overwrite internal fields (e.g. "score")
+            # to prevent reward_extra_info from clobbering step scores.
+            if key not in step_entry:
+                step_entry[key] = values[idx]
 
         grouped_steps[trajectory_uid].append(step_entry)
 
@@ -250,7 +253,7 @@ def build_trajectory_dump_entries(
             "input": first_step["input"],
             "output": last_step["output"],
             "gts": first_step["gts"],
-            "score": sum(step["score"] for step in steps),
+            "score": sum(step["score"] or 0 for step in steps),
             "global_step": global_step,
             # Keep the historical field for downstream readers of old dumps.
             "step": global_step,

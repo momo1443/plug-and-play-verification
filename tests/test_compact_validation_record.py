@@ -1,6 +1,7 @@
 import unittest
 
 from agent_r1.trainer.compact_validation_record import (
+    _lenient_answer_extract,
     build_validation_record,
     extract_final_answer,
     extract_question,
@@ -9,6 +10,7 @@ from agent_r1.trainer.compact_validation_record import (
 from recipes.hotpotqa.final_answer_protocol import RAW_FINAL_ANSWER_PROTOCOL, require_raw_final_only
 from recipes.hotpotqa.output_parsing import split_native_thinking
 from recipes.hotpotqa.reward_fn import _extract_answer_from_solution
+from recipes.hotpotqa_a9.protocol import A9_FINISH_PROTOCOL
 from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL
 
 
@@ -108,8 +110,10 @@ second query
         self.assertEqual(extract_final_answer(output), "visible")
         self.assertEqual(_extract_answer_from_solution(output), "visible")
 
-    def test_missing_complete_answer_is_null(self):
-        self.assertIsNone(extract_final_answer("<answer>truncated"))
+    def test_missing_complete_answer_returns_text(self):
+        # Lenient extraction returns the full text as fallback when there
+        # is no complete <answer>...</answer> pair.
+        self.assertEqual(extract_final_answer("<answer>truncated"), "<answer>truncated")
 
     def test_extracts_local_reasoning_finish_answer(self):
         output = (
@@ -142,6 +146,90 @@ second query
         self.assertEqual(thinking, "unfinished reasoning")
         self.assertEqual(visible, "")
         self.assertFalse(complete)
+
+
+# -- Lenient fallback for A8/A9 protocols --
+
+
+class LenientFallbackTest(unittest.TestCase):
+    """Tests for extract_final_answer falling back to <answer> tags when
+    the A8/A9 finish tool call fails to parse."""
+
+    def test_lr_finish_invalid_envelope_falls_back_to_answer_tag(self):
+        """When LR finish envelope is invalid but <answer> tag exists,
+        extract_final_answer should fall back to the tag."""
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        # Missing reason_step -> envelope_valid=False
+        output = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "American"}}\n'
+            f"{_TOOL_CLOSE}\n"
+            "<answer>American</answer>"
+        )
+        self.assertEqual(
+            extract_final_answer(output, LR_FINISH_PROTOCOL),
+            "American",
+        )
+
+    def test_lr_finish_no_tool_call_falls_back_to_answer_tag(self):
+        """When no finish tool call exists but <answer> tag does,
+        extract_final_answer should fall back to the tag."""
+        output = "<answer>American</answer>"
+        self.assertEqual(
+            extract_final_answer(output, LR_FINISH_PROTOCOL),
+            "American",
+        )
+
+    def test_lr_finish_valid_envelope_not_fallen_back(self):
+        """When finish envelope is valid, its answer should be used directly."""
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        output = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "Paris", '
+            '"reason_step": {"ref": "r1", "op": "extract_answer_candidate", '
+            '"premises": [], "inputs": [], "output": {"answer_candidate": "Paris"}}}}\n'
+            f"{_TOOL_CLOSE}"
+        )
+        self.assertEqual(
+            extract_final_answer(output, LR_FINISH_PROTOCOL),
+            "Paris",
+        )
+
+    def test_a9_finish_no_tool_call_falls_back_to_answer_tag(self):
+        """When no finish tool call exists but <answer> tag does,
+        extract_final_answer should fall back for A9 protocol too."""
+        output = "<answer>American</answer>"
+        self.assertEqual(
+            extract_final_answer(output, A9_FINISH_PROTOCOL),
+            "American",
+        )
+
+    def test_a9_finish_valid_answer_not_fallen_back(self):
+        """When A9 finish call has an answer, it should be used directly."""
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        output = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "Paris", '
+            '"certificate": {"source_id": "passage:1", "support_span": "test", '
+            '"answer_span": "Paris"}}}\n'
+            f"{_TOOL_CLOSE}"
+        )
+        self.assertEqual(
+            extract_final_answer(output, A9_FINISH_PROTOCOL),
+            "Paris",
+        )
+
+    def test_lenient_answer_extract_basic(self):
+        self.assertEqual(_lenient_answer_extract("<answer>X</answer>"), "X")
+
+    def test_lenient_answer_extract_no_tag_returns_text(self):
+        self.assertEqual(_lenient_answer_extract("plain text answer"), "plain text answer")
+
+    def test_lenient_answer_extract_empty_returns_none(self):
+        self.assertIsNone(_lenient_answer_extract(""))
 
 
 if __name__ == "__main__":

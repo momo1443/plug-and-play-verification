@@ -1,9 +1,15 @@
 """Frozen reward-arm semantics for A9 certificate-grounded experiments.
 
-A9 runs as a single arm: cert_mix (0.8 terminal EM + 0.2 certificate process).
-Protocol-null and cert-only sub-arms have been removed; the EM warmup phase
-(steps 1–100) serves as the built-in protocol-tax control by comparing
-against the A1 terminal-only baseline.
+A9 supports two reward composition modes:
+
+1. cert_mix (fixed 0.4/0.6): The fixed 0.4/0.6 split replaces the previous
+   uniform U(0,1) sampling.  The higher process weight ensures the certificate
+   signal remains dominant throughout training.
+
+2. format_strict (uniform U(0,1) + format gate): Per-trajectory random weights
+   w ~ U(0,1) combine terminal EM and certificate process reward.  A format
+   gate zeros ALL reward when the model fails to produce a valid finish tool
+   call, forcing protocol compliance.
 """
 
 from __future__ import annotations
@@ -19,9 +25,13 @@ class CertificateRewardContract:
     process_weight: float
     reward_horizon: int = 3
     final_response_mask: int = 1
+    format_gate: bool = False
 
 
-CONTRACT_CERT_MIX = CertificateRewardContract(terminal_weight=0.8, process_weight=0.2)
+CONTRACT_CERT_MIX = CertificateRewardContract(terminal_weight=0.4, process_weight=0.6)
+CONTRACT_FORMAT_STRICT = CertificateRewardContract(
+    terminal_weight=0.5, process_weight=0.5, format_gate=True,
+)
 
 A9_CONTRACT_VERSION = "hotpotqa-a9-certificate-v1"
 

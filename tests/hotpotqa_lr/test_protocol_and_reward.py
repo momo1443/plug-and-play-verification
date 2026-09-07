@@ -17,13 +17,15 @@ from recipes.hotpotqa_lr.reward_fn import compute_score
 
 class ProtocolAndRewardTest(unittest.TestCase):
     def test_hermes_nested_reason_step_is_parsed(self):
-        completion = """<tool_call>
-<function=finish>
-<parameter=status>answer</parameter>
-<parameter=answer>American</parameter>
-<parameter=reason_step>{"ref":"r1","op":"select_exact_span","premises":[],"inputs":[],"output":{"text":"American"}}</parameter>
-</function>
-</tool_call>"""
+        completion = (
+            "<tool_call>\n"
+            '<function=finish>\n'
+            '<parameter=status>answer</parameter>\n'
+            '<parameter=answer>American</parameter>\n'
+            '<parameter=reason_step>{"ref":"r1","op":"select_exact_span","premises":[],"inputs":[],"output":{"text":"American"}}</parameter>\n'
+            '</function>\n'
+            '</tool_call>'
+        )
         calls = extract_tool_calls(completion)
         self.assertEqual(len(calls), 1)
         self.assertIsInstance(calls[0]["arguments"]["reason_step"], dict)
@@ -95,6 +97,75 @@ class ProtocolAndRewardTest(unittest.TestCase):
         self.assertEqual(
             compute_score("hotpotqa_distractor", "<answer>American</answer>", "American"),
             0.0,
+        )
+
+    # -- Validation-time lenient fallback --
+
+    def test_validation_lenient_fallback_answer_tag(self):
+        """When finish tool call is missing but <answer> tag is present,
+        validation-time scoring should extract the answer leniently."""
+        completion = "<answer>American</answer>"
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            1.0,
+        )
+
+    def test_validation_lenient_fallback_invalid_envelope(self):
+        """When finish tool call has an invalid envelope but <answer> tag
+        is present, validation should still score it."""
+        # Missing reason_step -> envelope_valid=False
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        completion = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "American"}}\n'
+            f"{_TOOL_CLOSE}\n"
+            "<answer>American</answer>"
+        )
+        self.assertFalse(parse_finish(completion).envelope_valid)
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            1.0,
+        )
+
+    def test_training_stays_strict_without_validation_flag(self):
+        """Without _agent_r1_is_validation=True, the strict behaviour is
+        preserved: a missing or invalid finish envelope scores 0."""
+        completion = "<answer>American</answer>"
+        # No extra_info -> training mode
+        self.assertEqual(
+            compute_score("hotpotqa_distractor", completion, "American"),
+            0.0,
+        )
+        # Explicit is_validation=False
+        self.assertEqual(
+            compute_score(
+                "hotpotqa_distractor",
+                completion,
+                "American",
+                extra_info={"_agent_r1_is_validation": False},
+            ),
+            0.0,
+        )
+
+    def test_validation_prefers_finish_answer_over_tag(self):
+        """When a valid finish tool call is present, the answer inside it
+        should be used even during validation (not the <answer> tag)."""
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        completion = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "American", '
+            '"reason_step": {"ref": "r1", "op": "extract_answer_candidate", '
+            '"premises": [], "inputs": [], "output": {"answer_candidate": "American"}}}}\n'
+            f"{_TOOL_CLOSE}"
+        )
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            1.0,
         )
 
 
