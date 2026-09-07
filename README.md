@@ -1,212 +1,198 @@
-<h1 align="center">Agent-R1: Training Powerful LLM Agents with<br>End-to-End Reinforcement Learning</h1>
+# Agentic RLVR
 
-<p align="center">
-  <a href="https://arxiv.org/abs/2511.14460"><img src="https://img.shields.io/badge/Paper-Arxiv-b31b1b?logo=arxiv&logoColor=white" alt="Paper Arxiv"></a>
-  <a href="https://agentr1.github.io/agent-r1/docs/"><img src="https://img.shields.io/badge/Documentation-Agent--R1-526CFE" alt="Documentation"></a>
-  <a href="https://deepwiki.com/AgentR1/Agent-R1"><img src="https://devin.ai/assets/deepwiki-badge.png" alt="Ask DeepWiki.com" height="20"/></a>
-  <a href="https://github.com/AgentR1/Agent-R1/stargazers"><img src="https://img.shields.io/github/stars/AgentR1/Agent-R1" alt="GitHub Repo stars"></a>
-  <a href="https://github.com/AgentR1/Agent-R1/network/members"><img src="https://img.shields.io/github/forks/AgentR1/Agent-R1" alt="GitHub forks"></a>
-</p>
+**Certificate-Grounded Agentic Reinforcement Learning for Verifiable Reasoning**
 
-<p align="center"><img src="./image/logo.png" width="600px" alt="Agent-R1 Logo" /></p>
+A research framework for training tool-using LLM agents to produce **verifiable, certificate-bearing reasoning** through end-to-end reinforcement learning. Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
 
-**Agent-R1** is a unified, modular framework for **Agentic Reinforcement Learning**. It trains multi-step LLM agents through a step-native RL loop, where the model observes an environment, generates an action, receives tool or environment feedback, and continues until the task is solved or terminated.
+---
 
-Unlike single-turn RL pipelines that treat interaction as one growing prompt-response sequence, Agent-R1 models every turn as a **step-level MDP transition**. This makes tool use, environment state, context management, reward assignment, and policy optimization explicit parts of the same training substrate.
+## Research Goal
 
-## News
+Can agentic post-training move verification from a bolted-on test-time procedure into the policy itself? We train tool-using models to make every load-bearing action and answer claim ship with an **explicit, structured certificate** that a cheap deterministic program can check, so certificate-complete behavior becomes the policy's default rather than an occasional result of prompting.
 
-- [2026.05.30] **A substantially revised Agent-R1 technical report is released.** The updated report presents Agent-R1's step-level trajectory representation, flexible context management, and layered abstractions for agentic reinforcement learning. [[Paper](https://arxiv.org/abs/2511.14460)]
-- [2026.05.29] **Agent-R1 integrates [StepPO](https://arxiv.org/abs/2604.18401), expands recipe coverage, and releases processed data.** The framework now includes StepPO-style training support together with recipe integrations for HotpotQA and academic paper search. Processed datasets are available on [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data).
-- [2026.03.23] **Agent-R1 v0.1.0 is the first official release of the refactored architecture.** It introduces the **Step-level MDP** foundation and new **Layered Abstractions**. The previous implementation is archived on the `legacy` branch.
-- [2026.03.04] **[Claw-R1](https://agentr1.github.io/Claw-R1/) is released.** It extends Agentic RL to general agents such as OpenClaw through a middleware-style design. See [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
+The learned behavior should be a **general schema-following and evidence-grounding capability**, including transfer to held-out or previously unseen tool schemas supplied in context — not memorization of one tool name or one benchmark format.
 
-<details>
-<summary><b>Earlier Updates</b></summary>
+### Key Hypotheses
 
-- [2026.01.10] **PaperScout** is released: an autonomous academic paper search agent trained with Agent-R1 and Proximal Sequence Policy Optimization. Read the paper [here](https://arxiv.org/abs/2601.10029).
-- [2025.11.18] The Agent-R1 technical report is released on [arXiv](https://arxiv.org/abs/2511.14460).
-- [2025.05.06] Tool environments are redesigned to support more flexible agent-tool interaction patterns.
-- [2025.05.06] GRPO and REINFORCE training crashes caused by NaN values are fixed. See [issue #30](https://github.com/0russwest0/Agent-R1/issues/30).
-- [2025.04.01] Basic inference scripts and an interactive chat interface are added.
-- [2025.03.18] Multi-modal support is added for vision-language model agents.
-- [2025.03.18] `verl` is moved to a git submodule and Agent-R1 extensions are separated from upstream code.
-- [2025.03.16] Process rewards are supported for per-tool-call feedback.
+1. **Certificate sufficiency**: A deterministic re-executor can reproduce the final answer from emitted evidence artifacts and declared computation alone.
+2. **Verifier demotion**: Post-training should reduce the need for test-time verification, revision, or rejection at matched quality.
+3. **Legibility tax**: Any accuracy, recall, latency, or token-cost loss caused by making behavior checkable should be measured and minimized.
 
-</details>
+---
 
-## Why Agent-R1
+## Core Contributions
 
-Modern LLM infrastructure already has strong serving systems such as vLLM and SGLang, and strong distributed training systems such as DeepSpeed, FSDP, and Megatron-LM. Agentic RL needs to reconnect these two sides into a **rollout -> reward -> replay -> update** loop where the model interacts with tools and environments over multiple turns.
+### Certificate-Grounded Reward (A9)
 
-Agent-R1 is built around three design goals:
+The A9 reward arm composes **terminal task reward** (exact match) with a **deterministic process reward** that audits the agent's certificate trail:
 
-- **Step-level trajectory representation**: each transition stores observation, action, environment feedback, reward, termination state, and next observation while preserving action boundaries and avoiding fragile `Token -> Text -> Token` reconstruction.
-- **Flexible context management**: the environment decides what the model sees next, so history can be appended, truncated, summarized, rewritten, or augmented.
-- **Algorithm-system decoupling**: task workflows, environments, rollout, rewards, advantage estimators, and policy objectives can evolve independently.
+- **Terminal reward**: Did the agent produce the correct answer?
+- **Certificate process reward**: Did each reasoning step produce a verifiable certificate (e.g., numerically checkable equation, retrieved evidence citation)?
 
-<p align="center"><img src="./image/framework.png" width="800px" alt="Agent-R1 Framework" /></p>
+```
+reward = w * terminal_EM + (1-w) * certificate_process_reward
+```
 
-## Core Idea: Step-level MDP
+Two reward contracts are supported:
+- **cert_mix** (fixed 0.4/0.6): Stable process-weight-dominant signal throughout training.
+- **format_strict** (U(0,1) + format gate): Random per-trajectory weights with a hard gate that zeros all reward if the model fails to produce a valid finish tool call.
 
-In multi-turn agent training, the model is not just continuing a token sequence. Each model output can invoke tools, change the environment state, receive external feedback, and shape the next observation. Agent-R1 therefore treats the **agent step** as the basic interaction unit: a step records what the model saw, what action it produced, what feedback and reward the environment returned, and what observation should be exposed next. This step-level trajectory representation keeps rollout, replay, context construction, and credit assignment aligned with real agent decisions, while still allowing token-level policy losses inside each generated action.
+### Deterministic Process Rewards
 
-<p align="center"><img src="./image/step-level-mdp.png" width="800px" alt="Step-level MDP" /></p>
+All process rewards are **deterministic and execution-based** — no trainable reward model or LLM judge required:
+
+| Task | Process Signal | Verification Method |
+|---|---|---|
+| DeepScaler (math) | Per-step equation verification | LaTeX→Python conversion + numerical equality check |
+| DeepMath (math) | Format compliance (`\boxed{}`) | Regex extraction + symbolic equivalence |
+| HotpotQA (multi-hop QA) | Certificate trail audit | Schema validation + evidence provenance + answer traceability |
+
+### Step-Level Causal Advantage
+
+Advantage estimation respects the **step-level MDP**: credit is assigned per agent step (tool call + observation), not per token or per trajectory. This aligns policy gradient signals with the actual decision boundaries that matter for agentic behavior.
+
+---
+
+## Tasks & Recipes
+
+### Math Reasoning
+
+| Recipe | Dataset | Reward | Launch |
+|---|---|---|---|
+| DeepScaler + A9 | DeepScaleR-1.5K | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
+| DeepScaler (baseline) | DeepScaleR-1.5K | EM + format bonus | `examples/deepmath/run_deepscaler.sh` |
+| DeepMath | DeepMath-103K | `\boxed{}` EM + format reward | `examples/deepmath/run_deepmath.sh` |
+| AIME 2025 | AIME 2025 | EM | `examples/deepmath/run_aime2025_a0.sh` |
+
+### Multi-Hop Question Answering
+
+| Recipe | Dataset | Reward | Launch |
+|---|---|---|---|
+| A9 Certificate (HotpotQA) | HotpotQA | Certificate audit + EM | `examples/hotpotqa/run_a9_uniform.sh` |
+| A8-LR (Local Reasoning) | HotpotQA | Local reward + EM | `examples/hotpotqa/run_rlvr.sh` |
+| Validation | HotpotQA | EM only | `examples/hotpotqa_a9/run_validation.sh` |
+
+### Supported Models
+
+- Qwen3-4B / Qwen3.5-4B (primary)
+- Qwen2.5-7B / Qwen2.5-9B
+- LoRA and full fine-tuning supported
+
+---
 
 ## Architecture
 
-Agent-R1 uses layered abstractions so new tasks can reuse the same trainer without rewriting the full RL stack.
+```
+recipes/<task>/
+  base.yaml                          # Hydra config
+  data_preprocess/process_<task>.py  # Dataset preparation
+  <task>_agent_flow.py               # Agent loop & certificate assembly
+  reward_fn.py                        # Deterministic reward computation
+  reward_contract.py                  # Frozen reward-arm semantics
+  prompts.py                          # System/user/tool prompts
+  protocol.py                         # Tool-call parsing
+  verifier.py                         # Certificate verification
+  env/                                # Environment services (optional)
+```
 
-| Layer | Responsibility | When to Use |
-|---|---|---|
-| `AgentFlowBase` | Full control over prompt construction, model calls, branching, context management, and step assembly. | Complex custom agents that do not fit a standard environment loop. |
-| `AgentEnvLoop` | Generic loop connecting model generation with an environment's `reset()` / `step()` interface. | Agent tasks that can be modeled as environment interaction, including traditional RL-style environments. |
-| `AgentEnv` | Task environment interface returning observations, rewards, termination, and metadata. | Implementing the full environment logic for `AgentEnvLoop`. |
-| `ToolEnv` | Built-in environment for standard multi-turn tool calling. | Tool-augmented tasks where you only need to define tools. |
-| `BaseTool` | Standard interface for registering executable tools. | Adding calculators, search tools, APIs, or task-specific checkers. |
+Key design principles:
+- **Algorithm-system decoupling**: Task workflows, rollout, rewards, and policy objectives evolve independently.
+- **Step-level trajectory representation**: Each transition stores observation, action, environment feedback, reward, and termination — preserving action boundaries.
+- **Flexible context management**: The environment decides what the model sees next; history can be appended, truncated, or augmented.
 
-The main loop is:
-
-1. Load a sample containing `prompt`, `agent_name`, `reward_model`, and optional `env_kwargs`.
-2. Create the configured `AgentFlow` and environment.
-3. Generate an action from the current observation.
-4. Parse the action, execute tools or update the environment, and return feedback.
-5. Record the step and continue until `done=True` or `max_steps` is reached.
-6. Convert the structured trace into rewards, advantages, masks, and policy updates.
+---
 
 ## Getting Started
 
-Agent-R1 uses the same environment setup as [verl](https://verl.readthedocs.io/en/latest/start/install.html), and the current version requires `verl==0.7.0`. You only need to clone this repository; there is no separate Agent-R1 installation step.
+### Environment Setup
 
-The recommended path is:
-
-1. Read the [Getting Started](https://agentr1.github.io/Agent-R1/getting-started/) page for the minimal setup flow.
-2. Download the processed data release from [ModelScope](https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data), then place or symlink each task's files to the paths expected by the corresponding recipe.
-3. Use [`examples/gsm8k/run_steppo.sh`](examples/gsm8k/run_steppo.sh) as a sanity check that the environment is wired correctly.
-4. Move to the [Agent Task Tutorial](https://agentr1.github.io/Agent-R1/tutorials/agent-task/) for the minimal GSM8K + Tool example based on `ToolEnv + BaseTool`.
-5. Read [Recipes and Algorithms](https://agentr1.github.io/Agent-R1/tutorials/recipes-and-algorithms/) for the current task integrations and launch-script layout.
-
-Download the processed data with either the ModelScope CLI or git:
+Follow the [veRL installation guide](https://verl.readthedocs.io/en/latest/start/install.html). This project requires `verl==0.7.0`.
 
 ```bash
-pip install modelscope
-modelscope download --dataset Melmaphother/Agent-R1-data --local_dir data/agent-r1-data
+# Clone this repo
+git clone https://github.com/momo1443/agentic-rlvr.git
+cd agentic-rlvr
+
+# Apply patches (if needed for Qwen3.5 or FSDP2)
+python scripts/patch_qwen35_lm_head_device.py
+python scripts/patch_qwen35_rope_device.py
+python scripts/patch_verl_fsdp2_ipc.py
 ```
+
+### Quick Start: DeepScaler with A9 Certificate Reward
 
 ```bash
-git lfs install
-git clone https://www.modelscope.cn/datasets/Melmaphother/Agent-R1-data.git data/agent-r1-data
+# Prepare data
+python -m recipes.deepscaler.data_preprocess.process_deepscaler --local_save_dir ~/data/deepscaler
+
+# Train with certificate-grounded reward
+bash examples/deepmath/run_deepscaler_a9_uniform.sh
 ```
 
-### Stage 1: Sanity Check the Base Training Stack
-
-Use the processed GSM8K files from the data release, or regenerate a minimal GSM8K dataset locally, then run the single-step script:
+### Quick Start: HotpotQA with A9 Certificate Reward
 
 ```bash
-python3 -m recipes.gsm8k.data_preprocess.process_gsm8k --local_save_dir ~/data/gsm8k
-bash examples/gsm8k/run_steppo.sh
+# Prepare data (see recipe for details)
+python -m recipes.hotpotqa.data_preprocess.process_hotpotqa --local_save_dir ~/data/hotpotqa
+
+# Train with certificate audit reward
+bash examples/hotpotqa/run_a9_uniform.sh
 ```
 
-This stage is only a **setup check**. It helps confirm that your environment, model path, dataset path, and training stack are wired correctly.
+---
 
-### Stage 2: Try the Minimal Tool-Calling Example
+## Experimental Arms
 
-GSM8K + Tool is the simplest `ToolEnv + BaseTool` example. Use the processed GSM8K tool files from the data release, or regenerate the tool-augmented dataset locally, then launch the multi-step tool-calling script:
+| Arm | Description | Reward Composition |
+|---|---|---|
+| **A9 cert_mix** | Certificate-grounded, fixed 0.4/0.6 split | 0.4 × EM + 0.6 × process |
+| **A9 format_strict** | Certificate-grounded, random weights + format gate | U(0,1) × EM + (1-U) × process, gated |
+| **A8-LR** | Local reasoning with per-step reward | Local reward + terminal EM |
+| **A0** | Baseline: terminal EM only | EM |
+
+---
+
+## Infrastructure Patches
+
+| Patch | Purpose |
+|---|---|
+| `verl_patches/bucketed_weight_transfer.py` | ZMQ + IPC bucketed weight sync for faster rollout→trainer transfer |
+| `scripts/patch_qwen35_lm_head_device.py` | Fix Qwen3.5 lm_head device placement under FSDP |
+| `scripts/patch_qwen35_rope_device.py` | Fix Qwen3.5 RoPE device placement under FSDP |
+| `scripts/patch_verl_fsdp2_ipc.py` | Patch veRL FSDP2 IPC configuration |
+
+---
+
+## Monitoring
+
+Training runs log to TensorBoard and `rollouts.jsonl`:
 
 ```bash
-python3 -m recipes.gsm8k.data_preprocess.process_gsm8k_tool --local_save_dir ~/data/gsm8k_tool
-bash examples/gsm8k/run_steppo_tool.sh
+tensorboard --logdir <experiment_dir>/tensorboard --host 0.0.0.0 --port 6006
 ```
 
-This path uses the generic `AgentEnvLoop` with the built-in `ToolEnv` and recipe-local `calc_gsm8k_reward` tool. The plain GSM8K script remains a single-turn environment sanity check.
+Validation-only runs produce evaluation metrics without training curves or rollout files.
 
-Core concepts:
-
-- [Step-level MDP](https://agentr1.github.io/Agent-R1/core-concepts/step-level-mdp/)
-- [Layered Abstractions](https://agentr1.github.io/Agent-R1/core-concepts/layered-abstractions/)
-
-## Experimental Snapshot
-
-The Agent-R1 report evaluates Qwen3-4B across representative agent scenarios. The table below summarizes the main results; see [Experiments](docs/experiments.md) for the experimental setting, task coverage, optimizer comparison, and context-management analysis.
-
-| Method | GSM8K Acc. (%) | HotpotQA Acc. (%) |
-|---|---:|---:|
-| ReAct | 53.1 | 25.8 |
-| GRPO | **83.3** | **59.4** |
-| PPO | 78.1 | 56.7 |
-| REINFORCE | 78.9 | 52.8 |
-| RLOO | 81.6 | 55.2 |
-
-### Training visualization and rollout records
-
-Every `agent_r1.trainer.main_agent_ppo` training run automatically enables TensorBoard in addition to its configured loggers. Event files are stored in the experiment directory under `tensorboard/`; start the UI with the command printed at launch, for example:
-
-```bash
-tensorboard --logdir /path/to/experiment/tensorboard --host 0.0.0.0 --port 6006
-```
-
-Training rollouts are appended to one `rollouts.jsonl` file per experiment. Every row carries `global_step`, so steps can be filtered without creating a separate file for each optimizer step. Validation-only runs do not create training curves or rollout files.
-
-## Building a New Agent Task
-
-For a new task, keep the trainer intact and implement the task-specific layers:
-
-```text
-recipes/<task>/
-  base.yaml
-  data_preprocess/process_<task>.py
-  <task>_agent_flow.py
-  reward_fn.py
-  prompts.py
-  utils.py
-  env/                       # optional environment service or wrappers
-```
-
-Typical migration checklist:
-
-- **Data**: emit parquet rows with `prompt`, `reward_model`, `agent_name`, and `env_kwargs`.
-- **Environment / tools**: define how state updates, tool observations, rewards, and termination work.
-- **Agent flow**: connect model actions to the environment loop and expose step records.
-- **Training script**: set paths, rollout steps, batch sizes, estimator, and policy loss through Hydra overrides.
-
-## Documentation
-
-- Project homepage: [https://agentr1.github.io/agent-r1](https://agentr1.github.io/agent-r1)
-- Documentation: [https://agentr1.github.io/agent-r1/docs/](https://agentr1.github.io/agent-r1/docs/)
-
-## Version Guide
-
-- `main` contains the current v0.1.0 architecture based on Step-level MDP and layered abstractions.
-- `legacy` preserves the previous implementation for reference.
-- Use a recent source checkout of `verl` that includes the AgentFlow / async rollout stack required by this repository.
-
-## Awesome Projects Using Agent-R1
-
-- **[TableMind](https://arxiv.org/abs/2509.06278)**: an autonomous programmatic agent for tool-augmented table reasoning.
-- **[PaperScout](https://arxiv.org/abs/2601.10029)**: an autonomous academic paper search agent trained with Agent-R1 and Proximal Sequence Policy Optimization.
-- **[Cast-R1](https://arxiv.org/abs/2602.13802)**: an agentic framework that reformulates time-series forecasting as sequential decision making.
-- **[StepPO](https://arxiv.org/abs/2604.18401)**: Step-Aligned Policy Optimization for Agentic Reinforcement Learning, a step-level Agentic RL method that treats the agent step as the action unit and aligns credit assignment with multi-turn agent decisions.
+---
 
 ## Acknowledgements
 
-This work is conducted at the **State Key Laboratory of Cognitive Intelligence, USTC**. We gratefully acknowledge the ideas and infrastructure from [DeepSeek-R1](https://github.com/deepseek-ai/DeepSeek-R1), [veRL](https://github.com/volcengine/verl), and [RAGEN](https://github.com/ZihanWang314/ragen). We also thank [Prof. Qi Liu](http://staff.ustc.edu.cn/~qiliuql/) and [Prof. Mingyue Cheng](https://mingyue-cheng.github.io/) for their guidance and support.
+This project is built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.com/volcengine/verl), [DeepSeek-R1](https://github.com/deepseek-ai/DeepSeek-R1), and [RAGEN](https://github.com/ZihanWang314/ragen).
+
+---
 
 ## Citation
 
-If you find Agent-R1 useful in your research, please cite:
+If you find this work useful, please cite:
 
 ```bibtex
 @misc{cheng2026agentr1unifiedmodularframework,
-      title={Agent-R1: A Unified and Modular Framework for Agentic Reinforcement Learning}, 
+      title={Agent-R1: A Unified and Modular Framework for Agentic Reinforcement Learning},
       author={Mingyue Cheng and Shuo Yu and Daoyu Wang and Qingchuan Li and Xiaoyu Tao and Jie Ouyang and Yucong Luo and Yitong Zhou and Qi Liu and Enhong Chen},
       year={2026},
       eprint={2511.14460},
       archivePrefix={arXiv},
       primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2511.14460}, 
+      url={https://arxiv.org/abs/2511.14460},
 }
 ```
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=AgentR1/Agent-R1&type=Date)](https://www.star-history.com/#AgentR1/Agent-R1&Date)
