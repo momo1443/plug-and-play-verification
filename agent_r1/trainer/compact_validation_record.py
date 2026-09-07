@@ -53,30 +53,12 @@ def extract_search_queries(output_text: str) -> list[str]:
     return queries
 
 
-def extract_final_answer(
-    output_text: str,
-    final_answer_protocol: str = RAW_FINAL_ANSWER_PROTOCOL,
-) -> str | None:
-    """Return the final complete answer tag, or the full completion as fallback.
+def _lenient_answer_extract(output_text: str) -> str | None:
+    """Extract answer from <answer> tags or return full text as fallback.
 
-    Mirrors the fallback logic in ``summarize_test_accuracy._extract_answer_from_completion``
-    so that models that do not wrap their answer in ``<answer>`` tags still get scored.
-    When *final_answer_protocol* is empty (non-QA environments),
-    returns the full text without attempting tag extraction.
+    Used when the A8/A9 finish tool call fails to parse but the model
+    may still have produced a recognisable answer in free text.
     """
-    if not final_answer_protocol:
-        return (output_text or "").strip() or None
-
-    if final_answer_protocol == LR_FINISH_PROTOCOL:
-        finish = parse_finish(output_text)
-        return finish.answer if finish.envelope_valid else None
-
-    if final_answer_protocol == A9_FINISH_PROTOCOL:
-        from recipes.hotpotqa_a9.protocol import parse_finish_call as a9_parse_finish
-
-        finish = a9_parse_finish(output_text)
-        return finish.answer if finish.answer is not None else None
-
     text = output_text or ""
     if "```" in text.lower():
         close_start = text.lower().rfind("```")
@@ -90,7 +72,44 @@ def extract_final_answer(
             return text[answer_start:close_start].strip()
     # Fallback: return the full (post-thinking) completion so that raw answers
     # without <answer> tags are still scored by EM / F1.
-    return text.strip()
+    return text.strip() or None
+
+
+def extract_final_answer(
+    output_text: str,
+    final_answer_protocol: str = RAW_FINAL_ANSWER_PROTOCOL,
+) -> str | None:
+    """Return the final complete answer tag, or the full completion as fallback.
+
+    Mirrors the fallback logic in ``summarize_test_accuracy._extract_answer_from_completion``
+    so that models that do not wrap their answer in ``<answer>`` tags still get scored.
+    When *final_answer_protocol* is empty (non-QA environments),
+    returns the full text without attempting tag extraction.
+
+    For A8-LR and A9 protocols, falls back to lenient <answer>-tag extraction
+    when the finish tool call fails to parse, ensuring validation EM is not
+    penalised by protocol formatting failures.
+    """
+    if not final_answer_protocol:
+        return (output_text or "").strip() or None
+
+    if final_answer_protocol == LR_FINISH_PROTOCOL:
+        finish = parse_finish(output_text)
+        if finish.envelope_valid:
+            return finish.answer
+        # Lenient fallback: try <answer> tags when finish envelope is invalid.
+        return _lenient_answer_extract(output_text)
+
+    if final_answer_protocol == A9_FINISH_PROTOCOL:
+        from recipes.hotpotqa_a9.protocol import parse_finish_call as a9_parse_finish
+
+        finish = a9_parse_finish(output_text)
+        if finish.answer is not None:
+            return finish.answer
+        # Lenient fallback: try <answer> tags when no finish answer found.
+        return _lenient_answer_extract(output_text)
+
+    return _lenient_answer_extract(output_text)
 
 
 def _to_builtin(value: Any) -> Any:

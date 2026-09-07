@@ -20,6 +20,7 @@ from recipes.hotpotqa_a9.protocol import (
 )
 from recipes.hotpotqa_a9.reward_contract import (
     CONTRACT_CERT_MIX,
+    CONTRACT_FORMAT_STRICT,
 )
 from recipes.hotpotqa_a9.agent_flow import optimizer_reward_schedule
 from recipes.hotpotqa_a9.verifier import (
@@ -266,24 +267,34 @@ class VerifierTest(unittest.TestCase):
 
 class RewardContractTest(unittest.TestCase):
     def test_cert_mix_weights(self):
-        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.8)
-        self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.2)
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.4)
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.6)
 
     def test_cert_mix_weights_sum(self):
         self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight, 1.0, places=10)
 
+    def test_cert_mix_format_gate_off(self):
+        self.assertFalse(CONTRACT_CERT_MIX.format_gate)
 
-# -- Uniform Reward Schedule --
+    def test_format_strict_weights(self):
+        self.assertAlmostEqual(CONTRACT_FORMAT_STRICT.terminal_weight, 0.5)
+        self.assertAlmostEqual(CONTRACT_FORMAT_STRICT.process_weight, 0.5)
+
+    def test_format_strict_format_gate_on(self):
+        self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
 
 
-class UniformRewardScheduleTest(unittest.TestCase):
+# -- Reward Schedule (now fixed weights) --
+
+
+class RewardScheduleTest(unittest.TestCase):
     def test_validation_returns_deterministic(self):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=200,
             is_validation=True,
             em_warmup_steps=100,
-            terminal_weight=0.8,
-            process_weight=0.2,
+            terminal_weight=0.4,
+            process_weight=0.6,
         )
         self.assertAlmostEqual(tw, 1.0)
         self.assertAlmostEqual(pw, 0.0)
@@ -294,27 +305,15 @@ class UniformRewardScheduleTest(unittest.TestCase):
             global_step=50,
             is_validation=False,
             em_warmup_steps=100,
-            terminal_weight=0.8,
-            process_weight=0.2,
+            terminal_weight=0.4,
+            process_weight=0.6,
         )
         self.assertAlmostEqual(tw, 1.0)
         self.assertAlmostEqual(pw, 0.0)
         self.assertEqual(phase, "em_warmup")
 
-    def test_certificate_uniform_phase_weights_sum_to_one(self):
-        random.seed(42)
-        for _ in range(1000):
-            tw, pw, phase = optimizer_reward_schedule(
-                global_step=200,
-                is_validation=False,
-                em_warmup_steps=100,
-                terminal_weight=0.8,
-                process_weight=0.2,
-            )
-            self.assertEqual(phase, "certificate_uniform")
-            self.assertAlmostEqual(tw + pw, 1.0, places=10)
-
-    def test_certificate_uniform_terminal_in_range(self):
+    def test_certificate_uniform_with_format_gate(self):
+        """With format_gate=True, post-warmup uses U(0,1) sampling."""
         random.seed(42)
         terminals = []
         for _ in range(1000):
@@ -322,50 +321,83 @@ class UniformRewardScheduleTest(unittest.TestCase):
                 global_step=200,
                 is_validation=False,
                 em_warmup_steps=100,
-                terminal_weight=0.8,
-                process_weight=0.2,
+                terminal_weight=0.5,
+                process_weight=0.5,
+                format_gate=True,
             )
+            self.assertEqual(phase, "certificate_uniform")
+            self.assertAlmostEqual(tw + pw, 1.0, places=10)
             self.assertGreaterEqual(tw, 0.0)
-            self.assertLess(tw, 1.0)
-            self.assertGreater(pw, 0.0)
-            self.assertLessEqual(pw, 1.0)
+            self.assertLessEqual(tw, 1.0)
             terminals.append(tw)
-        # With 1000 samples from U(0,1), mean should be ~0.5 ± 0.05
         mean_tw = sum(terminals) / len(terminals)
         self.assertAlmostEqual(mean_tw, 0.5, delta=0.05)
 
-    def test_certificate_uniform_ignores_contract_weights(self):
-        """The contract terminal_weight/process_weight are NOT used in certificate phase."""
-        random.seed(123)
-        tw1, pw1, _ = optimizer_reward_schedule(
+    def test_certificate_fixed_without_format_gate(self):
+        """Without format_gate, post-warmup uses fixed weights."""
+        tw, pw, phase = optimizer_reward_schedule(
             global_step=200,
             is_validation=False,
             em_warmup_steps=100,
-            terminal_weight=0.8,
-            process_weight=0.2,
+            terminal_weight=0.4,
+            process_weight=0.6,
+            format_gate=False,
         )
-        # Different contract weights — same seed should give same result
-        random.seed(123)
-        tw2, pw2, _ = optimizer_reward_schedule(
-            global_step=200,
-            is_validation=False,
-            em_warmup_steps=100,
-            terminal_weight=0.5,
-            process_weight=0.5,
-        )
-        self.assertAlmostEqual(tw1, tw2)
-        self.assertAlmostEqual(pw1, pw2)
+        self.assertEqual(phase, "certificate_fixed")
+        self.assertAlmostEqual(tw, 0.4)
+        self.assertAlmostEqual(pw, 0.6)
 
-    def test_no_warmup_goes_straight_to_uniform(self):
+    def test_no_warmup_goes_straight_to_fixed(self):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=1,
             is_validation=False,
             em_warmup_steps=0,
-            terminal_weight=0.8,
-            process_weight=0.2,
+            terminal_weight=0.4,
+            process_weight=0.6,
         )
-        self.assertEqual(phase, "certificate_uniform")
-        self.assertAlmostEqual(tw + pw, 1.0, places=10)
+        self.assertEqual(phase, "certificate_fixed")
+        self.assertAlmostEqual(tw, 0.4)
+        self.assertAlmostEqual(pw, 0.6)
+
+
+# -- Format Gate --
+
+
+class FormatGateTest(unittest.TestCase):
+    """Tests for the format_gate mechanism that zeros all trajectory reward
+    when the model fails to produce a valid finish tool call."""
+
+    def test_format_gate_default_off(self):
+        """By default, format_gate is disabled."""
+        self.assertFalse(CONTRACT_CERT_MIX.format_gate)
+
+    def test_format_gate_strict_on(self):
+        """CONTRACT_FORMAT_STRICT has format_gate enabled."""
+        self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
+
+    def test_format_gate_warmup_exempt(self):
+        """During EM warmup, format_gate should not trigger regardless of
+        finish validity.  Verify via optimizer_reward_schedule returning
+        'em_warmup' phase which the gate checks."""
+        tw, pw, phase = optimizer_reward_schedule(
+            global_step=50,
+            is_validation=False,
+            em_warmup_steps=100,
+            terminal_weight=0.4,
+            process_weight=0.6,
+        )
+        self.assertEqual(phase, "em_warmup")
+
+    def test_format_gate_post_warmup_phase(self):
+        """After warmup, phase is 'certificate_fixed' which the gate allows."""
+        tw, pw, phase = optimizer_reward_schedule(
+            global_step=200,
+            is_validation=False,
+            em_warmup_steps=100,
+            terminal_weight=0.4,
+            process_weight=0.6,
+        )
+        self.assertEqual(phase, "certificate_fixed")
 
 
 # -- Reward Arm (reward_arm.py) --
@@ -387,7 +419,77 @@ class RewardArmTest(unittest.TestCase):
 
     def test_a9_no_binary_check(self):
         result = search_step_reward(RewardArm.A9_CERT_MIX, 0.33, is_validation=False)
-        self.assertAlmostEqual(result, 0.33 * 0.2)
+        self.assertAlmostEqual(result, 0.33 * 0.2)# -- Validation-time Lenient Fallback --
+
+
+class A9LenientFallbackTest(unittest.TestCase):
+    """Tests for A9 compute_score falling back to <answer> tags during
+    validation while remaining strict during training."""
+
+    def test_validation_lenient_fallback_answer_tag(self):
+        """When no finish tool call is present but <answer> tag is,
+        validation-time scoring should extract the answer leniently."""
+        from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
+
+        completion = "<answer>American</answer>"
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            a9_compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            1.0,
+        )
+
+    def test_training_stays_strict_without_validation_flag(self):
+        """Without _agent_r1_is_validation=True, the strict behaviour is
+        preserved: a missing finish tool call scores 0."""
+        from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
+
+        completion = "<answer>American</answer>"
+        # No extra_info -> training mode
+        self.assertEqual(
+            a9_compute_score("hotpotqa_distractor", completion, "American"),
+            0.0,
+        )
+        # Explicit is_validation=False
+        self.assertEqual(
+            a9_compute_score(
+                "hotpotqa_distractor",
+                completion,
+                "American",
+                extra_info={"_agent_r1_is_validation": False},
+            ),
+            0.0,
+        )
+
+    def test_validation_prefers_finish_answer_over_tag(self):
+        """When a valid finish tool call is present, the answer inside it
+        should be used even during validation (not the <answer> tag)."""
+        from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
+
+        _TOOL_OPEN = chr(60) + "tool_call" + chr(62)
+        _TOOL_CLOSE = chr(60) + "/tool_call" + chr(62)
+        completion = (
+            f"{_TOOL_OPEN}\n"
+            '{"name": "finish", "arguments": {"status": "answer", "answer": "American", '
+            '"certificate": {"source_id": "passage:1", "support_span": "test", '
+            '"answer_span": "American"}}}\n'
+            f"{_TOOL_CLOSE}"
+        )
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            a9_compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            1.0,
+        )
+
+    def test_validation_lenient_fallback_wrong_answer(self):
+        """Lenient fallback should still return 0 for wrong answers."""
+        from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
+
+        completion = "<answer>British</answer>"
+        extra_info = {"_agent_r1_is_validation": True}
+        self.assertEqual(
+            a9_compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
+            0.0,
+        )
 
 
 # -- Launcher Integration --
