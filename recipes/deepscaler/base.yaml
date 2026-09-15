@@ -1,0 +1,6 @@
+- name: deepscaler_tool
+  _target_: recipes.deepscaler.AgentEnvLoop
+  env_type: tool
+  tools:
+    - check_deepscaler_answer
+  tool_format: hermes
