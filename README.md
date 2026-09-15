@@ -60,7 +60,7 @@ Advantage estimation respects the **step-level MDP**: credit is assigned per age
 | Recipe | Dataset | Reward | Launch |
 |---|---|---|---|
 | DeepScaler + A9 | DeepScaleR-1.5K | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
-| DeepScaler (baseline) | DeepScaleR-1.5K | EM + format bonus | `examples/deepmath/run_deepscaler.sh` |
+| DeepScaler + ToolEnv | DeepScaleR-1.5K | Candidate-answer feedback + terminal EM | `examples/deepmath/run_deepscaler_tool.sh` |
 | DeepMath | DeepMath-103K | `\boxed{}` EM + format reward | `examples/deepmath/run_deepmath.sh` |
 | AIME 2025 | AIME 2025 | EM | `examples/deepmath/run_aime2025_a0.sh` |
 
