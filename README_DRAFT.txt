@@ -1,168 +1,332 @@
-# Agentic RLVR: Certificate-Grounded Reinforcement Learning for Verifiable Agents
+# Plug-and-Play Verifier for Decoupling Process Reward in Stabilizing Long-Horizon Agentic Reasoning
 
-> Train tool-using language models to emit explicit evidence artifacts and replayable certificates, so that correctness can be checked by deterministic programs instead of being deferred to test-time review.
+> A unified verifier interface that turns domain-specific checks of intermediate artifacts into bounded, step-attributed process rewards, without coupling verification logic to reward composition or policy optimization.
 
-![Agent-R1 training framework](image/framework.png)
+**ICLR 2027 submission (under review)** | **Agent-R1 + veRL** | **GRPO and PPO**
 
-**Figure 1.** Agentic RLVR builds on the Agent-R1 training framework. The policy alternates between reasoning and tool use, receives environment feedback, and is optimized from step-structured trajectories rather than flattened conversations.
+![Plug-and-play verifier framework](image/plug-and-play-verifier.png)
+
+**Figure 1. Overview of the plug-and-play verifier framework.** Intermediate artifacts are extracted at each turn and routed through a unified interface to reusable domain-specific verifiers. The returned process credits are combined with the final outcome reward for policy optimization.
 
 ## Overview
 
-Agentic RLVR studies whether post-training can move verification from a bolted-on test-time procedure into the policy itself. A trained agent should not only produce a plausible final answer; every load-bearing action and answer claim should be accompanied by a structured certificate that a cheap deterministic verifier can inspect or replay.
+Long-horizon agents must preserve useful progress across multiple reasoning steps and tool interactions. Outcome-only reinforcement learning cannot distinguish a partially useful failed trajectory from an entirely unproductive one: both receive the same zero reward. Actor-critic methods can provide denser credit through a learned value function, but that value function predicts return rather than explicitly checking intermediate artifacts.
 
-The central training arm, **A9**, combines task success with domain-specific certificate quality:
+We introduce a **plug-and-play verifier framework** that constructs process supervision by checking intermediate artifacts against task conditions and recorded environment evidence. The framework separates three concerns:
 
-```text
-R_A9(tau) = w * R_task(tau) + (1 - w) * R_cert(tau),  w ~ Uniform(0, 1)
+1. **Process verification:** a domain module extracts and verifies intermediate artifacts.
+2. **Reward composition:** a shared two-stage schedule combines process and outcome rewards.
+3. **Policy optimization:** GRPO or PPO consumes the composed, step-attributed rewards without accessing verifier internals.
+
+Every verifier returns the same bounded credit contract. A search verifier can therefore be replaced by a code, math, multimodal, or alternative learned verifier without changing downstream reward mixing or policy optimization.
+
+## Highlights
+
+- **Unified verification contract.** Every module returns bounded credits, source-step indices, and audit metadata through the same `VerificationResult` interface.
+- **Explicit process supervision.** Intermediate evidence, executions, calculations, and image crops are checked against task conditions and environment records.
+- **Decoupled reward composition.** Verifier implementation details do not leak into the shared reward mixer or trainer.
+- **Group-shared reward mixing.** After an outcome-only warmup, one reproducible `w ~ U(0,1)` is sampled per prompt group and shared across its GRPO rollouts.
+- **Step-causal credit assignment.** Credits are assigned back to the policy steps that produced the verified artifacts before reward-to-go and group-relative normalization.
+- **No judge required by our method.** The main verifier path is deterministic and uses neither gold evidence nor an LLM judge to compute process rewards.
+- **Cross-domain and cross-algorithm results.** The same interface supports QA, code, mathematics, and multimodal reasoning, and improves both GRPO and PPO on HotpotQA.
+
+## Method
+
+![Method overview](image/method-overview.png)
+
+**Figure 2. From sparse outcomes to plug-and-play process verification.** Outcome-only rewards collapse productive and unproductive failures to the same score. Our framework extracts artifacts, applies domain-specific checks behind a common interface, mixes bounded process reward with outcome reward, and performs step-level credit assignment before optimization.
+
+### Problem Setting
+
+For domain `d`, an agent receives input `x ~ D_d` and produces a trajectory of policy actions and environment observations:
+
+```math
+\tau = (a_1, o_1, \ldots, a_{T-1}, o_{T-1}, a_T).
 ```
 
-The first 50 optimizer steps use terminal task reward only for cold-start stabilization. After warmup, one mixing weight is sampled per prompt group and shared by all GRPO rollouts for that prompt. This preserves within-group comparability while exposing the policy to different task/certificate trade-offs during training.
+The final action contains the submitted answer. We define two trajectory-level components:
 
-The current implementation covers four domains:
-
-1. Mathematical reasoning on DeepScaleR.
-2. Multi-hop evidence retrieval on HotpotQA.
-3. Code generation and execution on TACO.
-4. Visual reasoning on Vision-R1.
-
-All A9 process signals are deterministic and self-computable inside the training environment. Gold-derived or LLM-judged signals are retained as baselines or evaluation tools rather than being required by the A9 reward loop.
-
-## Why Certificates?
-
-Outcome-only RLVR can teach a model which final answers are rewarded without teaching it to expose why those answers should be trusted. Free-form chain-of-thought is also an unsuitable verification target: it may be incomplete, unfaithful, or expensive to evaluate.
-
-Agentic RLVR externalizes the load-bearing part of the computation as an artifact:
-
-| Property | Required behavior |
-|---|---|
-| Schema validity | Tool calls and certificates follow an explicit machine-readable contract. |
-| Exact provenance | Evidence is tied to the environment artifact from which it was obtained. |
-| Deterministic replay | A verifier can reproduce the declared computation or execution. |
-| Answer coupling | The final answer is supported by the emitted evidence, not merely accompanied by it. |
-| Fail-closed semantics | Missing, malformed, stale, or unverifiable artifacts receive no certificate credit. |
-| Transfer | The learned behavior follows schemas supplied in context instead of memorizing a tool name. |
-
-The long-term target is **certificate sufficiency**: a deterministic re-executor should be able to recover the final answer from the emitted evidence artifacts and declared computation alone.
-
-## Method Comparison
-
-| Method | Training signal | Process supervision | Deterministic | Replayable | External judge in reward loop |
-|---|---|---:|---:|---:|---:|
-| Terminal GRPO | Final-answer task verifier | No | Yes | Task-dependent | No |
-| LLM-Judge GRPO | Frozen Qwen3.5-9B score | Semantic | No | No | Yes |
-| A9 Agentic RLVR | Task reward + certificate verifier | Structured | Yes | Yes | No |
-
-The frozen 9B judge arm is an important comparison: it tests whether a stronger semantic evaluator can replace hand-specified certificate checks. It is not part of the deterministic A9 mechanism.
-
-## Certificate-Grounded GRPO
-
-For a prompt `x`, GRPO samples a group of trajectories from the current policy:
-
-```text
-tau_1, ..., tau_G ~ pi_theta(. | x)
+```math
+E_d(x, \tau) \in [0,1], \qquad P_d(x, \tau) \in [0,1],
 ```
 
-Each trajectory receives a terminal task score and a certificate score:
+where `E_d` measures final task correctness and `P_d` aggregates verified intermediate progress. A local verification pass establishes only the property checked by that rule; it does not imply that the final answer is correct.
 
-```text
-r_i = w_x * R_task(tau_i) + (1 - w_x) * R_cert(tau_i)
+### Unified Verification Contract
+
+A verifier module consists of an artifact extractor `C_d`, a local verifier `V_d`, and an aggregation rule `omega_d`:
+
+```math
+C_d(x, \tau) = \{c_j\}_{j=1}^{m}, \qquad
+v_j = V_d(c_j; \xi_j) \in [0,1].
 ```
 
-where `w_x` is sampled once for the prompt group after warmup. Group-relative advantages are computed from the mixed rewards:
+The module returns bounded, step-attributed credits:
 
-```text
-A_i = (r_i - mean(r_1, ..., r_G)) / (std(r_1, ..., r_G) + epsilon)
+```math
+\Phi_d(x, \tau; \xi_d)
+= \left(\{(s_j, q_j, \eta_j)\}_{j=1}^{m}, \eta_d\right),
+\qquad q_j \ge 0, \quad \sum_j q_j \le 1.
 ```
 
-The policy uses the clipped GRPO objective with a small reference-policy KL penalty. No critic or learned reward model is required.
+- `s_j` is the policy step that receives the credit.
+- `q_j` is the bounded credit value.
+- `eta_j` and `eta_d` retain credit-level and trajectory-level audit metadata.
+
+The implementation exposes this contract directly:
+
+```python
+VerificationResult(
+    credits=(
+        VerificationCredit(
+            step_index=source_step,
+            score=bounded_score,
+            audit=verification_record,
+        ),
+    ),
+    audit=trajectory_audit,
+)
+```
+
+Shared code reads only the step indices and credit values:
+
+```math
+p_{d,t}(x, \tau) = \sum_{j:s_j=t} q_j,
+\qquad
+P_d(x, \tau) = \sum_{t=1}^{T} p_{d,t}(x, \tau) \in [0,1].
+```
+
+Parsing, duplicate handling, evidence access, local rules, and normalization remain internal to each verifier. Audit metadata is preserved for inspection but does not enter reward composition or policy optimization.
+
+### Two-Stage Reward Schedule
+
+We use 50 outcome-only warmup updates. After warmup, one coefficient is sampled for each optimizer update `k` and prompt group `g`, then shared by all trajectories in that group:
+
+```math
+w_{k,g} \sim \mathcal{U}(0,1).
+```
+
+For trajectory `i`, the training reward is:
+
+```math
+R_{k,i} =
+\begin{cases}
+E_i, & 1 \le k \le 50, \\
+w_{k,g}E_i + (1-w_{k,g})P_i, & k > 50.
+\end{cases}
+```
+
+The implementation derives the pseudorandom weight from a hash of `(global_step, prompt_group_key)`, making the schedule reproducible. Validation always uses `w = 1` and measures final outcome correctness only.
 
 ### Step-Causal Credit Assignment
 
-![Step-level trajectory representation](image/step-level-mdp.png)
+Outcome reward is assigned to the final policy step, while process credits retain the source-step attribution chosen by the verifier:
 
-**Figure 2.** The implementation preserves agent-step boundaries. Credit is attached to the decisions that produced tool calls, evidence artifacts, and final submissions instead of treating a multi-turn interaction as an undifferentiated token stream.
-
-A trajectory is represented as a sequence of environment transitions:
-
-```text
-(state_t, model_action_t, tool_result_t, certificate_t, reward_t)
+```math
+r_{k,i,t}
+= w_{k,g}\mathbf{1}\{t=T_i\}E_i
++ (1-w_{k,g})p_{i,t}.
 ```
 
-The training launchers enable `algorithm.grpo.credit_assignment=step_causal`, which aligns policy-gradient credit with the step-level MDP exposed by Agent-R1.
+The trainer computes undiscounted reward-to-go and normalizes returns across rollouts from the same prompt that reach the same step index. All valid policy tokens generated at a step receive that step's advantage; prompt tokens and environment observations are excluded from the policy surrogate and KL regularizer.
 
-## Supported Domains
+Changing a verifier therefore changes the process signal, while the reward schedule, advantage computation, token masking, and clipped policy objective remain unchanged.
 
-| Domain | Agent interaction | Certificate artifact | Deterministic check | A9 launcher |
+## Domain Verifiers
+
+| Domain | Training data | Evaluation | Intermediate artifact | Local verification |
 |---|---|---|---|---|
-| DeepScaleR | Reason, call calculator-style tools, finish | Parsed equations and declared numeric results | LaTeX-to-expression conversion, numerical equality, final-answer exact match | `examples/deepmath/run_deepscaler_tool_a9.sh` |
-| HotpotQA | Search, inspect evidence, finish | Search/finish records with evidence provenance | Schema audit, document provenance, evidence-answer coupling | `examples/hotpotqa/run_a9_uniform.sh` |
-| TACO | Write, execute, revise, submit code | Code hash, execution records, final submission certificate | Sandboxed replay against developer and private tests | `examples/taco/run_a9_uniform.sh` |
-| Vision-R1 | Inspect image regions, crop, reason, finish | Crop coordinates, image-derived artifacts, answer link | Deterministic artifact construction and visual-certificate audit | `examples/vision_r1/run_a9_uniform.sh` |
+| Mathematical reasoning | DeepScaleR-Preview-Dataset | AIME 2025 | Equations and declared calculations | Arithmetic consistency and final-answer verification |
+| Multi-hop QA | HotpotQA train | HotpotQA validation | Search results, evidence provenance, final claims | Evidence validity, provenance, and action/answer coupling |
+| Code generation | TACO | LiveCodeBench v6 | Code versions and execution records | Artifact lineage, sandboxed execution, and replay |
+| Multimodal reasoning | Vision-R1-RL | MATH-Vision | Image crops and answer-linked visual claims | Crop replay and string-level answer/claim coupling |
 
-### DeepScaleR: Equation Certificates
+All domains use the same verification output type even though their artifact parsers, permitted evidence, checking rules, and aggregation procedures differ.
 
-The math agent emits intermediate equations through a tool interface. The verifier parses supported mathematical expressions, evaluates both sides, and assigns process credit only to equations that are numerically valid. Terminal reward remains strict final-answer exact match.
+### Dataset Links
+
+- [HotpotQA](https://huggingface.co/datasets/hotpotqa/hotpot_qa)
+- [TACO](https://huggingface.co/datasets/BAAI/TACO)
+- [LiveCodeBench](https://huggingface.co/datasets/livecodebench/code_generation_lite)
+- [Vision-R1-RL](https://huggingface.co/datasets/Osilly/Vision-R1-rl)
+- [MATH-Vision](https://huggingface.co/datasets/MathLLMs/MathVision)
+- [DeepScaleR-Preview-Dataset](https://huggingface.co/datasets/agentica-org/DeepScaleR-Preview-Dataset)
+- [AIME 2025](https://huggingface.co/datasets/MathArena/aime_2025)
+
+## Main Results
+
+We train separately in each domain using the first 10,000 examples from its training split. Evaluation reports final task accuracy only. Values in parentheses are absolute improvements over outcome-only GRPO at the same model scale.
+
+| Model / Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Average |
+|---|---:|---:|---:|---:|---:|
+| **Qwen3.5-4B** | | | | | |
+| ReAct | 26.67 | 46.78 | 40.47 | 75.72 | 47.41 |
+| GRPO | 33.33 | 57.73 | 47.96 | 79.80 | 54.71 |
+| GRPO + LLM-as-a-judge | 36.67 | 58.28 | 48.72 | **82.01** | 56.42 |
+| **Ours (verification)** | **40.00 (+6.67)** | **60.18 (+2.45)** | **49.57 (+1.61)** | 81.51 (+1.71) | **57.82 (+3.11)** |
+| **Qwen3.5-9B** | | | | | |
+| ReAct | 36.67 | 52.56 | 49.00 | 79.47 | 54.43 |
+| GRPO | 43.33 | 63.20 | 56.59 | 83.19 | 61.58 |
+| **Ours (verification)** | **46.67 (+3.34)** | **66.67 (+3.47)** | **58.48 (+1.89)** | **84.80 (+1.61)** | **64.16 (+2.58)** |
+
+The verifier framework improves over outcome-only GRPO on all four benchmarks at both model scales. With Qwen3.5-4B, it also exceeds the 9B LLM-judge reward baseline on three of four benchmarks and on average, without requiring an LLM judge in the reward loop.
+
+> These numbers are transcribed from the current ICLR 2027 manuscript draft and should be reported together with the corresponding dataset snapshot, checkpoint, and evaluation configuration.
+
+## Ablations
+
+### Verification Mechanisms on HotpotQA
+
+| Process feedback added to outcome-only GRPO | Accuracy (%) |
+|---|---:|
+| Outcome-only GRPO | 57.73 |
+| + Execution validity | 57.18 |
+| + LLM-as-a-judge | 58.28 |
+| + Our verification | **60.18** |
+| + Gold evidence | 61.40 |
+
+Our verifier is within 1.22 points of gold-evidence matching while requiring neither annotated gold evidence nor an LLM judge at training time.
+
+### Reward Composition on HotpotQA
+
+| Configuration | Accuracy (%) |
+|---|---:|
+| ReAct | 46.78 |
+| Outcome only (GRPO) | 57.73 |
+| Process only | 47.27 |
+| Outcome + process | **61.40** |
+
+Process supervision is most effective as a complement to the final task objective, not as a replacement for it.
+
+### GRPO and PPO
+
+| Algorithm | Outcome only | + Verification | Gain |
+|---|---:|---:|---:|
+| GRPO | 57.73 | 60.18 | +2.45 |
+| PPO | 55.10 | 57.60 | +2.50 |
+
+The same HotpotQA verifier and reward schedule benefit both algorithms, supporting the intended decoupling between verification and policy optimization.
+
+## Models and Training Framework
+
+Experiments use **Qwen3.5-4B** and **Qwen3.5-9B**. The 9B policy is trained with LoRA rank `64` and scaling factor `alpha=64`. The implementation builds on **Agent-R1** and uses **veRL** for reward computation, training, and generation.
+
+Within a domain and model scale, all RL methods share the same initialization, task interface, tools, fine-tuning method, data, and training budget.
+
+| Setting | Value |
+|---|---|
+| Optimizer | AdamW |
+| Learning rate | `1e-6` |
+| Training steps | 500 |
+| LR schedule | Constant; no warmup |
+| Global prompt batch size | 20 |
+| GRPO group size | 4 rollouts |
+| Mini-batch size | 20 prompts |
+| Optimization epochs per rollout | 1 |
+| Sampling | temperature `1.0`, top-p `1.0`, top-k `-1` |
+| Weight decay | `0.01` |
+| Gradient clipping | `1.0` |
+| KL coefficient | `0.001` |
+| Precision | bfloat16 |
+| Random seed | 42 |
+
+Domain-specific context limits:
+
+| Model / Domain | Max prompt | Max completion | Agent turns |
+|---|---:|---:|---:|
+| Qwen3.5-4B / DeepScaleR | 2048 | 4096 | - |
+| Qwen3.5-4B / HotpotQA | 8192 | 1024 | 4 |
+| Qwen3.5-9B LoRA / DeepScaleR | 2048 | 5120 | - |
+
+The manuscript experiments run on one Kubernetes node with **8 x NVIDIA A40 48GB GPUs**, using PyTorch FSDP and vLLM server-mode generation. Reported wall-clock time is approximately 37 hours for 500 training steps at 4B and 80 hours at 9B; evaluation inference takes approximately 15 minutes.
+
+## Repository Structure
 
 ```text
-reason -> calculator/equation action -> verified result -> ... -> finish(answer)
+Agent-R1/
+|-- agent_r1/
+|   |-- verifier/                  # unified credit contract and reward composition
+|   |-- llm_agent/                 # agent rollout and tool integration
+|   `-- trainer/                   # GRPO/PPO and step-causal advantage computation
+|-- recipes/
+|   |-- deepscaler/                # math artifacts and arithmetic verifier
+|   |-- hotpotqa_a9/               # evidence artifacts and QA verifier
+|   |-- taco_a9/                   # code lineage, sandbox, and execution verifier
+|   |-- vision_r1/                 # crop artifacts and multimodal verifier
+|   `-- llm_judge/                 # frozen-judge comparison arm
+|-- examples/
+|   |-- deepmath/                  # DeepScaleR launchers
+|   |-- hotpotqa/                  # HotpotQA launchers
+|   |-- taco/                      # TACO launchers
+|   |-- vision_r1/                 # Vision-R1 launchers
+|   `-- llm_judge/                 # unified 4B actor / 9B judge launcher
+|-- tests/                         # verifier, reward, launcher, and trainer tests
+|-- scripts/                       # runtime compatibility patches
+`-- verl_patches/                  # rollout-to-trainer synchronization support
 ```
 
-This separates a correct final guess from a trajectory whose load-bearing calculations can be checked.
+The shared verifier API is implemented in `agent_r1/verifier/reward.py`. Domain recipes own artifact extraction and local verification; the trainer owns reward-to-go, normalization, and policy optimization.
 
-### HotpotQA: Provenance Certificates
+## Getting Started
 
-The retrieval agent searches a fixed local corpus and must carry evidence provenance into its final response. Certificate checks cover the action schema, source identity, evidence validity, and coupling between retrieved support and the submitted answer.
+### Installation
+
+```bash
+git clone https://github.com/momo1443/agentic-rlvr.git
+cd agentic-rlvr
+```
+
+Follow the official [veRL installation guide](https://verl.readthedocs.io/en/latest/start/install.html) and use `verl==0.7.0`. The runtime also requires compatible versions of PyTorch, CUDA, vLLM, Ray, Transformers, and Flash Attention.
+
+The launchers default to models stored beside the repository:
 
 ```text
-search(query) -> document evidence -> search(query) -> evidence -> finish(answer, citations)
+../models/Qwen3.5-4B
+../models/Qwen3.5-9B
 ```
 
-Because the corpus is snapshot-able, certificate verification is local and deterministic.
+### DeepScaleR: 8 GPUs, 10K Examples, 500 Steps
 
-### TACO: Execution Certificates
-
-The code agent iterates through write, test, revision, and submission steps. The final certificate binds the submitted source to an artifact hash and replayable execution records. Untrusted programs run through a `bubblewrap` sandbox with time limits; model-visible data is separated from runner-only private tests.
-
-```text
-write(code) -> run(public tests) -> revise(code) -> run -> submit(code, execution certificate)
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+DEEPSCALER_TOOL_TRAIN_MAX_SAMPLES=10000 \
+DEEPSCALER_TOOL_TOTAL_STEPS=500 \
+DEEPSCALER_TOOL_MAX_PROMPT_LENGTH=2048 \
+DEEPSCALER_TOOL_MAX_RESPONSE_LENGTH=4096 \
+bash examples/deepmath/run_deepscaler_tool_a9.sh
 ```
 
-The reward contract fails closed when the code hash, execution record, sidecar lookup, or final submission is inconsistent.
+### HotpotQA
 
-### Vision-R1: Visual Evidence Certificates
-
-The visual agent can request deterministic crops and use them as evidence for its answer. The certificate records image-derived artifacts and verifies that the declared visual evidence comes from the supplied image and is coupled to the final answer.
-
-```text
-inspect(image) -> crop(region) -> visual artifact -> ... -> finish(answer, evidence)
+```bash
+HOTPOTQA_TRAIN_MAX_SAMPLES=10000 \
+HOTPOTQA_TOTAL_TRAINING_STEPS=500 \
+bash examples/hotpotqa/run_a9_uniform.sh
 ```
 
-## Reward Arms
+### TACO
 
-| Arm | Purpose | Reward definition |
-|---|---|---|
-| A0 / terminal | Outcome-only baseline | `R_task` |
-| A1 | Strict task baseline for paired comparisons | Domain terminal verifier |
-| A6 / judge | Frozen-Qwen3.5-9B baseline | Judge score with fail-closed parsing |
-| A8-LR | Local reasoning ablation | Local step reward + terminal task reward |
-| A9 cert-mix | Main certificate arm | Warmup: `R_task`; then `w R_task + (1-w) R_cert` |
-| A9 format-strict | Formatting ablation | A9 reward gated by required completion protocol |
-
-Reward-arm behavior is kept in domain-specific contracts and verifiers. Training code consumes the resulting scalar or step-structured scores without embedding domain logic in the optimizer.
-
-## Frozen 9B Judge Baseline
-
-The unified judge launcher trains a Qwen3.5-4B actor while a frozen Qwen3.5-9B model scores trajectories. The actor and judge use disjoint devices: seven GPUs for the actor and one GPU for the judge by default.
-
-The judge returns a structured score from:
-
-```text
-{0.00, 0.25, 0.50, 0.75, 1.00}
+```bash
+TACO_A9_TRAIN_MAX_SAMPLES=10000 \
+TACO_A9_TOTAL_TRAINING_STEPS=500 \
+bash examples/taco/run_a9_uniform.sh
 ```
 
-DeepScaleR, TACO, and Vision-R1 use domain-specific structured rubrics. HotpotQA uses an evidence-coverage rubric. Invalid output, server failure, or schema mismatch fails closed instead of silently granting reward.
+TACO requires prepared model-safe parquet files, a runner-only private-test sidecar and index, and `bubblewrap`. The launcher fails before training if any required artifact is missing.
 
-Run one domain:
+### Vision-R1
+
+```bash
+VISION_R1_TRAIN_MAX_SAMPLES=10000 \
+VISION_R1_TOTAL_TRAINING_STEPS=1250 \
+bash examples/vision_r1/run_a9_uniform.sh
+```
+
+Vision-R1 uses a prompt batch of 8, so 10,000 examples correspond to 1,250 optimizer steps.
+
+## LLM-as-a-Judge Baseline
+
+The comparison arm trains a Qwen3.5-4B actor while a frozen Qwen3.5-9B model scores process quality. By default, GPUs 0-6 serve the actor and GPU 7 serves the judge.
 
 ```bash
 bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
@@ -171,198 +335,22 @@ bash examples/llm_judge/run_grpo_4b_judge_9b.sh taco
 bash examples/llm_judge/run_grpo_4b_judge_9b.sh vision
 ```
 
-Run all four domains sequentially:
+Run all four jobs sequentially:
 
 ```bash
 bash examples/llm_judge/run_grpo_4b_judge_9b.sh all
 ```
 
-Inspect the resolved configuration without launching training:
+Inspect the resolved device and model configuration without launching:
 
 ```bash
 AGENT_R1_JUDGE_CONFIG_ONLY=1 \
-  bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
+bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
 ```
 
-## Training Pipeline
+## Monitoring and Audit Artifacts
 
-```text
-dataset sample
-    |
-    v
-domain prompt + tool schema
-    |
-    v
-G policy rollouts per prompt
-    |
-    +--> tool/environment transitions
-    |        |
-    |        +--> evidence artifacts
-    |        +--> replay records
-    |
-    v
-terminal task verifier --------+
-                               +--> A9 reward mixer
-deterministic certificate -----+        |
-                                        v
-                              step-causal GRPO advantage
-                                        |
-                                        v
-                              Qwen3.5 policy update
-```
-
-## Models and Training Framework
-
-The primary actor is **Qwen3.5-4B**. Selected launchers also support **Qwen3.5-9B** configurations, while the LLM-judge baseline uses a frozen Qwen3.5-9B evaluator. Training and generation are implemented with **Agent-R1**, **veRL 0.7.0**, and **vLLM**.
-
-Current launchers provide:
-
-| Component | Configuration |
-|---|---|
-| Policy optimization | GRPO with step-causal credit assignment |
-| Optional algorithm | PPO through the shared Agent-R1/veRL trainer |
-| Actor optimization | FSDP, AdamW, gradient checkpointing |
-| Generation | Asynchronous vLLM rollout workers |
-| Group size | 4 rollouts per prompt |
-| Actor learning rate | `1e-6` |
-| Reference KL | `0.001`, `low_var_kl` |
-| Sampling | temperature `1.0`, top-p `1.0`, top-k `-1` |
-| Precision | bfloat16-compatible model/runtime configuration |
-| Seed | `42` |
-
-The paper protocol uses the first 10,000 training examples per domain. Because prompt and response lengths differ substantially across math, retrieval, code, and vision, batch size and total optimizer steps are domain-specific.
-
-### Canonical 10K Budget
-
-| Domain | Prompt batch | GRPO group | Optimizer steps | Prompt / completion limit |
-|---|---:|---:|---:|---:|
-| DeepScaleR | 20 | 4 | 500 | 4096 / 2048 tokens in ToolEnv |
-| HotpotQA | 20 | 4 | 500 | 8192 / 1024 tokens |
-| TACO | 20 | 4 | 500 | 8192 / 2048 tokens |
-| Vision-R1 | 8 | 4 | 1250 | 8192 / 2048 tokens |
-
-These are experiment-protocol settings used by the unified 4B-actor/9B-judge launcher. Individual A9 launchers retain configurable pilot defaults; override their environment variables when reproducing the 10K protocol.
-
-## Project Structure
-
-```text
-Agent-R1/
-|-- agent_r1/
-|   |-- llm_agent/                 # agent rollout and tool integration
-|   `-- trainer/                   # GRPO/PPO training entry points
-|-- recipes/
-|   |-- deepscaler/                # math tools, reward arms, equation verifier
-|   |-- hotpotqa/                  # retrieval environment and provenance verifier
-|   |-- taco_a9/                   # code protocol, sandbox, execution verifier
-|   |-- vision_r1/                 # visual artifacts and certificate verifier
-|   |-- mathvision/                # visual-math evaluation support
-|   `-- reward_mixing.py           # shared A9 mixing utilities
-|-- examples/
-|   |-- deepmath/                  # DeepScaleR launchers
-|   |-- hotpotqa/                  # HotpotQA launchers
-|   |-- taco/                      # TACO launchers
-|   |-- vision_r1/                 # Vision-R1 launchers
-|   `-- llm_judge/                 # unified frozen-judge launcher
-|-- scripts/                       # runtime compatibility patches
-|-- tests/                         # unit and contract tests
-`-- verl_patches/                  # rollout/trainer weight-sync support
-```
-
-Each certificate-enabled recipe follows the same separation of concerns:
-
-```text
-agent_flow.py       interaction loop and artifact assembly
-prompts.py          task and tool-schema prompts
-protocol.py / dsl.py
-                    machine-readable action protocol
-verifier.py         deterministic certificate validation
-reward_contract.py  frozen reward semantics
-reward_fn.py        veRL reward entry point
-prepare_run.py      preflight checks and run manifest
-```
-
-## Getting Started
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/momo1443/agentic-rlvr.git
-cd agentic-rlvr
-```
-
-### 2. Prepare the Runtime
-
-Follow the official [veRL installation guide](https://verl.readthedocs.io/en/latest/start/install.html) and use `verl==0.7.0`. The training recipes also require a compatible PyTorch, CUDA, vLLM, Ray, Transformers, and Flash Attention stack.
-
-The launchers default to the following local model layout:
-
-```text
-../models/Qwen3.5-4B
-../models/Qwen3.5-9B
-```
-
-Override model locations when needed:
-
-```bash
-export DEEPSCALER_TOOL_MODEL_PATH=/path/to/Qwen3.5-4B
-export HOTPOTQA_MODEL_PATH=/path/to/Qwen3.5-4B
-export TACO_A9_MODEL_PATH=/path/to/Qwen3.5-4B
-export VISION_R1_MODEL_PATH=/path/to/Qwen3.5-4B
-export AGENT_R1_JUDGE_MODEL=/path/to/Qwen3.5-9B
-```
-
-For Qwen3.5/FSDP2 compatibility in the pinned environment, inspect and apply the repository patches required by your installed package versions:
-
-```bash
-python scripts/patch_qwen35_lm_head_device.py
-python scripts/patch_qwen35_rope_device.py
-python scripts/patch_verl_fsdp2_ipc.py
-```
-
-The patch scripts validate their target code and should not be applied blindly to unrelated package versions.
-
-### 3. Launch A9 Training
-
-DeepScaleR ToolEnv on eight GPUs for a 500-step run:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-DEEPSCALER_TOOL_TRAIN_MAX_SAMPLES=10000 \
-DEEPSCALER_TOOL_TOTAL_STEPS=500 \
-bash examples/deepmath/run_deepscaler_tool_a9.sh
-```
-
-HotpotQA:
-
-```bash
-HOTPOTQA_TRAIN_MAX_SAMPLES=10000 \
-HOTPOTQA_TOTAL_TRAINING_STEPS=500 \
-bash examples/hotpotqa/run_a9_uniform.sh
-```
-
-TACO:
-
-```bash
-TACO_A9_TRAIN_MAX_SAMPLES=10000 \
-TACO_A9_TOTAL_TRAINING_STEPS=500 \
-bash examples/taco/run_a9_uniform.sh
-```
-
-TACO requires prepared model-safe parquet files, a runner-only sidecar and index, and `bubblewrap`. The launcher checks these artifacts before allocating the training job.
-
-Vision-R1:
-
-```bash
-VISION_R1_TRAIN_MAX_SAMPLES=10000 \
-VISION_R1_TOTAL_TRAINING_STEPS=1250 \
-bash examples/vision_r1/run_a9_uniform.sh
-```
-
-Every main launcher validates required inputs before starting optimization. DeepScaleR, HotpotQA, and TACO additionally write a run manifest during preflight.
-
-## Monitoring and Artifacts
-
-Runs write into `../logs/<run-id>/` by default. A typical output directory contains:
+Training outputs are written to `../logs/<run-id>/` by default:
 
 ```text
 <run-id>/
@@ -373,97 +361,65 @@ Runs write into `../logs/<run-id>/` by default. A typical output directory conta
 `-- checkpoints/
 ```
 
-Follow the console log:
-
 ```bash
 tail -f ../logs/<run-id>/train.log
 ```
 
-When TensorBoard logging is enabled by a launcher:
-
-```bash
-tensorboard --logdir ../logs/<run-id>/tensorboard --host 0.0.0.0 --port 6006
-```
-
-The rollout JSONL is part of the audit trail: it preserves tool interactions, reward components, and certificate metadata needed to inspect verifier behavior.
+`rollouts.jsonl` retains tool interactions, component rewards, verifier credits, source-step attribution, and audit metadata. This record is the primary artifact for checking whether a verifier rewarded the intended behavior.
 
 ## Validation
 
-Run the focused contract and reward tests before changing a domain verifier:
+Run verifier and reward-contract tests:
 
 ```bash
+PYTHONPATH=. pytest -q tests/test_verifier_reward.py
 PYTHONPATH=. pytest -q tests/test_deepscaler_tool.py
 PYTHONPATH=. pytest -q tests/test_hotpotqa_a9.py
 PYTHONPATH=. pytest -q tests/test_taco_a9.py
 PYTHONPATH=. pytest -q tests/test_vision_r1.py
 PYTHONPATH=. pytest -q tests/test_cross_domain_llm_judge.py
+PYTHONPATH=. pytest -q tests/test_step_grpo.py
 ```
 
-Run the complete repository suite:
+Run the complete suite:
 
 ```bash
 PYTHONPATH=. pytest -q tests
 ```
 
-Evaluation should jointly report:
+## Limitations
 
-1. Final task quality.
-2. Certificate/schema validity.
-3. Exact provenance and deterministic replay success.
-4. Evidence acquisition quality.
-5. Transfer to held-out tasks and unseen tool schemas.
-6. Legibility tax in accuracy, recall, latency, and token cost.
-7. Verifier demotion at matched task quality.
-
-## Design Principles
-
-### Deterministic Training Signals
-
-A9 uses only signals that can be recomputed from the frozen environment snapshot and the emitted trajectory. Judge-based rewards are isolated as experimental baselines.
-
-### Frozen Reward Contracts
-
-Each domain states exactly which artifacts earn credit. Changes to parsing, replay, or reward composition are covered by contract tests so that a training run cannot silently change scientific meaning.
-
-### Artifact Separation
-
-Private tests, gold-only metadata, and runner-side evidence remain outside model-visible prompts. Certificates reference the results of allowed tool interactions rather than leaking evaluator state.
-
-### Fail-Closed Verification
-
-Ambiguous parsing and incomplete evidence do not receive optimistic credit. This makes verifier failures visible and prevents malformed traces from exploiting permissive fallbacks.
-
-### Honest Result Reporting
-
-This repository provides training and evaluation infrastructure. Empirical claims should be added only with the exact checkpoint, dataset snapshot, reward contract, run manifest, and evaluation command used to obtain them.
-
-## Infrastructure Patches
-
-| Patch | Purpose |
-|---|---|
-| `verl_patches/bucketed_weight_transfer.py` | Bucketed rollout-to-trainer weight synchronization over ZMQ/IPC |
-| `scripts/patch_qwen35_lm_head_device.py` | Qwen3.5 language-model-head placement under distributed training |
-| `scripts/patch_qwen35_rope_device.py` | Qwen3.5 rotary-position device placement |
-| `scripts/patch_verl_fsdp2_ipc.py` | veRL FSDP2 IPC integration for the pinned runtime |
+- Current deterministic verifiers establish local properties such as evidence grounding, arithmetic consistency, artifact lineage, and execution replay; they do not establish the full semantic correctness of every intermediate step.
+- Each domain is trained separately, and current interaction horizons remain shorter than open-ended web or software-engineering tasks.
+- Experiments cover models up to 9B, with the 9B policy trained using LoRA.
+- Learned verifiers and calibrated probabilistic decision models can be added behind the same bounded-credit contract, but are left to future work.
 
 ## Acknowledgements
 
-This project builds on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.com/volcengine/verl), [vLLM](https://github.com/vllm-project/vllm), [DeepSeek-R1](https://github.com/deepseek-ai/DeepSeek-R1), and [RAGEN](https://github.com/ZihanWang314/ragen).
+This implementation builds on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.com/volcengine/verl), and [vLLM](https://github.com/vllm-project/vllm).
 
 ## Citation
 
-If you use the underlying Agent-R1 framework, please cite:
+The paper is currently under double-blind review. A final citation will be added after review. For anonymous artifact references, use:
 
 ```bibtex
-@misc{cheng2026agentr1unifiedmodularframework,
-  title        = {Agent-R1: A Unified and Modular Framework for Agentic Reinforcement Learning},
-  author       = {Mingyue Cheng and Shuo Yu and Daoyu Wang and Qingchuan Li and Xiaoyu Tao and Jie Ouyang and Yucong Luo and Yitong Zhou and Qi Liu and Enhong Chen},
-  year         = {2026},
-  eprint       = {2511.14460},
-  archivePrefix= {arXiv},
-  primaryClass = {cs.CL},
-  url          = {https://arxiv.org/abs/2511.14460}
+@article{anonymous2027plugandplayverifier,
+  title   = {Plug-and-Play Verifier for Decoupling Process Reward in Stabilizing Long-Horizon Agentic Reasoning},
+  author  = {Anonymous Authors},
+  journal = {Under review at ICLR},
+  year    = {2027}
 }
 ```
 
-The citation entry for Agentic RLVR will be added when the corresponding paper is released.
+For the underlying training framework, please also cite:
+
+```bibtex
+@misc{cheng2025agentr1,
+  title         = {Agent-R1: A Unified and Modular Framework for Agentic Reinforcement Learning},
+  author        = {Mingyue Cheng and Shuo Yu and Daoyu Wang and Qingchuan Li and Xiaoyu Tao and Jie Ouyang and Yucong Luo and Yitong Zhou and Qi Liu and Enhong Chen},
+  year          = {2025},
+  eprint        = {2511.14460},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+```
