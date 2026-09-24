@@ -1,0 +1,17 @@
+- name: taco_a9_code_agent
+  _target_: recipes.taco_a9.agent_flow.TacoA9CodeAgentFlow
+  max_steps: 5
+  sidecar_path: ${oc.env:TACO_A9_SIDECAR}
+  sidecar_index_path: ${oc.env:TACO_A9_SIDECAR_INDEX}
+  timeout_seconds: ${oc.env:TACO_A9_TIMEOUT_SECONDS,2}
+  max_code_prompt_chars: ${oc.env:TACO_A9_MAX_CODE_PROMPT_CHARS,12000}
+  terminal_warmup_steps: ${oc.env:TACO_A9_TERMINAL_WARMUP_STEPS,50}
+
+- name: taco_llm_judge_code_agent
+  _target_: recipes.taco_a9.agent_flow.TacoA9CodeAgentFlow
+  max_steps: 5
+  sidecar_path: ${oc.env:TACO_A9_SIDECAR}
+  sidecar_index_path: ${oc.env:TACO_A9_SIDECAR_INDEX}
+  timeout_seconds: ${oc.env:TACO_A9_TIMEOUT_SECONDS,2}
+  max_code_prompt_chars: ${oc.env:TACO_A9_MAX_CODE_PROMPT_CHARS,12000}
+  reward_mode: llm_judge

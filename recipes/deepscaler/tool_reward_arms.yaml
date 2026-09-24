@@ -1,0 +1,16 @@
+- name: deepscaler_tool_a1
+  _target_: recipes.deepscaler.tool_agent_flow.DeepScalerToolRewardAgentFlow
+  reward_mode: terminal_only
+  env_type: tool
+  tools:
+    - check_deepscaler_answer
+  tool_format: qwen35
+
+- name: deepscaler_tool_a9
+  _target_: recipes.deepscaler.tool_agent_flow.DeepScalerToolRewardAgentFlow
+  reward_mode: uniform_equation_process
+  em_warmup_steps: ${oc.env:DEEPSCALER_TOOL_EM_WARMUP_STEPS,50}
+  env_type: tool
+  tools:
+    - check_deepscaler_answer
+  tool_format: qwen35

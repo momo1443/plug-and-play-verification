@@ -1,0 +1,8 @@
+- name: mathvision_react
+  _target_: recipes.mathvision.MathVisionReactAgentFlow
+  env_type: tool
+  tools:
+    - check_deepscaler_answer
+  tools_kwargs: {}
+  tool_format: hermes
+  max_steps: 4

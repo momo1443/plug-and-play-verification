@@ -25,7 +25,6 @@ Recipe code (`recipes/hotpotqa/`):
 - `reward_arm.py` — frozen reward and final-token mask semantics
 - `reward_fn.py` — terminal exact-match scorer
 - `process_verifier.py` — deterministic evidence process reward
-- `a9_behavioral_verifier.py` / `a9_entity_library.json` — **DEPRECATED** A9 counterfactual probe generator (retained for artifact replay; current A9 lives in `recipes/hotpotqa_a9/`)
 - `judge_server.py` — shared frozen-Judge client (local vLLM or remote API) with retries and exact-input cache
 - `final_answer_protocol.py` — raw-final contract for retained arms
 - `prepare_formal_rlvr_run.py` / `validate_formal_a0_artifacts.py` — fail-closed preflight + manifests

@@ -197,8 +197,8 @@ def main() -> None:
         raise ValueError("A8-LR EM warmup steps must be non-negative")
     if reward_mode == REWARD_MODE_TERMINAL_ONLY and args.em_warmup_steps != 0:
         raise ValueError("A8-LR BASE cannot use an EM warmup schedule")
-    if reward_mode == REWARD_MODE_LR30 and args.em_warmup_steps not in {0, 100}:
-        raise ValueError("A8-LR-v2 treatment schedule must be constant LR30 or EM100 then LR30")
+    if reward_mode == REWARD_MODE_LR30 and args.em_warmup_steps not in {0, 50}:
+        raise ValueError("A8-LR-v2 treatment schedule must be constant LR30 or EM50 then LR30")
     if args.gamma != 1.0:
         raise ValueError("Trainer gamma must remain 1.0")
     if args.seed != 42:
@@ -319,7 +319,7 @@ def main() -> None:
             "runtime_reference_run": RUNTIME_REFERENCE_RUN,
             "interaction_semantics": "terminal_trajectory_replay_with_step_credit_backfill",
             "runtime_compatibility": "six_gpu_with_20260814_a8_runtime_shape",
-            "reward_compatibility": "lr30_or_terminal_only_with_optional_em100_schedule",
+            "reward_compatibility": "lr30_or_terminal_only_with_optional_em50_schedule",
             "intentional_v2_differences": [
                 "select_exact_span_not_creditable",
                 "operation_specific_actor_schema",

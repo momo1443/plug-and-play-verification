@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
@@ -14,6 +13,12 @@ from transformers import AutoProcessor, AutoTokenizer
 
 from agent_r1.agent_flow.agent_flow import AgentFlowBase, AgentFlowOutput, AgentFlowStep, register
 from agent_r1.reward_loop.reward_loop import RewardLoopWorker
+from agent_r1.verifier import (
+    UniformRewardSchedule,
+    apply_composed_reward,
+    compose_verification_reward,
+    uniform_reward_schedule,
+)
 from recipes.hotpotqa.env.search_tool import (
     DEFAULT_HOTPOTQA_EMBEDDING_MODEL,
     HotpotQASearchToolLegacy,
@@ -43,8 +48,7 @@ from recipes.hotpotqa_a9.reward_contract import (
     CONTRACT_FORMAT_STRICT,
 )
 from recipes.hotpotqa_a9.verifier import (
-    trajectory_audit_record,
-    verify_trajectory,
+    verify_process,
 )
 from recipes.hotpotqa_lr.protocol import extract_tool_calls
 from recipes.hotpotqa_lr.verifier import (
@@ -60,6 +64,8 @@ from verl.workers.rollout.llm_server import LLMServerClient
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
+_GROUP_WEIGHT_NAMESPACE = b"hotpotqa-a9-group-weight-v1"
+
 
 def _coerce_nonnegative_int(value: Any, *, name: str) -> int:
     try:
@@ -71,33 +77,48 @@ def _coerce_nonnegative_int(value: Any, *, name: str) -> int:
     return parsed
 
 
+def reward_schedule(
+    *,
+    global_step: int,
+    is_validation: bool,
+    em_warmup_steps: int,
+    prompt_group_key: str,
+    process_reward_enabled: bool = True,
+) -> UniformRewardSchedule:
+    if not process_reward_enabled:
+        return UniformRewardSchedule(1.0, 0.0, "terminal_only", "disabled", None)
+    return uniform_reward_schedule(
+        global_step=global_step,
+        is_validation=is_validation,
+        warmup_steps=em_warmup_steps,
+        prompt_group_key=prompt_group_key,
+        namespace=_GROUP_WEIGHT_NAMESPACE,
+        warmup_phase="em_warmup",
+        validation_phase="validation_terminal_em",
+        mixed_phase="certificate_uniform",
+    )
+
+
 def optimizer_reward_schedule(
     *,
     global_step: int,
     is_validation: bool,
     em_warmup_steps: int,
-    terminal_weight: float,
-    process_weight: float,
-    format_gate: bool = False,
+    prompt_group_key: str,
 ) -> tuple[float, float, str]:
     """Return (terminal_weight, process_weight, phase_label) for this step.
 
-    Post-warmup behaviour depends on format_gate:
-    - format_gate=False (cert_mix): uses the fixed weights passed via
-      terminal_weight / process_weight (typically 0.4/0.6).
-    - format_gate=True (format_strict): samples w ~ U(0,1) per trajectory,
-      giving terminal_weight=w and process_weight=1-w.  This provides
-      variance that encourages the model to value both signals, while the
-      format gate ensures protocol compliance.
+    Post-warmup A9 deterministically samples one w ~ U(0, 1) from the optimizer
+    step and prompt-group key. All rollouts for that prompt therefore share the
+    same scalarization while different prompt groups retain varied mixtures.
     """
-    if is_validation:
-        return 1.0, 0.0, "validation_terminal_em"
-    if em_warmup_steps > 0 and 0 < global_step <= em_warmup_steps:
-        return 1.0, 0.0, "em_warmup"
-    if format_gate:
-        w = random.random()
-        return w, 1.0 - w, "certificate_uniform"
-    return terminal_weight, process_weight, "certificate_fixed"
+    schedule = reward_schedule(
+        global_step=global_step,
+        is_validation=is_validation,
+        em_warmup_steps=em_warmup_steps,
+        prompt_group_key=prompt_group_key,
+    )
+    return schedule.terminal_weight, schedule.process_weight, schedule.phase
 
 
 def _format_history(actions: list[str]) -> str:
@@ -200,12 +221,16 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
         )
         self.format_penalty = float(
             kwargs.get("format_penalty",
-                       os.environ.get("HOTPOTQA_A9_FORMAT_PENALTY", 0.1))
+                       os.environ.get("HOTPOTQA_A9_FORMAT_PENALTY", 0.0))
         )
         self.contract = CONTRACT_FORMAT_STRICT if coerce_bool(
             os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"),
             name="HOTPOTQA_A9_FORMAT_GATE",
         ) else CONTRACT_CERT_MIX
+        self.process_reward_enabled = coerce_bool(
+            os.environ.get("HOTPOTQA_A9_PROCESS_REWARD_ENABLED", "true"),
+            name="HOTPOTQA_A9_PROCESS_REWARD_ENABLED",
+        )
         self.enable_tool_parse_feedback = bool(kwargs.get("enable_tool_parse_feedback", True))
         self.formal_experiment = coerce_bool(
             os.environ.get("HOTPOTQA_FORMAL_EXPERIMENT", True),
@@ -402,15 +427,6 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
         question = str(raw_prompt[0]["content"]).strip()
         is_validation = bool(kwargs.get("_agent_r1_is_validation", False))
         global_step = int(kwargs.get("_agent_r1_global_step", -1))
-        terminal_weight, process_weight, reward_phase = optimizer_reward_schedule(
-            global_step=global_step,
-            is_validation=is_validation,
-            em_warmup_steps=self.em_warmup_steps,
-            terminal_weight=self.contract.terminal_weight,
-            process_weight=self.contract.process_weight,
-            format_gate=self.contract.format_gate,
-        )
-        weight_sampling = "uniform_0_1" if reward_phase == "certificate_uniform" else "fixed"
         extra_info = kwargs.get("extra_info") or {}
         if not isinstance(extra_info, Mapping):
             raise ValueError("HotpotQA extra_info must be a mapping")
@@ -433,6 +449,18 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             sample_key = sample.sample_key
             gold_evidence_ids = sample.gold_evidence_ids
             unresolved_gold_facts = sample.unresolved_gold_facts
+
+        schedule = reward_schedule(
+            global_step=global_step,
+            is_validation=is_validation,
+            em_warmup_steps=self.em_warmup_steps,
+            prompt_group_key=sample_key,
+            process_reward_enabled=self.process_reward_enabled,
+        )
+        terminal_weight = schedule.terminal_weight
+        process_weight = schedule.process_weight
+        reward_phase = schedule.phase
+        weight_sampling = schedule.weight_sampling
 
         metrics: dict[str, Any] = {
             "generate_sequences": 0.0,
@@ -531,66 +559,81 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                 )
                 final_step = await self._postprocess(final_step, **kwargs)
                 terminal_em = float(final_step.reward_score)
-                # Verify trajectory and backfill process credit to transition steps.
-                audits = verify_trajectory(
+                final_step.reward_score = 0.0
+                steps.append(final_step)
+
+                verification = verify_process(
                     transitions,
+                    transition_flow_step_indices,
                     reward_horizon=self.reward_horizon,
                 )
-                trajectory_audit = trajectory_audit_record(audits)
-                local_reward = float(trajectory_audit["local_reward"])
-                weighted_local = process_weight * local_reward
-                for audit, flow_step_index in zip(audits, transition_flow_step_indices, strict=True):
-                    weighted_credit = process_weight * audit.raw_local_credit
-                    if flow_step_index < len(steps):
-                        steps[flow_step_index].reward_score = weighted_credit
-                        step_info = steps[flow_step_index].extra_fields.get("reward_extra_info", {})
-                        step_info.update(
-                            {
-                                "certificate_step_audit": audit.record(),
-                                "raw_local_credit": audit.raw_local_credit,
-                                "weighted_local_credit": weighted_credit,
-                                "optimizer_reward_phase": reward_phase,
-                                "optimizer_process_weight": process_weight,
-                                "optimizer_terminal_weight": terminal_weight,
-                                "weight_sampling": weight_sampling,
-                                "training_global_step": global_step,
-                                "a9_process_component_valid": audit.own_valid > 0,
-                                "optimizer_process_component": weighted_credit,
-                            }
+                composed_reward = compose_verification_reward(
+                    terminal_reward=terminal_em,
+                    verification=verification,
+                    schedule=schedule,
+                )
+                trajectory_audit = verification.audit["certificate_audit"]
+                audit_records = trajectory_audit["steps"]
+                local_reward = verification.process_reward
+                weighted_local = sum(composed_reward.process_step_components.values())
+                final_step_index = len(steps)
+                finish_audit = next(
+                    (
+                        audit_record
+                        for audit_record, zero_based_step_index in zip(
+                            audit_records, transition_flow_step_indices, strict=True
                         )
-                        steps[flow_step_index].extra_fields["reward_extra_info"] = step_info
-                terminal_component = terminal_weight * terminal_em
-                finish_weighted_credit = 0.0
-                if audits and transition_flow_step_indices[-1] == len(steps):
-                    finish_weighted_credit = process_weight * audits[-1].raw_local_credit
-                final_step.reward_score = terminal_component + finish_weighted_credit
-                reward_info = final_step.extra_fields.get("reward_extra_info", {})
-                reward_info.update(
-                    {
+                        if zero_based_step_index + 1 == final_step_index
+                    ),
+                    None,
+                )
+                finish_weighted_credit = composed_reward.process_step_components.get(
+                    final_step_index, 0.0
+                )
+                apply_composed_reward(
+                    steps,
+                    composed_reward,
+                    extra_final_info={
                         "acc": terminal_em,
                         "terminal_em": terminal_em,
-                        "optimizer_terminal_component": terminal_component,
                         "local_reward": local_reward,
                         "optimizer_local_component": weighted_local,
-                        "optimizer_total_reward": terminal_component + weighted_local,
-                        "optimizer_reward_phase": reward_phase,
                         "verifier_timing": "terminal_trajectory_replay",
                         "process_credit_application": "backfill_to_transition_steps",
-                        "optimizer_terminal_weight": terminal_weight,
-                        "optimizer_process_weight": process_weight,
-                        "weight_sampling": weight_sampling,
                         "a9_em_warmup_steps": self.em_warmup_steps,
                         "training_global_step": global_step,
                         "certificate_audit": trajectory_audit,
                         "finish_protocol_valid": bool(finish and finish.answer is not None),
                         "minimum_search_requirement_met": bool(actions),
-                        "a9_process_component_valid": any(
-                            a.own_valid > 0 for a in audits
+                        "a9_process_component_valid": bool(
+                            finish_audit and finish_audit["own_valid"]
                         ),
-                        "optimizer_process_component": weighted_local,
-                    }
+                        "optimizer_process_component": finish_weighted_credit,
+                    },
                 )
-                final_step.extra_fields["reward_extra_info"] = reward_info
+                for audit_record, zero_based_step_index in zip(
+                    audit_records, transition_flow_step_indices, strict=True
+                ):
+                    step_info = steps[zero_based_step_index].extra_fields.get(
+                        "reward_extra_info", {}
+                    )
+                    weighted_credit = composed_reward.process_step_components.get(
+                        zero_based_step_index + 1, 0.0
+                    )
+                    step_info.update(
+                        {
+                            "certificate_step_audit": audit_record,
+                            "raw_local_credit": audit_record["raw_local_credit"],
+                            "weighted_local_credit": weighted_credit,
+                            "training_global_step": global_step,
+                            "a9_process_component_valid": audit_record["own_valid"] > 0,
+                            "optimizer_process_component": weighted_credit,
+                        }
+                    )
+                    steps[zero_based_step_index].extra_fields["reward_extra_info"] = step_info
+
+                final_step = steps[-1]
+                reward_info = final_step.extra_fields["reward_extra_info"]
                 # ── format_gate: zero all reward when finish is missing ────
                 # If format_gate is enabled and the model failed to produce a
                 # valid finish tool call (answer is None), zero out reward for
@@ -603,11 +646,25 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     and (finish is None or finish.answer is None)
                 )
                 if format_gate_active:
-                    final_step.reward_score = 0.0
                     for step in steps:
                         step.reward_score = 0.0
+                        step_info = step.extra_fields.get("reward_extra_info", {})
+                        if "optimizer_process_component" in step_info:
+                            step_info["optimizer_process_component"] = 0.0
+                            step_info["process_component_valid"] = False
+                            step_info["a9_process_component_valid"] = False
+                            step.extra_fields["reward_extra_info"] = step_info
+                    reward_info.update(
+                        {
+                            "optimizer_terminal_component": 0.0,
+                            "optimizer_local_component": 0.0,
+                            "optimizer_process_component": 0.0,
+                            "optimizer_process_total": 0.0,
+                            "optimizer_total_reward": 0.0,
+                            "optimizer_assigned_total_reward": 0.0,
+                        }
+                    )
                     reward_info["format_gate_triggered"] = True
-                steps.append(final_step)
                 self._record_step_timing(metrics, step_metrics)
                 break
 

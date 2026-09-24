@@ -1,0 +1,7 @@
+- name: deepscaler_tool_llm_judge
+  _target_: recipes.deepscaler.tool_agent_flow.DeepScalerToolRewardAgentFlow
+  reward_mode: llm_judge
+  env_type: tool
+  tools:
+    - check_deepscaler_answer
+  tool_format: qwen35

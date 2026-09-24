@@ -45,10 +45,22 @@ def run_agent_rl(config) -> None:
         default_runtime_env = get_ppo_ray_runtime_env()
         ray_init_kwargs = config.ray_kwargs.get("ray_init", {})
         runtime_env_kwargs = ray_init_kwargs.get("runtime_env", {})
+        checkpoint_offload_runtime_env = {
+            "env_vars": {
+                "VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU": os.environ[
+                    "VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU"
+                ]
+            }
+        } if "VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU" in os.environ else {}
         tensorboard_runtime_env = {
             "env_vars": {"TENSORBOARD_DIR": os.environ["TENSORBOARD_DIR"]}
         } if "TENSORBOARD_DIR" in os.environ else {}
-        runtime_env = OmegaConf.merge(default_runtime_env, runtime_env_kwargs, tensorboard_runtime_env)
+        runtime_env = OmegaConf.merge(
+            default_runtime_env,
+            runtime_env_kwargs,
+            checkpoint_offload_runtime_env,
+            tensorboard_runtime_env,
+        )
         ray_init_kwargs = OmegaConf.create({**ray_init_kwargs, "runtime_env": runtime_env})
         print(f"ray init kwargs: {ray_init_kwargs}")
         ray.init(**OmegaConf.to_container(ray_init_kwargs))

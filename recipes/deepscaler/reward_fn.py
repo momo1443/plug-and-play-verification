@@ -1,51 +1,50 @@
 """Reward function for DeepScaleR with A9-style uniform process reward schedule.
 
 Schedule (controlled by DEEPSCALER_EM_WARMUP_STEPS, default 50):
-  - Steps 1-WARMUP:   outcome-only (EM). Same as baseline DeepMath reward.
-  - Steps WARMUP+1+:  w ~ U(0,1), reward = w * EM + (1-w) * process_reward
+  - Steps 1-WARMUP:   strict outcome-only (EM).
+  - Steps WARMUP+1+:  one w ~ U(0,1) per prompt group,
+                       reward = w * EM + (1-w) * process_reward
 
 Process reward:
-  Splits the solution into reasoning steps and checks whether each step
-  contains at least one numerically verifiable equation. A step is
-  "verified" if we can extract an equation of the form <expr> = <expr>
-  where both sides are purely numeric expressions that evaluate to the
-  same number.
+  Splits the solution into reasoning steps and verifies every extracted
+  numeric equation in every step. Each step receives the fraction of its
+  equations that verify; a step without a verifiable equation receives zero.
 
-    process_reward = (# verified steps) / (# steps with numeric equations)
+    step_reward = (# verified equations) / (# extracted equations)
+    process_reward = mean(step_reward over all reasoning steps)
 
-  Steps without any numeric equation (e.g. prose explanations, variable
-  manipulations) are simply not process-graded — they neither help nor
-  hurt the process score.
+  Trivial literal identities such as ``1 = 1`` do not receive credit. This
+  prevents one unrelated tautology from making an otherwise invalid step pass.
 
   This is a deterministic, execution-based process signal — no PRM needed.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
-import random
 import re
 from typing import Any
 
+from recipes.reward_mixing import prompt_group_key_from_extra_info, prompt_group_uniform_weight
 from verl.utils.reward_score import math_reward
-
 
 _DEEPMATH_DATA_SOURCES = {"deepmath"}
 
 EM_WARMUP_STEPS = int(os.environ.get("DEEPSCALER_EM_WARMUP_STEPS", "50"))
-FORMAT_REWARD_WARMUP = 0.1
-MIN_STEPS_FOR_PROCESS = 1
 _ENV_GLOBAL_STEP = "DEEPSCALER_CURRENT_GLOBAL_STEP"
+_GROUP_WEIGHT_NAMESPACE = b"deepscaler-a9-group-weight-v1"
 
 
 # ── Step splitting ────────────────────────────────────────────────
+
 
 def _split_into_steps(text: str) -> list[str]:
     """Split solution text into reasoning steps."""
     # Try explicit step markers first
     step_marker_pattern = re.compile(
-        r'(?:^|\n)\s*(?:Step\s+\d+[\.:]|\d+[\.\)]\s)',
+        r"(?:^|\n)\s*(?:Step\s+\d+[\.:]|\d+[\.\)]\s)",
         re.IGNORECASE,
     )
     markers = list(step_marker_pattern.finditer(text))
@@ -61,13 +60,13 @@ def _split_into_steps(text: str) -> list[str]:
             return steps
 
     # Fall back to blank-line paragraphs
-    paragraphs = re.split(r'\n\s*\n', text)
+    paragraphs = re.split(r"\n\s*\n", text)
     steps = [p.strip() for p in paragraphs if p.strip() and len(p.strip()) > 20]
     if len(steps) >= 2:
         return steps
 
     # Last resort: split on lines
-    lines = text.split('\n')
+    lines = text.split("\n")
     steps = [line.strip() for line in lines if line.strip() and len(line.strip()) > 10]
     if len(steps) >= 2:
         return steps
@@ -77,18 +76,29 @@ def _split_into_steps(text: str) -> list[str]:
 
 # ── Equation extraction ───────────────────────────────────────────
 
+
 def _clean_lhs(lhs: str) -> str:
     """Remove leading non-math text from LHS of equation."""
+    # Keep the expression after prose/list separators when several equations
+    # share one line (for example, "... 2+3=5 and 4+4=8").
+    lhs = re.split(r"\b(?:and|then|next)\b|[,;:]", lhs, flags=re.IGNORECASE)[-1]
+    # Plain-text model outputs often prefix an equation with a step marker.
+    lhs = re.sub(r"^\s*(?:Step\s+\d+\s*[:.]|\d+[.)])\s*", "", lhs, flags=re.IGNORECASE)
     # Remove common prefixes like "First,", "Then,", "So,", "Therefore,"
-    lhs = re.sub(r'^(?:First|Then|Next|Finally|So|Therefore|Thus|Hence)[,\s]+', '', lhs, flags=re.IGNORECASE)
+    lhs = re.sub(r"^(?:First|Then|Next|Finally|So|Therefore|Thus|Hence)[,\s]+", "", lhs, flags=re.IGNORECASE)
+    # Drop a remaining prose prefix before the first numeric/LaTeX token.
+    token = re.search(r"(?:\\[A-Za-z]+|[0-9])", lhs)
+    if token is not None:
+        lhs = lhs[token.start() :]
     # Remove trailing dots from RHS
     return lhs.strip()
 
 
 def _clean_rhs(rhs: str) -> str:
     """Remove trailing noise from RHS."""
+    rhs = re.split(r"\b(?:and|then|next)\b|[,;]", rhs, maxsplit=1, flags=re.IGNORECASE)[0]
     # Remove trailing period/comma
-    rhs = rhs.rstrip('.,;')
+    rhs = rhs.rstrip(".,;")
     return rhs.strip()
 
 
@@ -108,7 +118,7 @@ def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
         if not lhs or not rhs:
             return
         # Quick check: both sides should have at least one digit
-        if not re.search(r'\d', lhs) and not re.search(r'\d', rhs):
+        if not re.search(r"\d", lhs) and not re.search(r"\d", rhs):
             return
         # Both sides should be purely numeric expressions
         # (no single-letter variables that would remain unresolved)
@@ -119,17 +129,18 @@ def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
                 equations.append((lhs, rhs))
 
     # 1. Extract from $$...$$ blocks
-    for m in re.finditer(r'\$\$(.+?)\$\$', step_text, re.DOTALL):
+    for m in re.finditer(r"\$\$(.+?)\$\$", step_text, re.DOTALL):
         _extract_eqs_from_text(m.group(1), _try_add)
 
     # 2. Extract from $...$ blocks
-    for m in re.finditer(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)', step_text):
+    for m in re.finditer(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)", step_text):
         _extract_eqs_from_text(m.group(1), _try_add)
 
-    # 3. Plain-text equations (skip lines already covered by LaTeX blocks)
-    for line in step_text.split('\n'):
+    # 3. Plain-text equations after removing LaTeX blocks already handled above.
+    plain_text = re.sub(r"\$\$.*?\$\$|(?<!\$)\$(?!\$).*?(?<!\$)\$(?!\$)", " ", step_text, flags=re.DOTALL)
+    for line in plain_text.split("\n"):
         line = line.strip()
-        if not line or '$$' in line or line.startswith('$'):
+        if not line:
             continue
         _extract_eqs_from_text(line, _try_add)
 
@@ -139,13 +150,13 @@ def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
 def _extract_eqs_from_text(text: str, add_fn) -> None:
     """Extract 'LHS = RHS' from a piece of text, calling add_fn for each."""
     # Split on lines first
-    for segment in re.split(r'\\\\|\n', text):
+    for segment in re.split(r"\\\\|\n|\b(?:and|then|next)\b", text, flags=re.IGNORECASE):
         segment = segment.strip()
         if not segment:
             continue
         # Find single '=' (not ==, !=, <=, >=)
         # Use lookahead/lookbehind to avoid matching comparison operators
-        matches = re.finditer(r'([^=<>!]+?)\s*(?<!<)(?<!>)(?<!!)=\s*([^=]+)', segment)
+        matches = re.finditer(r"([^=<>!]+?)\s*(?<!<)(?<!>)(?<!!)=\s*([^=]+)", segment)
         for m in matches:
             lhs = m.group(1).strip()
             rhs = m.group(2).strip()
@@ -160,28 +171,47 @@ def _is_numeric_expr(expr: str) -> bool:
     """
     # Remove LaTeX math commands
     cleaned = expr
-    for func in ['\\sqrt', '\\frac', '\\sin', '\\cos', '\\tan', '\\log',
-                 '\\ln', '\\exp', '\\abs', '\\pi', '\\cdot', '\\times',
-                 '\\div', '\\left', '\\right', '\\lfloor', '\\rfloor',
-                 '\\lceil', '\\rceil', '\\infty']:
-        cleaned = cleaned.replace(func, '')
+    for func in [
+        "\\sqrt",
+        "\\frac",
+        "\\sin",
+        "\\cos",
+        "\\tan",
+        "\\log",
+        "\\ln",
+        "\\exp",
+        "\\abs",
+        "\\pi",
+        "\\cdot",
+        "\\times",
+        "\\div",
+        "\\left",
+        "\\right",
+        "\\lfloor",
+        "\\rfloor",
+        "\\lceil",
+        "\\rceil",
+        "\\infty",
+    ]:
+        cleaned = cleaned.replace(func, "")
     # Remove remaining LaTeX commands
-    cleaned = re.sub(r'\\[a-zA-Z]+', '', cleaned)
+    cleaned = re.sub(r"\\[a-zA-Z]+", "", cleaned)
     # Remove braces/brackets
-    cleaned = cleaned.replace('{', '').replace('}', '')
-    cleaned = cleaned.replace('[', '').replace(']', '')
-    cleaned = cleaned.replace('(', '').replace(')', '')
+    cleaned = cleaned.replace("{", "").replace("}", "")
+    cleaned = cleaned.replace("[", "").replace("]", "")
+    cleaned = cleaned.replace("(", "").replace(")", "")
     # Remove digits, operators, spaces, dots, commas
-    cleaned = re.sub(r'[\d+\-*/^.,\s]', '', cleaned)
+    cleaned = re.sub(r"[\d+\-*/^.,\s]", "", cleaned)
     # If anything remains, it's likely a variable name
     # Allow common math symbols
-    cleaned = cleaned.replace('=', '').replace('!', '').replace('>', '').replace('<', '')
+    cleaned = cleaned.replace("=", "").replace("!", "").replace(">", "").replace("<", "")
     # After all removals, if there are alphabetic characters left,
     # they're likely variable names -> not purely numeric
-    return not re.search(r'[a-zA-Z]', cleaned)
+    return not re.search(r"[a-zA-Z]", cleaned)
 
 
 # ── Safe expression evaluation ────────────────────────────────────
+
 
 def _latex_to_python(expr: str) -> str | None:
     """Convert a LaTeX math expression to a Python-evaluable string."""
@@ -190,44 +220,75 @@ def _latex_to_python(expr: str) -> str | None:
 
     s = expr.strip()
 
+    # Non-ASCII multiplication sign (U+00D7) -> *
+    s = s.replace("×", "*")
+    # Repeating decimals require exact semantics. Fail closed instead of
+    # silently changing 0.\overline{6} into 0.6.
+    if r"\overline" in s:
+        return None
+
+    # Support literal integer binomial coefficients exactly. Symbolic or
+    # malformed binomials remain unsupported and fail closed below.
+    def _replace_binomial(match: re.Match[str]) -> str:
+        n = int(match.group(1))
+        k = int(match.group(2))
+        if n < 0 or k < 0 or k > n:
+            raise ValueError("invalid binomial coefficient")
+        return str(math.comb(n, k))
+
+    try:
+        s = re.sub(
+            r"\\binom\{\s*([+-]?\d+)\s*\}\{\s*([+-]?\d+)\s*\}",
+            _replace_binomial,
+            s,
+        )
+    except ValueError:
+        return None
+    if r"\binom" in s:
+        return None
     # LaTeX -> Python replacements (order matters)
-    s = s.replace('\\left', '').replace('\\right', '')
-    s = s.replace('\\{', '(').replace('\\}', ')')
-    s = s.replace('\\(', '(').replace('\\)', ')')
-    s = s.replace('\\times', '*')
-    s = s.replace('\\div', '/')
-    s = s.replace('\\cdot', '*')
-    s = s.replace('\\pi', 'pi')
-    s = s.replace('\\infty', 'inf')
-    s = s.replace('\\sqrt', 'sqrt')
-    s = s.replace('\\ln', 'log')
-    s = s.replace('\\log', 'log')
-    s = s.replace('\\exp', 'exp')
-    s = s.replace('\\sin', 'sin')
-    s = s.replace('\\cos', 'cos')
-    s = s.replace('\\tan', 'tan')
-    s = s.replace('\\abs', 'abs')
+    s = s.replace("\\left", "").replace("\\right", "")
+    s = s.replace("\\{", "(").replace("\\}", ")")
+    s = s.replace("\\(", "(").replace("\\)", ")")
+    s = s.replace("\\times", "*")
+    s = s.replace("\\div", "/")
+    s = s.replace("\\cdot", "*")
+    s = s.replace("\\pi", "pi")
+    s = s.replace("\\infty", "inf")
+    s = s.replace("\\sqrt", "sqrt")
+    s = s.replace("\\ln", "log")
+    s = s.replace("\\log", "log")
+    s = s.replace("\\exp", "exp")
+    s = s.replace("\\sin", "sin")
+    s = s.replace("\\cos", "cos")
+    s = s.replace("\\tan", "tan")
+    s = s.replace("\\abs", "abs")
     # \frac{a}{b} -> (a)/(b)
-    s = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'(\1)/(\2)', s)
+    s = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
     # Remove remaining LaTeX commands
-    s = re.sub(r'\\[a-zA-Z]+', '', s)
+    s = re.sub(r"\\[a-zA-Z]+", "", s)
     # Braces -> parens
-    s = s.replace('{', '(').replace('}', ')')
-    s = s.replace('[', '(').replace(']', ')')
+    s = s.replace("{", "(").replace("}", ")")
+    s = s.replace("[", "(").replace("]", ")")
     # ^ -> **
-    s = s.replace('^', '**')
+    s = s.replace("^", "**")
     # Remove formatting spaces
-    s = s.replace('\\,', '').replace('\\;', '').replace('\\!', '')
-    s = s.replace('\\ ', ' ').replace('~', ' ')
+    s = s.replace("\\,", "").replace("\\;", "").replace("\\!", "")
+    s = s.replace("\\ ", " ").replace("~", " ")
     # Remove \text{...} etc
-    s = re.sub(r'\\text\{[^}]*\}', '', s)
-    s = re.sub(r'\\mathrm\{[^}]*\}', '', s)
-    # Implicit multiplication: 2pi -> 2*pi, 3( -> 3*(, )2 -> )*2, )( -> )*(
-    s = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', s)
-    s = re.sub(r'(\d)\(', r'\1*(', s)
-    s = re.sub(r'\)(\d)', r')*\1', s)
-    s = re.sub(r'\)\(', r')*(', s)
-    s = re.sub(r'\)([a-zA-Z])', r')*\1', s)
+    s = re.sub(r"\\text\{[^}]*\}", "", s)
+    s = re.sub(r"\\mathrm\{[^}]*\}", "", s)
+    # Implicit multiplication (order matters):
+    # 1) digit directly before letter: 2pi -> 2*pi
+    s = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", s)
+    # 2) digit followed by optional whitespace then '(': 6 ( -> 6*(, 3( -> 3*(
+    s = re.sub(r"(\d)\s*\(", r"\1*(", s)
+    # 3) ')' followed by optional whitespace then digit: )2 -> )*2
+    s = re.sub(r"\)\s*(\d)", r")*\1", s)
+    # 4) ')' followed by optional whitespace then '(': ) ( -> )*(
+    s = re.sub(r"\)\s*\(", r")*(", s)
+    # 5) ')' followed by optional whitespace then letter: )pi -> )*pi
+    s = re.sub(r"\)\s*([a-zA-Z])", r")*\1", s)
 
     return s.strip() or None
 
@@ -238,21 +299,21 @@ def _safe_eval(expr_str: str) -> float | None:
         return None
 
     safe_ns = {
-        '__builtins__': {},
-        'sqrt': math.sqrt,
-        'pi': math.pi,
-        'e': math.e,
-        'abs': abs,
-        'sin': math.sin,
-        'cos': math.cos,
-        'tan': math.tan,
-        'log': math.log,
-        'ln': math.log,
-        'exp': math.exp,
-        'inf': float('inf'),
-        'floor': math.floor,
-        'ceil': math.ceil,
-        'factorial': math.factorial,
+        "__builtins__": {},
+        "sqrt": math.sqrt,
+        "pi": math.pi,
+        "e": math.e,
+        "abs": abs,
+        "sin": math.sin,
+        "cos": math.cos,
+        "tan": math.tan,
+        "log": math.log,
+        "ln": math.log,
+        "exp": math.exp,
+        "inf": float("inf"),
+        "floor": math.floor,
+        "ceil": math.ceil,
+        "factorial": math.factorial,
     }
 
     try:
@@ -264,8 +325,21 @@ def _safe_eval(expr_str: str) -> float | None:
         return None
 
 
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
+
+
+def _is_trivial_literal_identity(lhs_str: str, rhs_str: str) -> bool:
+    """Reject bare literal equalities such as 1=1 as process evidence."""
+    lhs = lhs_str.strip().replace(",", "")
+    rhs = rhs_str.strip().replace(",", "")
+    return bool(_NUMERIC_LITERAL_RE.fullmatch(lhs) and _NUMERIC_LITERAL_RE.fullmatch(rhs))
+
+
 def _verify_equation_pair(lhs_str: str, rhs_str: str) -> bool:
     """Check if LHS = RHS is numerically true after LaTeX conversion."""
+    if _is_trivial_literal_identity(lhs_str, rhs_str):
+        return False
+
     lhs_py = _latex_to_python(lhs_str)
     rhs_py = _latex_to_python(rhs_str)
 
@@ -290,44 +364,79 @@ def _verify_equation_pair(lhs_str: str, rhs_str: str) -> bool:
 
 # ── Process reward computation ────────────────────────────────────
 
-def compute_process_reward(solution_str: str) -> tuple[float, int, int]:
-    """Compute process reward by verifying intermediate equations.
 
-    Returns:
-        (process_reward, num_verified_steps, num_graded_steps)
+def _process_reward_audit(solution_str: str) -> dict[str, Any]:
+    """Verify each reasoning step and retain equation-level audit details.
+
+    Only steps that contain at least one numeric equation participate in
+    the process reward average.  Steps without equations (prose, variable
+    manipulation, etc.) are excluded from the denominator so they neither
+    help nor hurt the process score.
     """
     steps = _split_into_steps(solution_str)
-    num_graded_steps = 0
-    num_verified_steps = 0
+    step_audits: list[dict[str, Any]] = []
+    total_equations = 0
+    verified_equations = 0
 
-    for step in steps:
-        eqs = _extract_numeric_equations(step)
-        if not eqs:
-            continue  # no numeric equations in this step — not graded
-        num_graded_steps += 1
-        # Step is verified if at least one equation numerically checks out
-        if any(_verify_equation_pair(lhs, rhs) for lhs, rhs in eqs):
-            num_verified_steps += 1
+    for index, step in enumerate(steps, start=1):
+        equations = _extract_numeric_equations(step)
+        equation_results = [_verify_equation_pair(lhs, rhs) for lhs, rhs in equations]
+        step_verified = sum(equation_results)
+        step_total = len(equations)
+        step_reward = step_verified / step_total if step_total else 0.0
+        total_equations += step_total
+        verified_equations += step_verified
+        step_audits.append(
+            {
+                "step_index": index,
+                "equation_count": step_total,
+                "verified_equation_count": step_verified,
+                "step_reward": step_reward,
+            }
+        )
 
-    if num_graded_steps < MIN_STEPS_FOR_PROCESS:
-        return 0.0, 0, num_graded_steps
+    # Only average over steps that have at least one extractable equation.
+    graded_audits = [a for a in step_audits if a["equation_count"] > 0]
+    process_reward = sum(audit["step_reward"] for audit in graded_audits) / len(graded_audits) if graded_audits else 0.0
+    return {
+        "process_reward": process_reward,
+        "step_count": len(step_audits),
+        "graded_step_count": len(graded_audits),
+        "fully_verified_step_count": sum(
+            audit["equation_count"] > 0 and audit["step_reward"] == 1.0 for audit in step_audits
+        ),
+        "equation_count": total_equations,
+        "verified_equation_count": verified_equations,
+        "steps": step_audits,
+    }
 
-    return num_verified_steps / num_graded_steps, num_verified_steps, num_graded_steps
+
+def compute_process_reward(solution_str: str) -> tuple[float, int, int]:
+    """Compute process reward by verifying all extracted equations per step.
+
+    Only steps with at least one numeric equation are graded.
+
+    Returns:
+        (process_reward, num_fully_verified_steps, num_graded_steps)
+    """
+    audit = _process_reward_audit(solution_str)
+    return (
+        float(audit["process_reward"]),
+        int(audit["fully_verified_step_count"]),
+        int(audit["graded_step_count"]),
+    )
 
 
 # ── Terminal EM ───────────────────────────────────────────────────
-
-def _has_boxed_answer(text: str) -> bool:
-    return bool(re.search(r'\\boxed\s*\{', text))
 
 
 def _fallback_extract_last_answer(text: str) -> str | None:
     if not text:
         return None
-    m = re.search(r'(?:[Tt]he )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)', text)
+    m = re.search(r"(?:[Tt]he )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)", text)
     if m:
         return m.group(1).strip()
-    m = re.search(r'[Ss]o\s+(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)', text)
+    m = re.search(r"[Ss]o\s+(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)", text)
     if m:
         return m.group(1).strip()
     return None
@@ -351,6 +460,7 @@ def compute_terminal_em(solution_str: str, ground_truth: str) -> float:
 
 # ── Main reward function ─────────────────────────────────────────
 
+
 def compute_score(
     data_source: str,
     solution_str: str,
@@ -362,18 +472,19 @@ def compute_score(
     DeepScaleR A9 uniform reward schedule.
 
     Schedule:
-      Steps 1-WARMUP:  pure EM (+ small format bonus like baseline)
-      Steps WARMUP+1+: w ~ U(0,1), reward = w * EM + (1-w) * process_reward
+      Steps 1-WARMUP:  strict terminal EM
+      Steps WARMUP+1+: one w ~ U(0,1) per prompt group,
+                       reward = w * EM + (1-w) * process_reward
     """
     if data_source not in _DEEPMATH_DATA_SOURCES:
         from verl.utils.reward_score import default_compute_score
+
         return default_compute_score(data_source, solution_str, ground_truth, extra_info, **kwargs)
 
     if not ground_truth or not solution_str:
         return 0.0
 
     gt_str = str(ground_truth)
-    has_boxed = _has_boxed_answer(solution_str)
     terminal_em = compute_terminal_em(solution_str, gt_str)
 
     # ── Determine reward phase ────────────────────────────────────
@@ -396,18 +507,18 @@ def compute_score(
         process_weight = 0.0
     else:
         reward_phase = "uniform"
-        w = random.random()
+        prompt_group_key = prompt_group_key_from_extra_info(extra_info, data_source=data_source)
+        w = prompt_group_uniform_weight(
+            global_step=global_step,
+            prompt_group_key=prompt_group_key,
+            namespace=_GROUP_WEIGHT_NAMESPACE,
+        )
         terminal_weight = w
         process_weight = 1.0 - w
 
     # ── Compute final reward ──────────────────────────────────────
     if reward_phase == "em_warmup":
-        if terminal_em > 0:
-            reward = 1.0
-        elif has_boxed:
-            reward = FORMAT_REWARD_WARMUP
-        else:
-            reward = 0.0
+        reward = float(terminal_em)
         process_reward_val = 0.0
         num_verified = 0
         num_graded = 0
@@ -421,10 +532,15 @@ def compute_score(
         process_component = 0.0
         process_component_valid = False
     else:
-        process_reward_val, num_verified, num_graded = compute_process_reward(solution_str)
+        process_audit = _process_reward_audit(solution_str)
+        process_reward_val = float(process_audit["process_reward"])
+        num_verified = int(process_audit["fully_verified_step_count"])
+        num_graded = int(process_audit["graded_step_count"])
         process_component = process_weight * process_reward_val
         reward = terminal_weight * terminal_em + process_component
-        process_component_valid = num_graded >= MIN_STEPS_FOR_PROCESS
+        # A non-empty response with no verifiable equation is valid negative
+        # process evidence and must remain in the GRPO comparison group.
+        process_component_valid = num_graded > 0
 
     return {
         "score": float(reward),
@@ -432,9 +548,16 @@ def compute_score(
         "process_reward": float(process_reward_val),
         "num_verified_steps": num_verified,
         "num_graded_steps": num_graded,
+        "num_verified_equations": (int(process_audit["verified_equation_count"]) if reward_phase == "uniform" else 0),
+        "num_extracted_equations": (int(process_audit["equation_count"]) if reward_phase == "uniform" else 0),
+        "process_step_rewards_json": (
+            json.dumps(process_audit["steps"], separators=(",", ":")) if reward_phase == "uniform" else "[]"
+        ),
         "optimizer_reward_phase": reward_phase,
         "optimizer_terminal_weight": float(terminal_weight),
         "optimizer_process_weight": float(process_weight),
+        "weight_sampling": "uniform_0_1_per_prompt_group" if reward_phase == "uniform" else "fixed",
+        "optimizer_weight_group_key": prompt_group_key if reward_phase == "uniform" else None,
         "a9_process_component_valid": process_component_valid,
         "optimizer_process_component": float(process_component),
         "a9_em_warmup_steps": EM_WARMUP_STEPS,

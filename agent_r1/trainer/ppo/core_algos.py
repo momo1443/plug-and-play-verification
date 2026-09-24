@@ -353,8 +353,6 @@ def compute_step_grpo_advantage(
     gamma: float = 1.0,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
-    process_component_rewards: torch.Tensor | None = None,
-    process_component_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute causal, step-specific GRPO advantages for multi-step agents.
 
@@ -377,104 +375,24 @@ def compute_step_grpo_advantage(
             step_indices=step_indices,
             gamma=gamma,
         )
-        if (process_component_rewards is None) != (process_component_mask is None):
-            raise ValueError(
-                "process_component_rewards and process_component_mask must be provided together"
-            )
-
-        if process_component_rewards is None:
-            centered_returns = _center_step_values_by_prompt_and_index(
-                step_returns,
+        # Terminal and process rewards are already mixed on their causal rows.
+        # Normalize the resulting return once so the sampled mixture weight is
+        # preserved instead of being cancelled by component-wise whitening.
+        centered_returns = _center_step_values_by_prompt_and_index(
+            step_returns,
+            index=index,
+            step_indices=step_indices,
+        )
+        step_advantages = (
+            _normalize_centered_step_values(
+                centered_returns,
                 index=index,
                 step_indices=step_indices,
+                epsilon=epsilon,
             )
-            step_advantages = (
-                _normalize_centered_step_values(
-                    centered_returns,
-                    index=index,
-                    step_indices=step_indices,
-                    epsilon=epsilon,
-                )
-                if norm_adv_by_std_in_grpo
-                else centered_returns
-            )
-        else:
-            process_values = process_component_rewards.to(
-                device=step_returns.device,
-                dtype=step_returns.dtype,
-            )
-            component_mask = process_component_mask.to(
-                device=step_returns.device,
-                dtype=torch.bool,
-            )
-            if process_values.ndim != 1 or component_mask.ndim != 1:
-                raise ValueError("process component tensors must be one-dimensional")
-            if len(process_values) != len(step_returns) or len(component_mask) != len(step_returns):
-                raise ValueError("process component tensors must align with rollout rows")
-            if not torch.isfinite(process_values).all():
-                raise ValueError("process_component_rewards must be finite")
-            if torch.any((~component_mask) & (process_values != 0)):
-                raise ValueError("masked process components must carry numeric value zero")
-
-            step_rewards = (token_level_rewards * response_mask).sum(dim=-1)
-            base_step_rewards = step_rewards - process_values
-            base_returns = _discounted_returns_from_step_rewards(
-                step_rewards=base_step_rewards,
-                trajectory_uids=trajectory_uids,
-                step_indices=step_indices,
-                gamma=gamma,
-            )
-            centered_base_returns = _center_step_values_by_prompt_and_index(
-                base_returns,
-                index=index,
-                step_indices=step_indices,
-            )
-            step_advantages = (
-                _normalize_centered_step_values(
-                    centered_base_returns,
-                    index=index,
-                    step_indices=step_indices,
-                    epsilon=epsilon,
-                )
-                if norm_adv_by_std_in_grpo
-                else centered_base_returns
-            )
-
-            # Each valid A9 event is centered only against other valid probes
-            # from the same prompt and turn. Invalid probes contribute neither
-            # credit nor penalty for that local component, while their rows
-            # retain terminal and other future causal returns above.
-            centered_process_events = torch.zeros_like(process_values)
-            for rows in _step_group_rows(
-                index=index,
-                step_indices=step_indices,
-                include=component_mask,
-            ).values():
-                row_index = torch.as_tensor(rows, dtype=torch.long, device=step_returns.device)
-                values = process_values[row_index]
-                centered = values - values.mean()
-                if norm_adv_by_std_in_grpo:
-                    centered = (
-                        centered / (centered.std() + epsilon)
-                        if len(rows) > 1
-                        else torch.zeros_like(centered)
-                    )
-                centered_process_events[row_index] = centered
-
-            row_by_trajectory_step = {
-                (_to_hashable(trajectory_uids[row]), int(step_indices[row])): row
-                for row in range(len(step_returns))
-            }
-            for event_row in torch.nonzero(component_mask, as_tuple=False).flatten().tolist():
-                event_step = int(step_indices[event_row])
-                trajectory_key = _to_hashable(trajectory_uids[event_row])
-                event_advantage = centered_process_events[event_row]
-                for causal_step in range(event_step + 1):
-                    causal_row = row_by_trajectory_step.get((trajectory_key, causal_step))
-                    if causal_row is not None:
-                        step_advantages[causal_row] += (
-                            gamma ** (event_step - causal_step)
-                        ) * event_advantage
+            if norm_adv_by_std_in_grpo
+            else centered_returns
+        )
 
         advantages = step_advantages.unsqueeze(-1) * response_mask
         returns = step_returns.unsqueeze(-1) * response_mask
@@ -501,13 +419,9 @@ def _step_group_rows(
     *,
     index: np.ndarray,
     step_indices: np.ndarray,
-    include: torch.Tensor | None = None,
 ) -> dict[tuple[object, int], list[int]]:
     groups: dict[tuple[object, int], list[int]] = defaultdict(list)
-    included = include.tolist() if include is not None else None
     for row in range(len(index)):
-        if included is not None and not included[row]:
-            continue
         key = (_to_hashable(index[row]), int(step_indices[row]))
         groups[key].append(row)
     return groups

@@ -582,7 +582,7 @@ class AgentFlowWorkerBase:
         )
 
     async def _maybe_init_shared_judge_server(self) -> None:
-        """Lazily create one shared judge backend for A6.
+        """Lazily create one shared judge backend for Judge-backed runs.
 
         This is called once per worker at the start of ``generate_sequences``.
         All trajectories in the worker share the same judge instance
@@ -591,9 +591,9 @@ class AgentFlowWorkerBase:
         the fd-conflict crashes that occur when ephemeral sessions are
         created and destroyed per trajectory under uvloop.
 
-        When ``HOTPOTQA_JUDGE_API_KEY`` is set, a :class:`RemoteJudgeClient`
-        is created (no local GPU needed); otherwise a local
-        :class:`JudgeServerManager` is used.
+        Cross-domain runs use ``AGENT_R1_JUDGE_*`` settings. HotpotQA A6 keeps
+        its legacy ``HOTPOTQA_JUDGE_*`` settings. Either path can attach to a
+        local vLLM server or use a remote OpenAI-compatible endpoint.
         """
         if self._shared_judge_server is not None:
             return
@@ -603,13 +603,18 @@ class AgentFlowWorkerBase:
         import os
 
         reward_arm_env = os.environ.get("HOTPOTQA_REWARD_ARM", "")
-        if reward_arm_env.upper() != "A6":
+        cross_domain_judge = os.environ.get("AGENT_R1_LLM_JUDGE_ENABLED", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if reward_arm_env.upper() != "A6" and not cross_domain_judge:
             return
 
-        from recipes.hotpotqa.judge_server import create_judge_from_env
+        from recipes.hotpotqa.judge_server import create_judge_from_env, create_shared_judge_from_env
         from recipes.hotpotqa.reward_arm import RewardArm
 
-        self._shared_judge_server = create_judge_from_env(RewardArm.A6)
+        self._shared_judge_server = (
+            create_shared_judge_from_env() if cross_domain_judge else create_judge_from_env(RewardArm.A6)
+        )
         await self._shared_judge_server.start()
 
     @tqbridge()

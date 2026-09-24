@@ -190,6 +190,7 @@ def main():
         f"/nas/deepresearch/zsb/corhort/project/agenticrl/logs/{Path(model_path).name}_a0_aime2025_v2",
     )
     max_samples = int(os.environ.get("MAX_SAMPLES", "-1"))  # -1 = all
+    tensor_parallel_size = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
 
     # Load dataset from processed parquet
     import pandas as pd
@@ -210,6 +211,7 @@ def main():
     print(f"Model:    {model_name}")
     print(f"Samples:  {len(questions)}")
     print(f"Output:   {output_dir}")
+    print(f"Tensor parallel size: {tensor_parallel_size}")
     print(f"===================================================================")
 
     # Build prompts using Qwen3.5 chat template
@@ -230,7 +232,7 @@ def main():
     print("Loading model with vLLM...")
     llm = LLM(
         model=model_path,
-        tensor_parallel_size=1,
+        tensor_parallel_size=tensor_parallel_size,
         max_model_len=8192,
         gpu_memory_utilization=0.5,
         enforce_eager=True,

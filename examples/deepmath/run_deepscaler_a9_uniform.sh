@@ -4,11 +4,11 @@ set -euo pipefail
 # DeepScaleR GRPO with A9-style uniform process reward schedule.
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
-#   Steps 1-50:    Pure outcome (EM) reward — cold-start / format learning
-#   Steps 51-1500: w ~ U(0,1), reward = w * EM + (1-w) * format_reward
+#   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
+#   Steps 51-300:  w ~ U(0,1), reward = w * EM + (1-w) * process_reward
 #
-# Process reward proxy: format compliance (\boxed{} presence = 1.0, absent = 0.0)
-# Uses step_causal credit assignment so the process signal propagates correctly.
+# Process reward: every reasoning step contributes its fraction of verified
+# numeric equations; steps without a verifiable equation contribute zero.
 #
 # 6-GPU configuration with Qwen3.5-4B:
 #   - vllm_gpu_memory_utilization=0.25
@@ -17,7 +17,7 @@ set -euo pipefail
 #   - grpo_micro_batch_size=1
 #   - rollout_n=4
 #   - train_batch_size=20
-#   - total_training_steps=1500
+#   - total_training_steps=300 by default
 #   - save_freq=50
 #   - ref_kl=0.001 (low_var_kl)
 
@@ -45,12 +45,9 @@ TRAIN_MAX_SAMPLES="${HOTPOTQA_TRAIN_MAX_SAMPLES:-30000}"
 TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-20}"
 ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
 
-if [[ -n "${HOTPOTQA_TOTAL_TRAINING_STEPS:-}" ]]; then
-    TOTAL_TRAINING_STEPS="$HOTPOTQA_TOTAL_TRAINING_STEPS"
-elif (( TRAIN_MAX_SAMPLES % TRAIN_BATCH_SIZE == 0 )); then
-    TOTAL_TRAINING_STEPS="$((TRAIN_MAX_SAMPLES / TRAIN_BATCH_SIZE))"
-else
-    echo "Set HOTPOTQA_TOTAL_TRAINING_STEPS when train samples not divisible by batch size" >&2
+TOTAL_TRAINING_STEPS="${HOTPOTQA_TOTAL_TRAINING_STEPS:-300}"
+if ! [[ "$TOTAL_TRAINING_STEPS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "HOTPOTQA_TOTAL_TRAINING_STEPS must be a positive integer" >&2
     exit 2
 fi
 
@@ -128,11 +125,32 @@ if [[ -z "${RAY_TMPDIR:-}" ]]; then
 fi
 
 # Run ID and output
-RUN_ID="${RUN_ID:-qwen35-4b_deepscaler_a9uniform_grpo_stepcausal_main30k_n4_1500step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-qwen35-4b_deepscaler_a9uniform_grpo_stepcausal_main30k_n4_300step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
+
+"$PYTHON_BIN" -m recipes.deepscaler.prepare_run \
+    --project-dir "$PROJECT_DIR" \
+    --output-dir "$OUTPUT_DIR" \
+    --model-path "$HOTPOTQA_MODEL_PATH" \
+    --train-path "$TRAIN_PATH" \
+    --val-path "$VAL_PATH" \
+    --resume-from-path "$RESUME_FROM_PATH" \
+    --cuda-visible-devices "$CUDA_VISIBLE_DEVICES" \
+    --num-gpus "$NUM_GPUS" \
+    --vllm-gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
+    --vllm-max-model-len "$MAX_MODEL_LENGTH" \
+    --vllm-max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    --vllm-max-num-seqs "$MAX_NUM_SEQS" \
+    --train-max-samples "$TRAIN_MAX_SAMPLES" \
+    --train-batch-size "$TRAIN_BATCH_SIZE" \
+    --rollout-n "$ROLLOUT_N" \
+    --total-training-steps "$TOTAL_TRAINING_STEPS" \
+    --em-warmup-steps "$DEEPSCALER_EM_WARMUP_STEPS" \
+    --save-freq "$SAVE_FREQ" \
+    --seed "$EXPERIMENT_SEED"
 
 echo "=== DeepScaleR A9 Uniform GRPO ==="
 echo "Model: $HOTPOTQA_MODEL_PATH"

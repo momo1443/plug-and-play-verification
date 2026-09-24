@@ -44,7 +44,7 @@ fi
 if [[ "$ARM" == A9* ]]; then
     # A9 uses its own warmup env var; pipe it to the shared LR_EM_WARMUP_STEPS
     # so preflight/manifest records the correct value.
-    LR_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-100}"
+    LR_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-50}"
 fi
 
 if [[ "$ARM" == A8_LR* ]]; then
@@ -128,6 +128,13 @@ else
 fi
 AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-$NUM_GPUS}"
 GRPO_GAMMA=1.0
+OPTIMIZER="${HOTPOTQA_OPTIMIZER:-grpo}"
+case "$OPTIMIZER" in
+    grpo|ppo) ;;
+    *) echo "HOTPOTQA_OPTIMIZER must be grpo or ppo, got $OPTIMIZER" >&2; exit 2 ;;
+esac
+PPO_LAM="${HOTPOTQA_PPO_LAM:-1.0}"
+PPO_MICRO_BATCH_SIZE="${HOTPOTQA_PPO_MICRO_BATCH_SIZE:-1}"
 # Enable verl/GRPO's existing actor-loss reference KL uniformly for every
 # trainable arm so A1/A2/A3 differ only in their task-reward contracts.
 REFERENCE_KL_ENABLED=true
@@ -266,7 +273,7 @@ case "$RESUME_MODE" in
 esac
 export AGENT_R1_ENTROPY_CHUNK_ROWS="$ENTROPY_CHUNK_ROWS"
 
-RUN_ID="${RUN_ID:-qwen35-4b_${ARM,,}_${RUN_MODE}_grpo_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-qwen35-4b_${ARM,,}_${RUN_MODE}_${OPTIMIZER}_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 # Keep Ray's lexical path short for AF_UNIX sockets while storing its sessions
 # on the project filesystem instead of the nearly-full root filesystem.
@@ -433,12 +440,31 @@ if [[ -n "$VLLM_KV_CACHE_MEMORY_BYTES" ]]; then
     VLLM_ENGINE_EXTRA_ARGS+=(+actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_memory_bytes="$VLLM_KV_CACHE_MEMORY_BYTES")
 fi
 
-# Upstream verl ActorConfig retains ppo_* field names below; they carry GRPO batch settings.
-"$PYTHON_BIN" -m agent_r1.trainer.main_agent_grpo \
+# Upstream verl ActorConfig retains ppo_* field names below; they carry the
+# actor minibatch settings for both estimators.
+TRAINER_MODULE=agent_r1.trainer.main_agent_grpo
+ALGORITHM_ARGS=(algorithm.adv_estimator=grpo ++algorithm.grpo.credit_assignment=step_causal algorithm.norm_adv_by_std_in_grpo=True)
+CRITIC_ARGS=(critic.enable=False)
+if [[ "$OPTIMIZER" == "ppo" ]]; then
+    TRAINER_MODULE=agent_r1.trainer.main_agent_ppo
+    ALGORITHM_ARGS=(algorithm.adv_estimator=gae algorithm.gamma=1.0 algorithm.lam="$PPO_LAM")
+    CRITIC_ARGS=(
+        critic.enable=True
+        critic.model.path="$HOTPOTQA_MODEL_PATH"
+        critic.optim.lr=1e-5
+        critic.model.enable_gradient_checkpointing=True
+        critic.fsdp.param_offload=False
+        critic.fsdp.optimizer_offload=False
+        critic.ppo_micro_batch_size="$PPO_MICRO_BATCH_SIZE"
+        critic.ppo_micro_batch_size_per_gpu="$PPO_MICRO_BATCH_SIZE"
+        trainer.critic_warmup=0
+        trainer.max_critic_ckpt_to_keep=2
+    )
+fi
+
+"$PYTHON_BIN" -m "$TRAINER_MODULE" \
     "${HYDRA_CONFIG_ARGS[@]}" \
-    algorithm.adv_estimator=grpo \
-    ++algorithm.grpo.credit_assignment=step_causal \
-    algorithm.norm_adv_by_std_in_grpo=True \
+    "${ALGORITHM_ARGS[@]}" \
     algorithm.gamma="$GRPO_GAMMA" \
     algorithm.use_kl_in_reward="$KL_IN_REWARD" \
     data.train_files="$TRAIN_PATH" \
@@ -510,7 +536,7 @@ fi
     actor_rollout_ref.rollout.val_kwargs.temperature=0 \
     actor_rollout_ref.rollout.val_kwargs.top_p=1 \
     actor_rollout_ref.rollout.val_kwargs.top_k=-1 \
-    critic.enable=False \
+    "${CRITIC_ARGS[@]}" \
     reward_model.enable=False \
     +reward_model.launch_reward_fn_async=False \
     custom_reward_function.path="$REWARD_FUNCTION_PATH" \

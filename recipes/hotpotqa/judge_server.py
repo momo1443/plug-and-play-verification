@@ -128,6 +128,7 @@ class JudgeServerManager:
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.50,
         launch_server: bool = True,
+        request_timeout_s: float = _JUDGE_REQUEST_TIMEOUT_S,
     ) -> None:
         self.model_path = Path(model_path).resolve()
         self.gpu_id = gpu_id
@@ -135,6 +136,9 @@ class JudgeServerManager:
         self.max_model_len = max_model_len
         self.gpu_memory_utilization = gpu_memory_utilization
         self.launch_server = launch_server
+        if request_timeout_s <= 0:
+            raise ValueError("request_timeout_s must be positive")
+        self.request_timeout_s = float(request_timeout_s)
 
         self._process: subprocess.Popen | None = None
         self._session: aiohttp.ClientSession | None = None
@@ -267,7 +271,7 @@ class JudgeServerManager:
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(limit=0, force_close=True)
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=_JUDGE_REQUEST_TIMEOUT_S),
+                timeout=aiohttp.ClientTimeout(total=self.request_timeout_s),
                 connector=connector,
             )
 
@@ -541,7 +545,7 @@ class JudgeServerManager:
             "judge_completion_max_tokens": _JUDGE_COMPLETION_MAX_TOKENS,
             "judge_completion_temperature": _JUDGE_COMPLETION_TEMPERATURE,
             "judge_max_retries": _JUDGE_MAX_RETRIES,
-            "judge_request_timeout_s": _JUDGE_REQUEST_TIMEOUT_S,
+            "judge_request_timeout_s": self.request_timeout_s,
             "judge_cache": "sha256-exact-input-success-only",
             "judge_backend": "local_vllm",
         }
@@ -823,8 +827,6 @@ def create_judge_from_env(reward_arm: Any) -> JudgeServerManager | RemoteJudgeCl
     reward_arm:
         The :class:`RewardArm` enum value (must be A6).
     """
-    from recipes.hotpotqa.reward_arm import RewardArm
-
     api_key = os.environ.get("HOTPOTQA_JUDGE_API_KEY", "").strip()
     if api_key:
         return RemoteJudgeClient(
@@ -874,8 +876,38 @@ def create_judge_from_env(reward_arm: Any) -> JudgeServerManager | RemoteJudgeCl
         gpu_memory_utilization=float(
             os.environ.get("HOTPOTQA_JUDGE_GPU_MEMORY_UTILIZATION", "0.50")
         ),
-        launch_server=not (
-            os.environ.get("HOTPOTQA_JUDGE_EXTERNAL", "").strip().lower()
-            in {"1", "true", "yes", "on"}
+        launch_server=os.environ.get("HOTPOTQA_JUDGE_EXTERNAL", "").strip().lower()
+        not in {"1", "true", "yes", "on"},
+    )
+
+
+def create_shared_judge_from_env() -> JudgeServerManager | RemoteJudgeClient:
+    """Create the cross-domain frozen Judge from ``AGENT_R1_JUDGE_*`` settings."""
+    api_key = os.environ.get("AGENT_R1_JUDGE_API_KEY", "").strip()
+    if api_key:
+        return RemoteJudgeClient(
+            api_base=os.environ.get("AGENT_R1_JUDGE_API_BASE", "http://127.0.0.1:29500"),
+            api_key=api_key,
+            model_name=os.environ.get("AGENT_R1_JUDGE_MODEL", "Qwen3.5-9B"),
+            max_tokens=int(os.environ.get("AGENT_R1_JUDGE_COMPLETION_MAX_TOKENS", "256")),
+            temperature=0.0,
+            request_timeout_s=float(os.environ.get("AGENT_R1_JUDGE_REQUEST_TIMEOUT_S", "30")),
+        )
+
+    workspace_dir = os.environ.get(
+        "WORKSPACE_DIR",
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")),
+    )
+    return JudgeServerManager(
+        model_path=os.environ.get(
+            "AGENT_R1_JUDGE_MODEL",
+            os.path.join(workspace_dir, "models", "Qwen3.5-9B"),
         ),
+        gpu_id=int(os.environ.get("AGENT_R1_JUDGE_GPU", "7")),
+        port=int(os.environ.get("AGENT_R1_JUDGE_PORT", "29500")),
+        max_model_len=int(os.environ.get("AGENT_R1_JUDGE_MAX_MODEL_LEN", "8192")),
+        gpu_memory_utilization=float(os.environ.get("AGENT_R1_JUDGE_GPU_MEMORY_UTILIZATION", "0.80")),
+        request_timeout_s=float(os.environ.get("AGENT_R1_JUDGE_REQUEST_TIMEOUT_S", "120")),
+        launch_server=os.environ.get("AGENT_R1_JUDGE_EXTERNAL", "").strip().lower()
+        not in {"1", "true", "yes", "on"},
     )

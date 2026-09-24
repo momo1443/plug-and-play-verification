@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed manifest preparation for A9 certificate-grounded runs.
-
-A9 runs as a single cert-mix arm (0.4 terminal EM + 0.6 certificate process)
-with a configurable EM warmup.  Protocol-null and cert-only sub-arms have been
-removed.
-"""
+"""Fail-closed manifest preparation for uniform A9 certificate-grounded runs."""
 
 from __future__ import annotations
 
@@ -37,7 +32,7 @@ from recipes.hotpotqa_a9.reward_contract import (
 )
 from recipes.hotpotqa_a9.verifier import VERIFIER_VERSION
 
-MANIFEST_VERSION = "hotpotqa-a9-certificate-run-v1"
+MANIFEST_VERSION = "hotpotqa-a9-certificate-run-v2"
 
 
 def _parse_bool(value: str) -> bool:
@@ -130,7 +125,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actor-ckpt-to-keep", type=int, required=True)
     parser.add_argument("--num-gpus", type=int, required=True)
     parser.add_argument("--agent-workers", type=int, required=True)
-    parser.add_argument("--em-warmup-steps", type=int, default=100)
+    parser.add_argument("--em-warmup-steps", type=int, default=50)
     parser.add_argument("--gamma", type=float, required=True)
     parser.add_argument("--allow-uncalibrated-launch", type=int, choices=(0, 1), default=0)
     parser.add_argument("--seed", type=int, required=True)
@@ -175,10 +170,12 @@ def main() -> None:
 
     code_paths = [
         "agent_r1/agent_flow/agent_flow.py",
+        "agent_r1/verifier/reward.py",
         "agent_r1/trainer/main_agent_grpo.py",
         "agent_r1/trainer/ppo/core_algos.py",
         "agent_r1/trainer/ppo/ray_trainer.py",
         "agent_r1/trainer/rollout_jsonl.py",
+        "recipes/reward_mixing.py",
         "recipes/hotpotqa/env/search_tool.py",
         "recipes/hotpotqa/evidence.py",
         "recipes/hotpotqa_a9/base.yaml",
@@ -277,15 +274,12 @@ def main() -> None:
         },
         "reward_contract": {
             "contract_id": A9_CONTRACT_VERSION,
-            "formula": (
-                f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
-                f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
-            ),
+            "formula": "w * terminal_em + (1-w) * local_reward, w ~ Uniform(0,1) per prompt group",
             "terminal_weight": CONTRACT_CERT_MIX.terminal_weight,
             "process_weight": CONTRACT_CERT_MIX.process_weight,
-            "weight_sampling": "fixed",
+            "weight_sampling": "uniform_0_1_per_prompt_group",
             "format_gate": CONTRACT_FORMAT_STRICT.format_gate
-            if coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), "HOTPOTQA_A9_FORMAT_GATE")
+            if coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), name="HOTPOTQA_A9_FORMAT_GATE")
             else CONTRACT_CERT_MIX.format_gate,
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
             "process_is_terminal_em_gated": False,
@@ -294,13 +288,10 @@ def main() -> None:
             "verifier_version": VERIFIER_VERSION,
             "certificate_schema_version": CERTIFICATE_SCHEMA_VERSION,
             "schedule": {
-                "type": "em_warmup_then_certificate_fixed",
+                "type": "em_warmup_then_certificate_uniform",
                 "em_warmup_steps": args.em_warmup_steps,
                 "warmup_formula": "1.0 * terminal_em + 0.0 * local_reward",
-                "post_warmup_formula": (
-                    f"{CONTRACT_CERT_MIX.terminal_weight:.1f} * terminal_em + "
-                    f"{CONTRACT_CERT_MIX.process_weight:.1f} * local_reward"
-                ),
+                "post_warmup_formula": "w * terminal_em + (1-w) * local_reward, w ~ Uniform(0,1) per prompt group",
             },
         },
         "actor_contract": {
@@ -310,7 +301,7 @@ def main() -> None:
             "verifier_timing": "terminal_trajectory_replay",
             "process_credit_application": "backfill_to_transition_steps",
             "certificate_parse_failure_blocks_action": bool(
-                coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), "HOTPOTQA_A9_FORMAT_GATE")
+                coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), name="HOTPOTQA_A9_FORMAT_GATE")
             ),
             "prompt_sha256": prompt_hashes,
             "tool_schema_sha256": schema_hashes,
