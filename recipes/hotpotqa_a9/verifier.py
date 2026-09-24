@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from agent_r1.verifier import VerificationCredit, VerificationResult
 from recipes.hotpotqa_a9.dsl import (
     CERTIFICATE_SCHEMA_VERSION,
     FinishCertificate,
@@ -193,3 +194,47 @@ def trajectory_audit_record(audits: Sequence[CertificateStepAudit]) -> dict[str,
         ),
         "steps": [audit.record() for audit in audits],
     }
+
+
+def build_verification_result(
+    audits: Sequence[CertificateStepAudit],
+    transition_flow_step_indices: Sequence[int],
+) -> VerificationResult:
+    """HotpotQA plugin: attach each certificate audit to its source action."""
+
+    if len(audits) != len(transition_flow_step_indices):
+        raise ValueError("Every HotpotQA transition audit requires a rollout step")
+    summary = trajectory_audit_record(audits)
+    credits: list[VerificationCredit] = []
+    credits_by_step: dict[int, list[dict[str, Any]]] = {}
+    for audit, zero_based_step_index in zip(audits, transition_flow_step_indices, strict=True):
+        step_index = int(zero_based_step_index) + 1
+        record = audit.record()
+        credits.append(
+            VerificationCredit(
+                step_index=step_index,
+                score=float(audit.raw_local_credit),
+                audit=record,
+            )
+        )
+        credits_by_step.setdefault(step_index, []).append(record)
+    return VerificationResult(
+        credits=tuple(credits),
+        audit={
+            "verifier": VERIFIER_VERSION,
+            "certificate_audit": summary,
+            "credits_by_step": credits_by_step,
+        },
+    )
+
+
+def verify_process(
+    transitions: Sequence[Mapping[str, Any]],
+    transition_flow_step_indices: Sequence[int],
+    *,
+    reward_horizon: int = 3,
+) -> VerificationResult:
+    """Public HotpotQA verifier plugin entry point."""
+
+    audits = verify_trajectory(transitions, reward_horizon=reward_horizon)
+    return build_verification_result(audits, transition_flow_step_indices)

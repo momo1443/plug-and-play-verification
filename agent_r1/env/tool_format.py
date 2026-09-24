@@ -129,6 +129,56 @@ class HermesFormatWrapper(ToolFormatWrapper):
 
 
 # ---------------------------------------------------------------------------
+# Qwen3.5 native XML
+# ---------------------------------------------------------------------------
+
+
+@ToolFormatWrapper.register("qwen35")
+class Qwen35FormatWrapper(ToolFormatWrapper):
+    """Qwen3.5's native function/parameter XML tool-call format."""
+
+    _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+    _FUNCTION_RE = re.compile(r"<function=([^>\n]+)>(.*?)</function>", re.DOTALL)
+    _PARAMETER_RE = re.compile(r"<parameter=([^>\n]+)>(.*?)</parameter>", re.DOTALL)
+
+    @staticmethod
+    def _parameter_value(raw_value: str) -> Any:
+        value = raw_value.strip()
+        if value.startswith(("{", "[")):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        return value
+
+    def parse_response(self, llm_response: str) -> tuple[str, list[ToolCallAction]]:
+        if "<tool_call>" not in llm_response or "</tool_call>" not in llm_response:
+            return llm_response, []
+
+        function_calls: list[ToolCallAction] = []
+        for tool_block in self._TOOL_CALL_RE.findall(llm_response):
+            function_match = self._FUNCTION_RE.fullmatch(tool_block.strip())
+            if function_match is None:
+                logger.error("Failed to decode Qwen3.5 tool call: malformed function block")
+                continue
+            name = function_match.group(1).strip()
+            function_body = function_match.group(2)
+            arguments = {
+                parameter_name.strip(): self._parameter_value(parameter_value)
+                for parameter_name, parameter_value in self._PARAMETER_RE.findall(function_body)
+                if parameter_name.strip()
+            }
+            if name:
+                function_calls.append(ToolCallAction(name=name, arguments=arguments))
+
+        content = self._TOOL_CALL_RE.sub("", llm_response)
+        return content, function_calls
+
+    def format_observation(self, observation: str) -> str:
+        return f"<tool_response>\n{observation}\n</tool_response>"
+
+
+# ---------------------------------------------------------------------------
 # GPT-OSS (OpenAI Harmony)
 # ---------------------------------------------------------------------------
 

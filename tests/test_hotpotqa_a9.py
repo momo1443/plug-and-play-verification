@@ -3,7 +3,6 @@
 import dataclasses
 import json
 import os
-import random
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +26,7 @@ from recipes.hotpotqa_a9.verifier import (
     trajectory_audit_record,
     verify_coupling,
     verify_grounding,
+    verify_process,
     verify_trajectory,
 )
 from recipes.hotpotqa.reward_arm import (
@@ -61,14 +61,15 @@ class CertificateParsingTest(unittest.TestCase):
         cert, errors = parse_search_certificate(
             {"source_id": "passage:17", "support_span": "some text"}
         )
-        self.assertIsNone(cert)
+        self.assertIsNotNone(cert)
         self.assertIn("certificate_fields_invalid", errors)
+        self.assertIn("target_invalid", errors)
 
     def test_search_certificate_extra_field(self):
         cert, errors = parse_search_certificate(
             {"source_id": "passage:17", "support_span": "s", "target": "t", "extra": 1}
         )
-        self.assertIsNone(cert)
+        self.assertIsNotNone(cert)
         self.assertIn("certificate_fields_invalid", errors)
 
     def test_search_certificate_not_object(self):
@@ -96,8 +97,9 @@ class CertificateParsingTest(unittest.TestCase):
         cert, errors = parse_finish_certificate(
             {"source_id": "passage:42", "support_span": "some text"}
         )
-        self.assertIsNone(cert)
+        self.assertIsNotNone(cert)
         self.assertIn("certificate_fields_invalid", errors)
+        self.assertIn("answer_span_invalid", errors)
 
 
 # -- Protocol Parsing --
@@ -218,6 +220,10 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(audits[0].own_valid, 1)
         self.assertAlmostEqual(audits[0].raw_local_credit, 1.0 / 3.0)
 
+        result = verify_process(transitions, [1], reward_horizon=3)
+        self.assertAlmostEqual(result.process_reward, 1.0 / 3.0)
+        self.assertEqual(result.components_by_step(), {2: 1.0 / 3.0})
+
     def test_trajectory_zero_credit_on_parse_failure(self):
         transitions = [{
             "certificate": {"bad": "field"},
@@ -267,8 +273,8 @@ class VerifierTest(unittest.TestCase):
 
 class RewardContractTest(unittest.TestCase):
     def test_cert_mix_weights(self):
-        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.4)
-        self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.6)
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight, 0.5)
+        self.assertAlmostEqual(CONTRACT_CERT_MIX.process_weight, 0.5)
 
     def test_cert_mix_weights_sum(self):
         self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight, 1.0, places=10)
@@ -284,7 +290,7 @@ class RewardContractTest(unittest.TestCase):
         self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
 
 
-# -- Reward Schedule (now fixed weights) --
+# -- Reward Schedule --
 
 
 class RewardScheduleTest(unittest.TestCase):
@@ -292,9 +298,8 @@ class RewardScheduleTest(unittest.TestCase):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=200,
             is_validation=True,
-            em_warmup_steps=100,
-            terminal_weight=0.4,
-            process_weight=0.6,
+            em_warmup_steps=50,
+            prompt_group_key="validation:7",
         )
         self.assertAlmostEqual(tw, 1.0)
         self.assertAlmostEqual(pw, 0.0)
@@ -304,26 +309,22 @@ class RewardScheduleTest(unittest.TestCase):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=50,
             is_validation=False,
-            em_warmup_steps=100,
-            terminal_weight=0.4,
-            process_weight=0.6,
+            em_warmup_steps=50,
+            prompt_group_key="train:7",
         )
         self.assertAlmostEqual(tw, 1.0)
         self.assertAlmostEqual(pw, 0.0)
         self.assertEqual(phase, "em_warmup")
 
-    def test_certificate_uniform_with_format_gate(self):
-        """With format_gate=True, post-warmup uses U(0,1) sampling."""
-        random.seed(42)
+    def test_certificate_uniform_without_format_gate(self):
+        """Prompt-group hashes retain the intended uniform mixture distribution."""
         terminals = []
-        for _ in range(1000):
+        for prompt_index in range(1000):
             tw, pw, phase = optimizer_reward_schedule(
                 global_step=200,
                 is_validation=False,
-                em_warmup_steps=100,
-                terminal_weight=0.5,
-                process_weight=0.5,
-                format_gate=True,
+                em_warmup_steps=50,
+                prompt_group_key=f"train:{prompt_index}",
             )
             self.assertEqual(phase, "certificate_uniform")
             self.assertAlmostEqual(tw + pw, 1.0, places=10)
@@ -333,31 +334,49 @@ class RewardScheduleTest(unittest.TestCase):
         mean_tw = sum(terminals) / len(terminals)
         self.assertAlmostEqual(mean_tw, 0.5, delta=0.05)
 
-    def test_certificate_fixed_without_format_gate(self):
-        """Without format_gate, post-warmup uses fixed weights."""
-        tw, pw, phase = optimizer_reward_schedule(
+    def test_rollouts_in_same_prompt_group_share_weight(self):
+        weights = [
+            optimizer_reward_schedule(
+                global_step=200,
+                is_validation=False,
+                em_warmup_steps=50,
+                prompt_group_key="train:19",
+            )[:2]
+            for _ in range(4)
+        ]
+        self.assertEqual(len(set(weights)), 1)
+
+    def test_weight_changes_across_prompt_groups_and_updates(self):
+        group_a = optimizer_reward_schedule(
             global_step=200,
             is_validation=False,
-            em_warmup_steps=100,
-            terminal_weight=0.4,
-            process_weight=0.6,
-            format_gate=False,
-        )
-        self.assertEqual(phase, "certificate_fixed")
-        self.assertAlmostEqual(tw, 0.4)
-        self.assertAlmostEqual(pw, 0.6)
+            em_warmup_steps=50,
+            prompt_group_key="train:19",
+        )[0]
+        group_b = optimizer_reward_schedule(
+            global_step=200,
+            is_validation=False,
+            em_warmup_steps=50,
+            prompt_group_key="train:20",
+        )[0]
+        next_update = optimizer_reward_schedule(
+            global_step=201,
+            is_validation=False,
+            em_warmup_steps=50,
+            prompt_group_key="train:19",
+        )[0]
+        self.assertNotEqual(group_a, group_b)
+        self.assertNotEqual(group_a, next_update)
 
-    def test_no_warmup_goes_straight_to_fixed(self):
+    def test_no_warmup_goes_straight_to_uniform(self):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=1,
             is_validation=False,
             em_warmup_steps=0,
-            terminal_weight=0.4,
-            process_weight=0.6,
+            prompt_group_key="train:7",
         )
-        self.assertEqual(phase, "certificate_fixed")
-        self.assertAlmostEqual(tw, 0.4)
-        self.assertAlmostEqual(pw, 0.6)
+        self.assertEqual(phase, "certificate_uniform")
+        self.assertAlmostEqual(tw + pw, 1.0, places=10)
 
 
 # -- Format Gate --
@@ -382,22 +401,20 @@ class FormatGateTest(unittest.TestCase):
         tw, pw, phase = optimizer_reward_schedule(
             global_step=50,
             is_validation=False,
-            em_warmup_steps=100,
-            terminal_weight=0.4,
-            process_weight=0.6,
+            em_warmup_steps=50,
+            prompt_group_key="train:7",
         )
         self.assertEqual(phase, "em_warmup")
 
     def test_format_gate_post_warmup_phase(self):
-        """After warmup, phase is 'certificate_fixed' which the gate allows."""
+        """The strict ablation preserves the shared uniform A9 schedule."""
         tw, pw, phase = optimizer_reward_schedule(
             global_step=200,
             is_validation=False,
-            em_warmup_steps=100,
-            terminal_weight=0.4,
-            process_weight=0.6,
+            em_warmup_steps=50,
+            prompt_group_key="train:7",
         )
-        self.assertEqual(phase, "certificate_fixed")
+        self.assertEqual(phase, "certificate_uniform")
 
 
 # -- Reward Arm (reward_arm.py) --
@@ -407,19 +424,19 @@ class RewardArmTest(unittest.TestCase):
     def test_a9_contract_updated(self):
         contract = training_reward_contract(RewardArm.A9)
         self.assertEqual(dataclasses.asdict(contract), {
-            "process_weight": 0.2,
-            "terminal_weight": 0.8,
+            "process_weight": 0.5,
+            "terminal_weight": 0.5,
             "final_response_mask": 1,
         })
 
     def test_a9_subarm_contracts(self):
         contract = training_reward_contract(RewardArm.A9_CERT_MIX)
-        self.assertAlmostEqual(contract.terminal_weight, 0.8)
-        self.assertAlmostEqual(contract.process_weight, 0.2)
+        self.assertAlmostEqual(contract.terminal_weight, 0.5)
+        self.assertAlmostEqual(contract.process_weight, 0.5)
 
     def test_a9_no_binary_check(self):
         result = search_step_reward(RewardArm.A9_CERT_MIX, 0.33, is_validation=False)
-        self.assertAlmostEqual(result, 0.33 * 0.2)# -- Validation-time Lenient Fallback --
+        self.assertAlmostEqual(result, 0.33 * 0.5)# -- Validation-time Lenient Fallback --
 
 
 class A9LenientFallbackTest(unittest.TestCase):

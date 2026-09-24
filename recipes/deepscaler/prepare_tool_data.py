@@ -14,7 +14,12 @@ import pyarrow.parquet as pq
 from recipes.deepscaler.prompts import build_agent_messages
 
 
-def build_tool_dataset(source_path: Path, output_path: Path) -> tuple[int, int]:
+def build_tool_dataset(
+    source_path: Path,
+    output_path: Path,
+    *,
+    agent_name: str | None = "deepscaler_tool",
+) -> tuple[int, int]:
     """Add the agent name and runner-only hidden answer to one parquet split.
 
     Rows without a reference answer cannot receive either tool feedback or a
@@ -30,14 +35,16 @@ def build_tool_dataset(source_path: Path, output_path: Path) -> tuple[int, int]:
             skipped_missing_ground_truth += 1
             continue
         raw_prompt = row.get("prompt") or []
-        converted.append(
-            {
-                **row,
-                "agent_name": "deepscaler_tool",
-                "prompt": build_agent_messages(raw_prompt),
-                "env_kwargs": json.dumps({"tools_kwargs": {"ground_truth": str(ground_truth)}}),
-            }
-        )
+        converted_row = {
+            **row,
+            "prompt": build_agent_messages(raw_prompt),
+            "env_kwargs": json.dumps({"tools_kwargs": {"ground_truth": str(ground_truth)}}),
+        }
+        if agent_name is not None:
+            converted_row["agent_name"] = agent_name
+        else:
+            converted_row.pop("agent_name", None)
+        converted.append(converted_row)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(converted), output_path, compression="zstd")
     return len(converted), skipped_missing_ground_truth
@@ -47,6 +54,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--agent-name", default="deepscaler_tool")
+    parser.add_argument("--omit-agent-name", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -59,7 +68,11 @@ def main() -> None:
             raise FileNotFoundError(f"Source parquet does not exist: {source_path}")
         if output_path.exists() and not args.overwrite:
             raise FileExistsError(f"Refusing to overwrite existing output: {output_path}")
-        rows, skipped = build_tool_dataset(source_path, output_path)
+        rows, skipped = build_tool_dataset(
+            source_path,
+            output_path,
+            agent_name=None if args.omit_agent_name else args.agent_name,
+        )
         print(f"Wrote {rows} {split} rows to {output_path}; skipped_missing_ground_truth={skipped}")
 
 

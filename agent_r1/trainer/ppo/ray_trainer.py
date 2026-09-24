@@ -285,21 +285,6 @@ def critic_vf_loss_response_mask(response_mask: torch.Tensor, adv_estimator: Age
     return value_mask
 
 
-def _optional_process_component_mask(values: np.ndarray) -> list[bool]:
-    result: list[bool] = []
-    for value in np.asarray(values, dtype=object):
-        if value is None:
-            result.append(False)
-        elif isinstance(value, (bool, np.bool_)):
-            result.append(bool(value))
-        else:
-            raise ValueError(
-                "a9_process_component_valid must contain only bool values or None, "
-                f"got {value!r}"
-            )
-    return result
-
-
 def compute_advantage(
     data: DataProto,
     adv_estimator: AgentAdvantageEstimator,
@@ -375,33 +360,6 @@ def compute_advantage(
             # group instead of broadcasting one trajectory scalar to every step.
             from agent_r1.trainer.ppo.core_algos import compute_step_grpo_advantage
 
-            a9_component_valid = valid_data.non_tensor_batch.get("a9_process_component_valid")
-            a9_component_rewards = valid_data.non_tensor_batch.get("optimizer_process_component")
-            process_component_mask = None
-            process_component_rewards = None
-            if a9_component_valid is not None:
-                if a9_component_rewards is None:
-                    raise ValueError(
-                        "a9_process_component_valid requires optimizer_process_component"
-                    )
-                component_valid_rows = _optional_process_component_mask(a9_component_valid)
-                process_component_mask = torch.as_tensor(
-                    component_valid_rows,
-                    dtype=torch.bool,
-                    device=valid_data.batch.device,
-                )
-                process_component_rewards = torch.as_tensor(
-                    [
-                        float(value) if is_valid else 0.0
-                        for value, is_valid in zip(
-                            np.asarray(a9_component_rewards, dtype=object),
-                            component_valid_rows,
-                        )
-                    ],
-                    dtype=valid_data.batch["token_level_rewards"].dtype,
-                    device=valid_data.batch.device,
-                )
-
             valid_advantages, valid_returns = compute_step_grpo_advantage(
                 token_level_rewards=valid_data.batch["token_level_rewards"],
                 response_mask=valid_data.batch["response_mask"],
@@ -410,8 +368,6 @@ def compute_advantage(
                 step_indices=valid_data.non_tensor_batch["step_indices"],
                 gamma=gamma,
                 norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                process_component_rewards=process_component_rewards,
-                process_component_mask=process_component_mask,
             )
         elif credit_assignment in ("trajectory", "outcome"):
             from agent_r1.trainer.ppo.core_algos import compute_grpo_outcome_advantage
@@ -976,7 +932,10 @@ class RayAgentTrainer(RayPPOTrainer):
 
                 orig_critic_cfg = critic_cfg
                 if orig_critic_cfg.strategy == "fsdp":
-                    engine_config: FSDPEngineConfig = orig_critic_cfg.model.fsdp_config
+                    # verl 0.8 stores the critic engine config on the critic
+                    # config itself (``critic.fsdp``), unlike the actor model
+                    # config which nests it under ``model.fsdp_config``.
+                    engine_config: FSDPEngineConfig = orig_critic_cfg.fsdp
                     engine_config.infer_max_token_len_per_gpu = critic_cfg.ppo_infer_max_token_len_per_gpu
                     engine_config.max_token_len_per_gpu = critic_cfg.ppo_max_token_len_per_gpu
                 else:
@@ -984,7 +943,7 @@ class RayAgentTrainer(RayPPOTrainer):
 
                 critic_cfg = TrainingWorkerConfig(
                     model_type="value_model",
-                    model_config=orig_critic_cfg.model_config,
+                    model_config=orig_critic_cfg.model,
                     engine_config=engine_config,
                     optimizer_config=orig_critic_cfg.optim,
                     checkpoint_config=orig_critic_cfg.checkpoint,
@@ -1068,6 +1027,7 @@ class RayAgentTrainer(RayPPOTrainer):
         # create async rollout manager and request scheduler
         # Note: mode is always "async" since sync mode is deprecated
         self.async_rollout_mode = True
+        standalone_rollout = self.config.actor_rollout_ref.rollout.nnodes > 0
 
         from agent_r1.agent_flow import AgentFlowManager
         from verl.workers.rollout.llm_server import LLMServerManager
@@ -1077,11 +1037,21 @@ class RayAgentTrainer(RayPPOTrainer):
         else:
             rm_resource_pool = None
 
-        self.llm_server_manager = LLMServerManager.create(
-            config=self.config,
-            worker_group=self.actor_rollout_wg,
-            rollout_resource_pool=actor_rollout_resource_pool,
-        )
+        if standalone_rollout:
+            rollout_config = self.config.actor_rollout_ref.rollout
+            if rollout_config.nnodes <= 0 or rollout_config.n_gpus_per_node <= 0:
+                raise ValueError("Standalone rollout requires positive rollout.nnodes and rollout.n_gpus_per_node")
+            if rollout_config.checkpoint_engine.backend == "naive":
+                raise ValueError("Standalone rollout requires a distributed checkpoint-engine backend")
+            from agent_r1.workers.taco_standalone_vllm import TacoStandaloneLLMServerManager
+
+            self.llm_server_manager = TacoStandaloneLLMServerManager.create(config=self.config, worker_group=None)
+        else:
+            self.llm_server_manager = LLMServerManager.create(
+                config=self.config,
+                worker_group=self.actor_rollout_wg,
+                rollout_resource_pool=actor_rollout_resource_pool,
+            )
         self.async_rollout_manager = AgentFlowManager.create(
             config=self.config,
             llm_client=self.llm_server_manager.get_client(),
@@ -1131,9 +1101,9 @@ class RayAgentTrainer(RayPPOTrainer):
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # The usual HYBRID engines are dummy-loaded and require an actor weight
-        # push. Validation-only launchers may instead load the exact source
-        # checkpoint in vLLM and avoid the extra colocated memory peak.
+        # Training always starts from the actor state, so synchronize before
+        # the first rollout. Validation-only runs may use source-loaded weights
+        # directly when no checkpoint is being resumed.
         if should_sync_initial_rollout_weights(self.config):
             self.checkpoint_manager.update_weights(self.global_steps)
         else:

@@ -33,9 +33,10 @@ The A9 reward arm composes **terminal task reward** (exact match) with a **deter
 reward = w * terminal_EM + (1-w) * certificate_process_reward
 ```
 
-Two reward contracts are supported:
-- **cert_mix** (fixed 0.4/0.6): Stable process-weight-dominant signal throughout training.
-- **format_strict** (U(0,1) + format gate): Random per-trajectory weights with a hard gate that zeros all reward if the model fails to produce a valid finish tool call.
+A9 uses a two-stage trajectory-level schedule: the first 50 optimizer steps use
+terminal reward only, then each complete trajectory samples one
+\(w\sim U(0,1)\). The optional **format_strict** ablation retains the same
+uniform mixture and additionally zeros rewards for a missing finish call.
 
 ### Deterministic Process Rewards
 
@@ -59,9 +60,10 @@ Advantage estimation respects the **step-level MDP**: credit is assigned per age
 
 | Recipe | Dataset | Reward | Launch |
 |---|---|---|---|
-| DeepScaler + A9 | DeepScaleR-1.5K | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
-| DeepScaler + ToolEnv | DeepScaleR-1.5K | Candidate-answer feedback + terminal EM | `examples/deepmath/run_deepscaler_tool.sh` |
-| DeepMath | DeepMath-103K | `\boxed{}` EM + format reward | `examples/deepmath/run_deepmath.sh` |
+| DeepScaler ToolEnv A1 | DeepScaleR-1.5K | Strict terminal EM | `examples/deepmath/run_deepscaler_tool_a1.sh` |
+| DeepScaler ToolEnv A9 | DeepScaleR-1.5K | Uniform equation-process + terminal EM | `examples/deepmath/run_deepscaler_tool_a9.sh` |
+| DeepScaler single-turn A9 | DeepScaleR-1.5K | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
+| DeepMath | DeepMath-103K | `\boxed{}` terminal EM | `examples/deepmath/run_deepmath.sh` |
 | AIME 2025 | AIME 2025 | EM | `examples/deepmath/run_aime2025_a0.sh` |
 
 ### Multi-Hop Question Answering
@@ -145,7 +147,7 @@ bash examples/hotpotqa/run_a9_uniform.sh
 
 | Arm | Description | Reward Composition |
 |---|---|---|
-| **A9 cert_mix** | Certificate-grounded, fixed 0.4/0.6 split | 0.4 × EM + 0.6 × process |
+| **A9 cert_mix** | Certificate-grounded, trajectory-level uniform mixing | Warmup: EM; then \(w\times\) EM + \((1-w)\times\) process |
 | **A9 format_strict** | Certificate-grounded, random weights + format gate | U(0,1) × EM + (1-U) × process, gated |
 | **A8-LR** | Local reasoning with per-step reward | Local reward + terminal EM |
 | **A0** | Baseline: terminal EM only | EM |

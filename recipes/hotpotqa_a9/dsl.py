@@ -15,8 +15,8 @@ FINISH_CERT_FIELDS = frozenset({"source_id", "support_span", "answer_span"})
 # ---------------------------------------------------------------------------
 # Fault-tolerant certificate repair
 # ---------------------------------------------------------------------------
-# During EM warmup (step 1-100), cert reward=0 so the model degrades its JSON
-# format.  By step 88, 100% of certificates fail json.loads().  The three
+# During an earlier EM-only warmup, cert reward=0 so the model degraded its
+# JSON format. Eventually all certificates failed json.loads(). The three
 # required fields are still present, just in non-standard patterns:
 #
 #   Pattern A (majority):  "key}"  with value after the closing brace

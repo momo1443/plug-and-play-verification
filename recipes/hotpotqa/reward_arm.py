@@ -36,8 +36,9 @@ _TRAINING_REWARD_CONTRACTS = {
     RewardArm.A3: TrainingRewardContract(0.5, 0.5, 1),
     RewardArm.A6: TrainingRewardContract(0.5, 0.5, 1),
     RewardArm.A7: TrainingRewardContract(0.5, 0.5, 1),
-    RewardArm.A9: TrainingRewardContract(0.2, 0.8, 1),  # expected values; actual weights sampled U(0,1) per trajectory in hotpotqa_a9/
-    RewardArm.A9_CERT_MIX: TrainingRewardContract(0.2, 0.8, 1),  # expected values; actual weights sampled U(0,1) per trajectory in hotpotqa_a9/
+    # Expected weights; hotpotqa_a9 shares each realized U(0,1) w per prompt group.
+    RewardArm.A9: TrainingRewardContract(0.5, 0.5, 1),
+    RewardArm.A9_CERT_MIX: TrainingRewardContract(0.5, 0.5, 1),
 }
 
 def training_reward_contract(arm: RewardArm) -> TrainingRewardContract:

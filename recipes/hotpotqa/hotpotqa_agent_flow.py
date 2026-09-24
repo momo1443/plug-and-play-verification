@@ -347,6 +347,8 @@ class HotpotQAAgentFlow(AgentFlowBase):
         ]
 
     def _tool_schemas(self, *, final_turn: bool, finish_allowed: bool) -> list[dict[str, Any]]:
+        if final_turn:
+            return []
         return HOTPOTQA_TOOL_SCHEMAS
 
     def _apply_text_chat_template(

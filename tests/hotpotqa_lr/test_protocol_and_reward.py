@@ -42,19 +42,19 @@ class ProtocolAndRewardTest(unittest.TestCase):
 
     def test_em_warmup_reward_schedule(self):
         self.assertEqual(
-            optimizer_reward_schedule(global_step=1, is_validation=False, em_warmup_steps=100),
+            optimizer_reward_schedule(global_step=1, is_validation=False, em_warmup_steps=50),
             (1.0, 0.0, "em_warmup"),
         )
         self.assertEqual(
-            optimizer_reward_schedule(global_step=100, is_validation=False, em_warmup_steps=100),
+            optimizer_reward_schedule(global_step=50, is_validation=False, em_warmup_steps=50),
             (1.0, 0.0, "em_warmup"),
         )
         self.assertEqual(
-            optimizer_reward_schedule(global_step=101, is_validation=False, em_warmup_steps=100),
+            optimizer_reward_schedule(global_step=51, is_validation=False, em_warmup_steps=50),
             (0.7, 0.3, "lr30"),
         )
         self.assertEqual(
-            optimizer_reward_schedule(global_step=50, is_validation=True, em_warmup_steps=100),
+            optimizer_reward_schedule(global_step=50, is_validation=True, em_warmup_steps=50),
             (1.0, 0.0, "validation_terminal_em"),
         )
         self.assertEqual(
