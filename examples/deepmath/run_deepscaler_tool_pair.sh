@@ -35,6 +35,8 @@ export TOKENIZERS_PARALLELISM=false
 export DEEPSCALER_TOOL_EM_WARMUP_STEPS="${DEEPSCALER_TOOL_EM_WARMUP_STEPS:-50}"
 
 MODEL_PATH="${DEEPSCALER_TOOL_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
+agent_r1_model_overrides "$MODEL_PATH"
 SOURCE_DATA_DIR="${DEEPSCALER_SOURCE_DATA_DIR:-$PROJECT_DIR/data/corpus/deepscaler}"
 TOOL_DATA_DIR="${DEEPSCALER_TOOL_PAIR_DATA_DIR:-$PROJECT_DIR/data/corpus/deepscaler_tool_pair}"
 TRAIN_PATH="$TOOL_DATA_DIR/train.parquet"
@@ -85,7 +87,7 @@ for path in sys.argv[1:]:
         raise SystemExit(f"Paired ToolEnv parquet must not set agent_name: {path}")
 PY
 
-RUN_ID="${RUN_ID:-qwen35-4b_deepscaler_tool_${ARM,,}_n${ROLLOUT_N}_${TOTAL_STEPS}step_${NUM_GPUS}gpu_seed${SEED}_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_tool_${ARM,,}_n${ROLLOUT_N}_${TOTAL_STEPS}step_${NUM_GPUS}gpu_seed${SEED}_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${DEEPSCALER_TOOL_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 mkdir -p "$(dirname "$OUTPUT_DIR")"
 cd "$PROJECT_DIR"
@@ -114,6 +116,7 @@ echo "=== DeepScaleR ToolEnv $ARM ==="
 echo "Model: $MODEL_PATH"
 echo "Train: $TRAIN_PATH ($TRAIN_MAX_SAMPLES samples)"
 echo "Agent turns: $MAX_STEPS; rollout n: $ROLLOUT_N"
+echo "Runtime profile: deepscaler_toolenv; prompt=$MAX_PROMPT_LENGTH; response_per_turn=$MAX_RESPONSE_LENGTH"
 echo "A9 warmup: $DEEPSCALER_TOOL_EM_WARMUP_STEPS"
 echo "Output: $OUTPUT_DIR"
 
@@ -126,6 +129,7 @@ echo "Output: $OUTPUT_DIR"
     data.filter_overlong_prompts=false data.truncation=error data.return_raw_chat=true \
     +data.apply_chat_template_kwargs.enable_thinking=false \
     actor_rollout_ref.model.path="$MODEL_PATH" actor_rollout_ref.model.use_remove_padding=false \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_fused_kernels=true actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.strategy=fsdp actor_rollout_ref.actor.optim.lr=1e-6 \

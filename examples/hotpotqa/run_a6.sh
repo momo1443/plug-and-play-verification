@@ -3,7 +3,7 @@ set -euo pipefail
 
 # A6 (A3-LLM-MATCHED): step-causal GRPO with 0.5 times the
 # LLM-judge cumulative semantic-coverage increment plus 0.5 times terminal
-# exact match. Uses Qwen3-4B as the judge model on GPU 1.
+# exact match. Uses Qwen3.5-9B as the judge model on GPU 1.
 # Final-answer tokens remain in the policy loss under raw completion.
 #
 # Self-contained entrypoint; shared scientific/runtime defaults are owned by
@@ -18,7 +18,7 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2,3,4,5,6,7}"
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 
 export HOTPOTQA_JUDGE_GPU="${HOTPOTQA_JUDGE_GPU:-1}"
-export HOTPOTQA_JUDGE_MODEL="${HOTPOTQA_JUDGE_MODEL:-$WORKSPACE_DIR/models/Qwen3-4B}"
+export HOTPOTQA_JUDGE_MODEL="${HOTPOTQA_JUDGE_MODEL:-$WORKSPACE_DIR/models/Qwen3.5-9B}"
 export HOTPOTQA_JUDGE_PORT="${HOTPOTQA_JUDGE_PORT:-29500}"
 export HOTPOTQA_JUDGE_MAX_MODEL_LEN="${HOTPOTQA_JUDGE_MAX_MODEL_LEN:-4096}"
 export HOTPOTQA_JUDGE_GPU_MEMORY_UTILIZATION="${HOTPOTQA_JUDGE_GPU_MEMORY_UTILIZATION:-0.50}"

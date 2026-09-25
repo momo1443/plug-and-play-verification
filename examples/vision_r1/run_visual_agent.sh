@@ -32,6 +32,8 @@ for split in train test; do
 done
 
 MODEL_PATH="${VISION_R1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
+agent_r1_model_overrides "$MODEL_PATH"
 [[ -f "$MODEL_PATH/config.json" ]] || { echo "Missing model config: $MODEL_PATH/config.json" >&2; exit 2; }
 TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-8}"
 ROLLOUT_N="${VISION_R1_ROLLOUT_N:-4}"
@@ -59,7 +61,7 @@ else
     (( TP_SIZE == NUM_GPUS )) || { echo "Tensor parallel size must equal visible GPU count" >&2; exit 2; }
 fi
 
-RUN_ID="${RUN_ID:-qwen35-4b_vision-r1_${ARM,,}_visual-certificate_n${ROLLOUT_N}_${TOTAL_STEPS}step_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_vision-r1_${ARM,,}_visual-certificate_n${ROLLOUT_N}_${TOTAL_STEPS}step_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${VISION_R1_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 mkdir -p "$OUTPUT_DIR"
 
@@ -74,6 +76,7 @@ cd "$PROJECT_DIR"
     data.filter_overlong_prompts=false data.truncation=error data.return_raw_chat=true \
     data.image_key=images data.prompt_key=prompt +data.apply_chat_template_kwargs.enable_thinking=false \
     actor_rollout_ref.model.path="$MODEL_PATH" actor_rollout_ref.model.trust_remote_code=true \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_remove_padding=false actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.optim.lr=1e-6 actor_rollout_ref.actor.ppo_mini_batch_size="$TRAIN_BATCH_SIZE" \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 actor_rollout_ref.actor.use_dynamic_bsz=true \

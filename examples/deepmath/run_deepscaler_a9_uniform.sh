@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# DeepScaleR GRPO with A9-style uniform process reward schedule.
+# Legacy completion-level DeepScaleR GRPO with uniform process reward mixing.
+# For the multi-turn 4096/2048 ToolEnv profile use run_deepscaler_tool_a9.sh.
+# This entrypoint preserves the legacy 2048/4096 token allocation.
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
 #   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
 #   Steps 51-300:  w ~ U(0,1), reward = w * EM + (1-w) * process_reward
 #
-# Process reward: every reasoning step contributes its fraction of verified
-# numeric equations; steps without a verifiable equation contribute zero.
+# Process reward: average verified-equation fractions over equation-bearing
+# reasoning steps; the process reward is zero when no equations are extracted.
 #
 # 6-GPU configuration with Qwen3.5-4B:
 #   - vllm_gpu_memory_utilization=0.25
@@ -32,6 +34,8 @@ export TOKENIZERS_PARALLELISM=false
 
 # Model
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
+agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
 
 # ── A9 Schedule Config ───────────────────────────────────────────
 export DEEPSCALER_EM_WARMUP_STEPS="${DEEPSCALER_EM_WARMUP_STEPS:-50}"
@@ -125,7 +129,7 @@ if [[ -z "${RAY_TMPDIR:-}" ]]; then
 fi
 
 # Run ID and output
-RUN_ID="${RUN_ID:-qwen35-4b_deepscaler_a9uniform_grpo_stepcausal_main30k_n4_300step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_a9uniform_grpo_stepcausal_main30k_n4_300step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 
 mkdir -p "$OUTPUT_DIR"
@@ -147,6 +151,8 @@ cd "$PROJECT_DIR"
     --train-max-samples "$TRAIN_MAX_SAMPLES" \
     --train-batch-size "$TRAIN_BATCH_SIZE" \
     --rollout-n "$ROLLOUT_N" \
+    --max-prompt-length "$MAX_PROMPT_LENGTH" \
+    --max-response-length "$MAX_RESPONSE_LENGTH" \
     --total-training-steps "$TOTAL_TRAINING_STEPS" \
     --em-warmup-steps "$DEEPSCALER_EM_WARMUP_STEPS" \
     --save-freq "$SAVE_FREQ" \
@@ -159,6 +165,7 @@ echo "Val:   $VAL_PATH ($VAL_MAX_SAMPLES samples)"
 echo "GPUs:  $CUDA_VISIBLE_DEVICES ($NUM_GPUS)"
 echo "Steps: $TOTAL_TRAINING_STEPS"
 echo "Warmup: $DEEPSCALER_EM_WARMUP_STEPS (EM-only steps)"
+echo "Runtime profile: deepscaler_legacy; prompt=$MAX_PROMPT_LENGTH; completion=$MAX_RESPONSE_LENGTH"
 echo "Output: $OUTPUT_DIR"
 echo "=================================="
 
@@ -184,6 +191,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     data.truncation=error \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path="$HOTPOTQA_MODEL_PATH" \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.use_fused_kernels=true \
     actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
@@ -208,6 +216,8 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     actor_rollout_ref.actor.checkpoint.load_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
+    actor_rollout_ref.rollout.prompt_length="$MAX_PROMPT_LENGTH" \
+    actor_rollout_ref.rollout.response_length="$MAX_RESPONSE_LENGTH" \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.n="$ROLLOUT_N" \
     actor_rollout_ref.rollout.do_sample=True \

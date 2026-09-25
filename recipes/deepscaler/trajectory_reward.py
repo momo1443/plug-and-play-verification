@@ -131,14 +131,16 @@ def compute_tool_trajectory_reward(
     is_validation: bool,
     em_warmup_steps: int,
     prompt_group_key: str | None = None,
+    process_verification: VerificationResult | None = None,
 ) -> TrajectoryReward:
     """Score one complete DeepScaleR ToolEnv trajectory.
 
-    A1 always uses strict terminal EM. A9 has the same terminal-only warmup,
-    then samples one mixture weight shared by all rollouts for a prompt. Tool
-    XML and observations must be excluded before passing reasoning text.
+    A1 always uses strict terminal EM. A9 and the process-judge arm share an
+    outcome-only warmup and prompt-group mixture weights. For A9, exclude tool
+    XML and observations from reasoning_segments. The judge arm instead takes
+    a separately computed process_verification with causal source-step credits.
     """
-    if reward_mode not in {"terminal_only", "uniform_equation_process"}:
+    if reward_mode not in {"terminal_only", "uniform_equation_process", "llm_judge"}:
         raise ValueError(f"Unsupported DeepScaleR ToolEnv reward mode: {reward_mode}")
 
     has_final_answer = bool(final_response and final_response.strip())
@@ -157,20 +159,22 @@ def compute_tool_trajectory_reward(
             namespace=_GROUP_WEIGHT_NAMESPACE,
             warmup_phase="em_warmup",
             validation_phase="validation_terminal_em",
-            mixed_phase="uniform_equation_process",
+            mixed_phase="llm_process_uniform" if reward_mode == "llm_judge" else "uniform_equation_process",
         )
 
     should_verify = reward_mode == "uniform_equation_process" and schedule.process_weight > 0.0
-    verification = (
-        verify_process(reasoning_segments)
-        if should_verify
-        else VerificationResult(credits=(), audit={"verifier": "disabled", "credits_by_step": {}})
-    )
+    verification = VerificationResult(credits=(), audit={"verifier": "disabled"})
+    if should_verify:
+        verification = verify_process(reasoning_segments)
+    elif reward_mode == "llm_judge" and schedule.process_weight > 0.0:
+        if process_verification is None:
+            raise ValueError("llm_judge requires process verification after warmup")
+        verification = process_verification
     composed = compose_verification_reward(
         terminal_reward=terminal_em,
         verification=verification,
         schedule=schedule,
-        terminal_gate_passed=has_final_answer,
+        terminal_gate_passed=has_final_answer or reward_mode == "llm_judge",
     )
     process_segment_audits = list(verification.audit.get("process_segment_audits", []))
     return _as_trajectory_reward(

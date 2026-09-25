@@ -36,6 +36,8 @@ done
 command -v bwrap >/dev/null || { echo "bubblewrap is required for TACO A9" >&2; exit 2; }
 
 MODEL_PATH="${TACO_A9_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
+agent_r1_model_overrides "$MODEL_PATH"
 TRAIN_BATCH_SIZE="${TACO_A9_TRAIN_BATCH_SIZE:-20}"
 ROLLOUT_N="${TACO_A9_ROLLOUT_N:-4}"
 TOTAL_EPOCHS="${TACO_A9_TOTAL_EPOCHS:-1}"
@@ -80,7 +82,7 @@ else
     (( NUM_GPUS >= 2 )) || { echo "TACO Judge training requires at least two actor GPUs" >&2; exit 2; }
     (( TP_SIZE > 0 && NUM_GPUS % TP_SIZE == 0 )) || { echo "TACO tensor parallel size must divide actor GPU count" >&2; exit 2; }
 fi
-RUN_ID="${RUN_ID:-qwen35-4b_taco_${REWARD_MODE}_5turn_n4_${TOTAL_STEPS}step_${NUM_GPUS}gpu_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_taco_${REWARD_MODE}_5turn_n4_${TOTAL_STEPS}step_${NUM_GPUS}gpu_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${TACO_A9_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 mkdir -p "$OUTPUT_DIR"
 
@@ -101,6 +103,7 @@ cd "$PROJECT_DIR"
     data.filter_overlong_prompts=False data.truncation=error data.return_raw_chat=True \
     +data.apply_chat_template_kwargs.enable_thinking=false \
     actor_rollout_ref.model.path="$MODEL_PATH" actor_rollout_ref.model.use_remove_padding=False \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_fused_kernels=true actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.strategy=fsdp actor_rollout_ref.actor.optim.lr=1e-6 \

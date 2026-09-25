@@ -13,5 +13,5 @@
 - name: vision_r1_llm_judge_visual_agent
   _target_: recipes.vision_r1.VisionR1VisualAgentFlow
   reward_mode: llm_judge
-  terminal_warmup_steps: 0
+  terminal_warmup_steps: 50
   max_steps: 3

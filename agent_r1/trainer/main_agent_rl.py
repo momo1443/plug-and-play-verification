@@ -15,6 +15,8 @@
 
 import os
 import socket
+from datetime import datetime, timezone
+from pathlib import Path
 
 import ray
 from omegaconf import OmegaConf
@@ -287,6 +289,13 @@ class TaskRunner:
             use_reference_policy=need_reference_policy(config),
             use_critic=need_critic_agent_rl(config),
         )
+
+        # Preserve the effective launch configuration, including inherited verl
+        # defaults and model adaptation, without overwriting earlier resumes.
+        config_dir = Path(config.trainer.default_local_dir) / "launch_configs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        launch_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        OmegaConf.save(config=config, f=str(config_dir / f"resolved_{launch_stamp}.yaml"), resolve=True)
 
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on

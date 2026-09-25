@@ -11,12 +11,13 @@ from uuid import uuid4
 from agent_r1.agent_flow.agent_flow import AgentFlowBase, AgentFlowOutput, AgentFlowStep, register
 from agent_r1.env.tool_format import ToolFormatWrapper
 from agent_r1.verifier import (
-    UniformRewardSchedule,
     VerificationResult,
     apply_composed_reward,
     compose_verification_reward,
 )
-from recipes.llm_judge.scoring import question_from_raw_prompt, score_candidate
+from recipes.llm_judge.scoring import (
+    ProcessStep, image_data_url, judge_reward_info, question_from_raw_prompt, verify_process_steps,
+)
 from recipes.vision_r1.artifacts import VisualArtifact
 from recipes.vision_r1.prompts import (
     FINAL_TURN_PROMPT,
@@ -121,16 +122,17 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
         global_step = int(kwargs.get("_agent_r1_global_step", -1))
         is_validation = bool(kwargs.get("_agent_r1_is_validation", False))
         prompt_group_key = _group_key(kwargs)
-        schedule = (
-            UniformRewardSchedule(1.0, 0.0, "llm_judge_terminal", "fixed", prompt_group_key)
-            if self.reward_mode == "llm_judge"
-            else reward_schedule(
-                reward_mode=self.reward_mode,
-                global_step=global_step,
-                is_validation=is_validation,
-                terminal_warmup_steps=self.terminal_warmup_steps,
-                prompt_group_key=prompt_group_key,
-            )
+        schedule = reward_schedule(
+            reward_mode=self.reward_mode,
+            global_step=global_step,
+            is_validation=is_validation,
+            terminal_warmup_steps=self.terminal_warmup_steps,
+            prompt_group_key=prompt_group_key,
+        )
+        judge_steps: list[ProcessStep] = []
+        root_image_url = (
+            image_data_url(root.image)
+            if self.reward_mode == "llm_judge" and schedule.process_weight > 0.0 else None
         )
         steps: list[AgentFlowStep] = []
         metrics: dict[str, Any] = {
@@ -216,6 +218,13 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                 else:
                     feedback = "Output exactly one permitted tool call for this turn."
 
+            if self.reward_mode == "llm_judge" and schedule.process_weight > 0.0 and action_name != "submit_answer":
+                judge_steps.append(ProcessStep(
+                    step_index=turn, action=response_text, observation=feedback,
+                    image_urls=(root_image_url, image_data_url(feedback_image)) if feedback_image is not None else (),
+                    valid=step_kind == "inspect_region" and feedback_image is not None,
+                ))
+
             step = AgentFlowStep(
                 prompt_ids=prompt_ids,
                 response_ids=response_ids,
@@ -243,22 +252,8 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             metrics["step_generate_sequences"].append(step_metrics.get("generate_sequences", 0.0))
             metrics["step_tool_calls"].append(step_metrics.get("tool_calls", 0.0))
 
-            if submitted_answer is not None:
+            if submitted_answer is not None and self.reward_mode != "llm_judge":
                 terminal_score = outcome_reward(submitted_answer, _ground_truth(kwargs))
-                judge_result = None
-                judge_invalid = False
-                optimizer_terminal_score = terminal_score
-                if self.reward_mode == "llm_judge" and not is_validation:
-                    judge_result = await score_candidate(
-                        self.judge_server,
-                        domain="vision_r1",
-                        question=question_from_raw_prompt(raw_prompt),
-                        candidate=submitted_answer,
-                        reference=_ground_truth(kwargs),
-                        auxiliary={"certificate": raw_certificate},
-                    )
-                    judge_invalid = judge_result is None
-                    optimizer_terminal_score = 0.0 if judge_invalid else judge_result.score
                 verification = (
                     verify_process(
                         artifacts=artifacts,
@@ -272,7 +267,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                     )
                 )
                 composed = compose_verification_reward(
-                    terminal_reward=optimizer_terminal_score,
+                    terminal_reward=terminal_score,
                     verification=verification,
                     schedule=schedule,
                 )
@@ -285,16 +280,13 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                         "verified_process_reward": verification.process_reward,
                         "reward_mode": self.reward_mode,
                         "verifier_timing": "terminal_visual_replay",
-                        "llm_judge_score": None if judge_result is None else judge_result.score,
-                        "llm_judge_input_hash": None if judge_result is None else judge_result.input_hash,
-                        "llm_judge_cache_hit": None if judge_result is None else judge_result.cache_hit,
-                        "llm_judge_attempts": None if judge_result is None else judge_result.attempts,
-                        "llm_judge_latency_s": None if judge_result is None else judge_result.latency_s,
-                        "judge_invalid": judge_invalid,
-                        "optimizer_total_reward": optimizer_terminal_score,
+
                     },
                 )
                 terminal_applied = True
+                break
+
+            if submitted_answer is not None:
                 break
 
             messages.append({"role": "assistant", "content": response_text})
@@ -313,6 +305,24 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
 
         if not steps:
             raise RuntimeError("Vision-R1 visual agent produced no steps")
+        if self.reward_mode == "llm_judge":
+            terminal_score = outcome_reward(submitted_answer, _ground_truth(kwargs))
+            verification = (
+                await verify_process_steps(
+                    self.judge_server, domain="vision_r1",
+                    question=question_from_raw_prompt(raw_prompt),
+                    steps=judge_steps, max_steps=self.max_steps,
+                ) if schedule.process_weight > 0.0 else VerificationResult(credits=(), audit={})
+            )
+            composed = compose_verification_reward(
+                terminal_reward=terminal_score, verification=verification, schedule=schedule,
+            )
+            apply_composed_reward(steps, composed, extra_final_info={
+                "acc": terminal_score, "terminal_exact_math_match": terminal_score,
+                "verified_process_reward": verification.process_reward, "reward_mode": "llm_judge",
+                "verifier_timing": "causal_prefix_backfill", **judge_reward_info(verification),
+            })
+            terminal_applied = True
         if not terminal_applied:
             composed = compose_verification_reward(
                 terminal_reward=0.0,

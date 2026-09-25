@@ -9,6 +9,7 @@ fi
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
 case "$ARM" in
@@ -115,6 +116,7 @@ export HOTPOTQA_CORPUS_DATA_ROOT="${HOTPOTQA_CORPUS_DATA_ROOT:-$PROJECT_DIR/data
 export HOTPOTQA_EVIDENCE_SIDECAR="${HOTPOTQA_EVIDENCE_SIDECAR:-$HOTPOTQA_CORPUS_DATA_ROOT/hotpotqa_evidence_v1.sqlite3}"
 export HOTPOTQA_EMBEDDING_MODEL="${HOTPOTQA_EMBEDDING_MODEL:-$WORKSPACE_DIR/models/bge-large-en-v1.5}"
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
 
 TRAIN_PATH="${HOTPOTQA_TRAIN_PATH:-$HOTPOTQA_DATA_ROOT/train.parquet}"
 VAL_PATH="${HOTPOTQA_VAL_PATH:-$HOTPOTQA_DATA_ROOT/validation.parquet}"
@@ -273,7 +275,7 @@ case "$RESUME_MODE" in
 esac
 export AGENT_R1_ENTROPY_CHUNK_ROWS="$ENTROPY_CHUNK_ROWS"
 
-RUN_ID="${RUN_ID:-qwen35-4b_${ARM,,}_${RUN_MODE}_${OPTIMIZER}_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_${ARM,,}_${RUN_MODE}_${OPTIMIZER}_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 # Keep Ray's lexical path short for AF_UNIX sockets while storing its sessions
 # on the project filesystem instead of the nearly-full root filesystem.
@@ -482,6 +484,7 @@ fi
     data.return_raw_chat=True \
     +data.apply_chat_template_kwargs.enable_thinking=false \
     actor_rollout_ref.model.path="$HOTPOTQA_MODEL_PATH" \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.model.use_fused_kernels="$USE_FUSED_KERNELS" \
     actor_rollout_ref.model.fused_kernel_options.impl_backend="$FUSED_KERNEL_BACKEND" \
