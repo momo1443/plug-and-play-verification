@@ -101,7 +101,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "contract_version": (
-            "taco-qwen35-9b-llm-judge-v1"
+            "taco-qwen35-9b-process-judge-v2"
             if args.reward_mode == "llm_judge"
             else "taco-a9-verified-process-group-uniform-v3"
         ),
@@ -141,7 +141,14 @@ def main() -> None:
             "certificate_verifier": "taco-a9-execution-replay-v1",
         },
         "reward_contract": ({
-            "training_formula": "Qwen3.5-9B frozen LLM judge score",
+            "judge_version": "qwen35-9b-causal-process-v2",
+            "terminal_warmup_steps": args.terminal_warmup_steps,
+            "warmup_formula": "private_test_all_pass",
+            "training_formula": "w * private_test_all_pass + (1-w) * llm_process_reward",
+            "weight_sampling": "uniform_0_1_per_prompt_group_after_terminal_warmup",
+            "process_formula": "sum(intermediate_step_judge_scores) / max_turns",
+            "optimizer_placement": "process_credit_source_steps_terminal_credit_final_step",
+            "judge_inputs": "task, intermediate code/actions and developer feedback; no final submission or private tests",
             "validation_formula": "private_test_all_pass",
             "score_support": [0.0, 0.25, 0.5, 0.75, 1.0],
             "failure_policy": "abort_optimizer_update",

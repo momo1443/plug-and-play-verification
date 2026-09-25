@@ -13,7 +13,7 @@ from agent_r1.agent_flow.agent_flow import AgentFlowOutput, AgentFlowStep, regis
 from agent_r1.env.base import Action
 from agent_r1.verifier import apply_composed_reward
 from recipes.deepscaler.trajectory_reward import TrajectoryReward, compute_tool_trajectory_reward
-from recipes.llm_judge.scoring import question_from_raw_prompt, score_candidate
+from recipes.llm_judge.scoring import ProcessStep, judge_reward_info, question_from_raw_prompt, verify_process_steps
 from recipes.reward_mixing import prompt_group_key_from_extra_info
 from verl.utils.profiler import simple_timer
 
@@ -68,7 +68,7 @@ class DeepScalerToolRewardAgentFlow(AgentEnvLoop):
         global_step = int(kwargs.get("_agent_r1_global_step", -1))
         is_validation = bool(kwargs.get("_agent_r1_is_validation", False))
         prompt_group_key = None
-        if self.reward_mode == "uniform_equation_process" and not is_validation and global_step > self.em_warmup_steps:
+        if self.reward_mode in {"uniform_equation_process", "llm_judge"} and not is_validation and global_step > self.em_warmup_steps:
             prompt_group_key = prompt_group_key_from_extra_info(
                 kwargs.get("extra_info") or {},
                 data_source=str(kwargs.get("data_source") or "deepmath"),
@@ -78,6 +78,7 @@ class DeepScalerToolRewardAgentFlow(AgentEnvLoop):
         tools = getattr(env, "tool_schemas", None)
         steps = []
         reasoning_segments: list[tuple[int, str]] = []
+        judge_steps: list[ProcessStep] = []
         metrics: dict[str, Any] = {}
         tool_call_count = 0
         final_response: str | None = None
@@ -133,14 +134,27 @@ class DeepScalerToolRewardAgentFlow(AgentEnvLoop):
             if done:
                 final_response = response_text
                 break
+            if self.reward_mode == "llm_judge" and not is_validation and global_step > self.em_warmup_steps:
+                judge_steps.append(ProcessStep(
+                    step_index=turn,
+                    action=response_text,
+                    observation=next_observation.messages[-1].get("content") if next_observation.messages else None,
+                    valid=bool(content.strip() or tool_calls),
+                ))
             observation = next_observation
 
         if not steps:
             raise RuntimeError("DeepScaleR ToolEnv produced no agent steps")
 
-        audit_reward_mode = "terminal_only" if self.reward_mode == "llm_judge" else self.reward_mode
+        verification = None
+        if self.reward_mode == "llm_judge" and not is_validation and global_step > self.em_warmup_steps:
+            verification = await verify_process_steps(
+                self.judge_server, domain="deepmath",
+                question=question_from_raw_prompt(kwargs.get("raw_prompt")),
+                steps=judge_steps, max_steps=self.max_steps,
+            )
         trajectory_reward = compute_tool_trajectory_reward(
-            reward_mode=audit_reward_mode,
+            reward_mode=self.reward_mode,
             final_response=final_response,
             ground_truth=self._ground_truth(kwargs),
             reasoning_segments=reasoning_segments,
@@ -148,52 +162,15 @@ class DeepScalerToolRewardAgentFlow(AgentEnvLoop):
             is_validation=is_validation,
             em_warmup_steps=self.em_warmup_steps,
             prompt_group_key=prompt_group_key,
+            process_verification=verification,
         )
-        if self.reward_mode == "llm_judge" and not is_validation:
-            judge_result = None
-            judge_invalid = False
-            if final_response is not None:
-                judge_result = await score_candidate(
-                    self.judge_server,
-                    domain="deepmath",
-                    question=question_from_raw_prompt(kwargs.get("raw_prompt")),
-                    candidate=final_response,
-                    reference=self._ground_truth(kwargs),
-                    auxiliary={"tool_call_count": tool_call_count},
-                )
-                judge_invalid = judge_result is None
-            for step in steps:
-                step.reward_score = 0.0
-            steps[-1].reward_score = 0.0 if judge_result is None else judge_result.score
-            reward_info = steps[-1].extra_fields.setdefault("reward_extra_info", {})
-            reward_info.update(
-                {
-                    "acc": trajectory_reward.terminal_em,
-                    "terminal_em": trajectory_reward.terminal_em,
-                    "llm_judge_score": None if judge_result is None else judge_result.score,
-                    "llm_judge_input_hash": None if judge_result is None else judge_result.input_hash,
-                    "llm_judge_cache_hit": None if judge_result is None else judge_result.cache_hit,
-                    "llm_judge_attempts": None if judge_result is None else judge_result.attempts,
-                    "llm_judge_latency_s": None if judge_result is None else judge_result.latency_s,
-                    "judge_invalid": judge_invalid,
-                    "reward_mode": "llm_judge",
-                    "optimizer_total_reward": float(steps[-1].reward_score),
-                }
-            )
-        else:
-            _apply_trajectory_reward(
-                steps,
-                trajectory_reward,
-                tool_call_count=tool_call_count,
-                max_steps=self.max_steps,
-            )
-            if self.reward_mode == "llm_judge":
-                reward_info = steps[-1].extra_fields.setdefault("reward_extra_info", {})
-                reward_info.update(
-                    {
-                        "llm_judge_score": None,
-                        "judge_invalid": False,
-                        "reward_mode": "llm_judge_validation_deterministic",
-                    }
-                )
+        _apply_trajectory_reward(
+            steps, trajectory_reward, tool_call_count=tool_call_count, max_steps=self.max_steps,
+        )
+        if self.reward_mode == "llm_judge":
+            info = steps[-1].extra_fields.setdefault("reward_extra_info", {})
+            info.update({"acc": trajectory_reward.terminal_em, "reward_mode": "llm_judge",
+                         "judge_invalid": False})
+            if verification is not None:
+                info.update(judge_reward_info(verification))
         return AgentFlowOutput(steps=steps, metrics=metrics)

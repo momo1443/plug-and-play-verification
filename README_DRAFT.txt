@@ -328,6 +328,9 @@ Vision-R1 uses a prompt batch of 8, so 10,000 examples correspond to 1,250 optim
 
 The comparison arm trains a Qwen3.5-4B actor while a frozen Qwen3.5-9B model scores process quality. By default, GPUs 0-6 serve the actor and GPU 7 serves the judge.
 
+The judge supplies **process rewards**, while deterministic binary final-answer correctness remains the outcome reward. The implementation contract is documented in [docs/experiments/llm-process-judge.md](docs/experiments/llm-process-judge.md). Math/code/vision now use causal intermediate-step scoring (`qwen35-9b-causal-process-v2`), replacing the earlier terminal-judge baseline. Results above must not be attributed to this revised baseline without new training/evaluation runs.
+
+
 ```bash
 bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
 bash examples/llm_judge/run_grpo_4b_judge_9b.sh hotpotqa

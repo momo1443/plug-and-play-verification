@@ -4,7 +4,7 @@ Every arm uses this exact execution path. A0 is validation-only; A1 consumes
 terminal EM; A2 consumes process reward with final tokens masked; A3 consumes
 the frozen 0.5/0.5 combination while keeping final tokens trainable; A6
 replaces the deterministic process verifier with an LLM semantic judge
-(Qwen3-4B) that evaluates which gold supporting facts are semantically
+(Qwen3.5-9B) that evaluates which gold supporting facts are semantically
 covered by accumulated passages, then applies the same |new_llm_covered| /
 |G_i| formula as A3; A7 replaces the process verifier with a weak execution
 check that rewards each model-generated search producing a non-empty
@@ -252,7 +252,7 @@ class HotpotQAAgentFlow(AgentFlowBase):
         # A2 pays the full deterministic evidence reward and masks the final
         # answer out of the policy loss. A3 pays 0.5 process + 0.5 terminal EM
         # and keeps final-answer tokens in the loss. A6 replaces the
-        # deterministic evidence verifier with an LLM semantic judge (Qwen3-4B)
+        # deterministic evidence verifier with an LLM semantic judge (Qwen3.5-9B)
         # that evaluates cumulative coverage against gold supporting facts,
         # rewarding only the high-watermark increment. A7 replaces the process
         # verifier with a weak execution check that rewards each model-generated

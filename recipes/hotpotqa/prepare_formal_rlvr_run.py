@@ -260,7 +260,7 @@ def _judge_manifest_config(
     if reward_arm is not RewardArm.A6:
         return None
     workspace_dir = project_dir.parent
-    default_model_name = "Qwen3-4B"
+    default_model_name = "Qwen3.5-9B"
     judge_model_path = (
         Path(
             os.environ.get(

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 CODE_PATHS = (
+    "examples/common/model_training.sh",
     "agent_r1/verifier/reward.py",
     "agent_r1/trainer/main_agent_grpo.py",
     "agent_r1/trainer/ppo/core_algos.py",
@@ -86,6 +87,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "arm": "DeepScaleR-A9-uniform-process",
+        "runtime_profile": "deepscaler_legacy",
         "contract_version": "deepscaler-a9-group-uniform-step-equations-v4-strict-em-warmup",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": args.status,
@@ -119,6 +121,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "train_max_samples": args.train_max_samples,
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
+            "max_prompt_length": args.max_prompt_length,
+            "max_response_length": args.max_response_length,
             "total_training_steps": args.total_training_steps,
             "resume_global_step": resume_global_step,
             "save_freq": args.save_freq,
@@ -139,7 +143,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "process_reward": {
                 "equation_score": "1 if nontrivial numeric equality verifies, else 0",
                 "step_score": "verified_equations / extracted_equations; 0 when none extracted",
-                "trajectory_score": "mean(step_score over parsed reasoning steps)",
+                "trajectory_score": "mean(step_score over equation-bearing reasoning steps); 0 when none",
                 "unsupported_expressions": "fail_closed",
                 "optimizer_placement": "completion_level_scalar_after_step_aggregation",
                 "token_span_credit": False,
@@ -165,6 +169,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-max-samples", type=int, required=True)
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--rollout-n", type=int, required=True)
+    parser.add_argument("--max-prompt-length", type=int, default=2048)
+    parser.add_argument("--max-response-length", type=int, default=4096)
     parser.add_argument("--total-training-steps", type=int, required=True)
     parser.add_argument("--em-warmup-steps", type=int, required=True)
     parser.add_argument("--save-freq", type=int, required=True)

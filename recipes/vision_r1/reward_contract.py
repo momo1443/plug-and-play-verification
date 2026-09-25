@@ -30,7 +30,7 @@ def reward_schedule(
 ) -> UniformRewardSchedule:
     if reward_mode == "terminal_only":
         return UniformRewardSchedule(1.0, 0.0, "terminal_only", "fixed", None)
-    if reward_mode != "uniform_visual_certificate":
+    if reward_mode not in {"uniform_visual_certificate", "llm_judge"}:
         raise ValueError(f"Unsupported Vision-R1 reward mode: {reward_mode}")
     return uniform_reward_schedule(
         global_step=global_step,
@@ -40,5 +40,5 @@ def reward_schedule(
         namespace=_GROUP_WEIGHT_NAMESPACE,
         warmup_phase="terminal_warmup",
         validation_phase="validation_terminal_only",
-        mixed_phase="visual_certificate_uniform",
+        mixed_phase="llm_process_uniform" if reward_mode == "llm_judge" else "visual_certificate_uniform",
     )

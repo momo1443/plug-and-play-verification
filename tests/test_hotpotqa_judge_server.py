@@ -58,6 +58,43 @@ class _FakeSession:
         self.closed = True
 
 
+class JudgeImageInputTest(unittest.TestCase):
+    def test_local_images_reach_api_and_participate_in_cache_key(self):
+        manager = JudgeServerManager(model_path="/tmp/model", gpu_id=1, launch_server=False)
+        manager._started = True
+        manager._session = _FakeSession()
+        async def run():
+            kwargs = dict(system_prompt="process", parser=float, cache_namespace="image-test")
+            first = await manager.judge_structured("inspect", image_urls=("data:image/png;base64,AAA",), **kwargs)
+            again = await manager.judge_structured("inspect", image_urls=("data:image/png;base64,AAA",), **kwargs)
+            changed = await manager.judge_structured("inspect", image_urls=("data:image/png;base64,BBB",), **kwargs)
+            return first, again, changed
+        first, again, changed = asyncio.run(run())
+        self.assertTrue(again.cache_hit)
+        self.assertFalse(changed.cache_hit)
+        self.assertNotEqual(first.input_hash, changed.input_hash)
+        content = manager._session.payload["messages"][1]["content"]
+        self.assertEqual(content[0], {"type": "text", "text": "inspect"})
+        self.assertEqual(content[1]["image_url"]["url"], "data:image/png;base64,BBB")
+
+    def test_remote_images_reach_api_and_participate_in_cache_key(self):
+        client = RemoteJudgeClient(api_base="https://example.invalid", api_key="test", model_name="Qwen3.5-9B")
+        client._started = True
+        response = MagicMock()
+        response.choices[0].message.content = "0.75"
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(return_value=response)
+        async def run():
+            kwargs = dict(system_prompt="process", parser=float, cache_namespace="image-test")
+            first = await client.judge_structured("inspect", image_urls=("image-a",), **kwargs)
+            second = await client.judge_structured("inspect", image_urls=("image-b",), **kwargs)
+            return first, second
+        first, second = asyncio.run(run())
+        self.assertNotEqual(first.input_hash, second.input_hash)
+        payload = client._client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["messages"][1]["content"][1]["image_url"]["url"], "image-b")
+
+
 class JudgeServerManagerTest(unittest.TestCase):
     def test_external_mode_attaches_without_spawning_a_server(self):
         manager = JudgeServerManager(

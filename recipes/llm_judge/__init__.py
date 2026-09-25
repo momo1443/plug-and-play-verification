@@ -1,5 +1,5 @@
 """Shared frozen LLM-as-judge reward helpers."""
 
-from .scoring import JudgeScore, score_candidate
+from .scoring import ProcessStep, verify_process_steps
 
-__all__ = ["JudgeScore", "score_candidate"]
+__all__ = ["ProcessStep", "verify_process_steps"]

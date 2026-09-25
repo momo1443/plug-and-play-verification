@@ -12,6 +12,7 @@ export HOTPOTQA_REWARD_ARM=A9_CERT_MIX
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-8}"
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-9B}"
+export AGENT_R1_LORA_RANK="${AGENT_R1_LORA_RANK:-64}"
 export HOTPOTQA_A9_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-50}"
 export HOTPOTQA_A9_FORMAT_GATE=0
 export HOTPOTQA_A9_FORMAT_PENALTY=0
@@ -19,7 +20,7 @@ export HOTPOTQA_VLLM_ENABLE_SLEEP_MODE=false
 export HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false
 export HOTPOTQA_SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
 
-# 9B memory window: 8 rollouts per prompt, smaller train/validation batches,
+# 9B memory window: 4 rollouts per prompt, smaller train/validation batches,
 # bounded vLLM concurrency, and actor/optimizer offload.
 export HOTPOTQA_RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
 export HOTPOTQA_TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-8}"
@@ -39,4 +40,4 @@ export HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP="${HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP:-2}"
 
 export RUN_ID="${RUN_ID:-qwen35-9b_a9_certmix_uniform_main30k_n4_8gpu_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/run_rlvr.sh" "$@"

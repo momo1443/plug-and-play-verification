@@ -29,10 +29,16 @@ def _reward_contract(arm: str, warmup_steps: int) -> dict[str, Any]:
         }
     if arm == "JUDGE":
         return {
-            "training_formula": "Qwen3.5-9B frozen LLM judge score",
+            "judge_version": "qwen35-9b-causal-process-v2",
+            "warmup_steps": warmup_steps,
+            "warmup_formula": "terminal_EM(final_answer)",
+            "training_formula": "w * terminal_EM(final_answer) + (1-w) * llm_process_reward",
+            "weight_sampling": "one w ~ Uniform(0, 1) per prompt group after warmup",
+            "process_formula": "sum(intermediate_step_judge_scores) / max_steps",
+            "judge_inputs": "task and causal intermediate action/observation prefixes; no final submission or reference answer",
             "validation_formula": "terminal_EM(final_answer)",
             "score_support": [0.0, 0.25, 0.5, 0.75, 1.0],
-            "optimizer_placement": "final_agent_step_only",
+            "optimizer_placement": "process_credit_source_steps_terminal_credit_final_step",
             "failure_policy": "abort_optimizer_update",
         }
     return {
@@ -82,6 +88,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "recipes/deepscaler/prepare_tool_data.py",
         "recipes/deepscaler/prepare_tool_pair_run.py",
         "examples/deepmath/run_deepscaler_tool_pair.sh",
+        "examples/common/model_training.sh",
         "examples/llm_judge/run_with_frozen_judge.sh",
         "examples/llm_judge/run_grpo_4b_judge_9b.sh",
     ]
@@ -89,6 +96,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if missing_code:
         raise FileNotFoundError(f"Paired ToolEnv source missing: {missing_code}")
     manifest = {
+        "runtime_profile": "deepscaler_toolenv",
         "contract_version": "deepscaler-tool-paired-a1-a9-group-uniform-v2",
         "arm": args.arm,
         "run_id": args.run_id,

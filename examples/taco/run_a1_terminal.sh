@@ -29,6 +29,8 @@ NUM_GPUS="${#VISIBLE_GPUS[@]}"
 (( NUM_GPUS == 6 || NUM_GPUS == 8 )) || { echo "TACO A1 requires six or eight visible GPUs" >&2; exit 2; }
 TRAINER_GPUS="${TACO_A1_TRAINER_GPUS:-$NUM_GPUS}"
 MODEL_PATH="${TACO_A1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+source "$PROJECT_DIR/examples/common/model_training.sh"
+agent_r1_model_overrides "$MODEL_PATH"
 TRAIN_BATCH_SIZE="${TACO_A1_TRAIN_BATCH_SIZE:-20}"
 ROLLOUT_N="${TACO_A1_ROLLOUT_N:-4}"
 TOTAL_EPOCHS="${TACO_A1_TOTAL_EPOCHS:-1}"
@@ -52,7 +54,7 @@ ROLLOUT_NNODES="${TACO_A1_ROLLOUT_NNODES:-0}"
 CHECKPOINT_ENGINE_BACKEND="${TACO_A1_CHECKPOINT_ENGINE_BACKEND:-naive}"
 CHECKPOINT_BUCKET_MB="${TACO_A1_CHECKPOINT_BUCKET_MB:-2048}"
 OUTPUT_ROOT="${TACO_A1_OUTPUT_ROOT:-$WORKSPACE_DIR/logs}"
-RUN_ID="${RUN_ID:-qwen35-4b_taco_a1_terminal_private_binary_n4_${TOTAL_STEPS}step_8gpu_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_taco_a1_terminal_private_binary_n${ROLLOUT_N}_${TOTAL_STEPS}step_${TRAINER_GPUS}gpu_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${TACO_A1_OUTPUT_DIR:-$OUTPUT_ROOT/$RUN_ID}"
 
 TRAIN_ROWS="$($PYTHON_BIN - "$TRAIN_PATH" <<'PY'
@@ -92,6 +94,7 @@ fi
     data.filter_overlong_prompts=False data.truncation=error data.return_raw_chat=True \
     +data.apply_chat_template_kwargs.enable_thinking=false \
     actor_rollout_ref.model.path="$MODEL_PATH" actor_rollout_ref.model.use_remove_padding=False \
+    "${AGENT_R1_MODEL_OVERRIDES[@]}" \
     actor_rollout_ref.model.use_fused_kernels=true actor_rollout_ref.model.fused_kernel_options.impl_backend=triton \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.strategy=fsdp actor_rollout_ref.actor.optim.lr=1e-6 \

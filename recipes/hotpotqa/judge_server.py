@@ -66,6 +66,7 @@ class JudgeProtocol(Protocol):
         cache_namespace: str,
         max_tokens: int = _JUDGE_COMPLETION_MAX_TOKENS,
         structured_outputs: dict[str, Any] | None = None,
+        image_urls: tuple[str, ...] = (),
     ) -> JudgeCallResult | None: ...
     async def judge(
         self,
@@ -73,6 +74,14 @@ class JudgeProtocol(Protocol):
         allowed_fact_ids: set[str] | None = None,
     ) -> float | set[str] | None: ...
     def identity_summary(self) -> dict[str, Any]: ...
+
+
+def _judge_content(prompt: str, image_urls: tuple[str, ...]) -> str | list[dict[str, Any]]:
+    if not image_urls:
+        return prompt
+    return [{"type": "text", "text": prompt}] + [
+        {"type": "image_url", "image_url": {"url": url}} for url in image_urls
+    ]
 
 
 def _file_sha256(path: str | Path) -> str:
@@ -104,7 +113,7 @@ class JudgeServerManager:
     Parameters
     ----------
     model_path:
-        HuggingFace model directory (e.g. ``models/Qwen3-4B``).
+        HuggingFace model directory (e.g. ``models/Qwen3.5-9B``).
     gpu_id:
         CUDA device index on which to launch the server.
     port:
@@ -288,6 +297,7 @@ class JudgeServerManager:
         cache_namespace: str,
         max_tokens: int = _JUDGE_COMPLETION_MAX_TOKENS,
         structured_outputs: dict[str, Any] | None = None,
+        image_urls: tuple[str, ...] = (),
     ) -> JudgeCallResult[_T] | None:
         """Call the frozen Judge, retry parse failures, and cache exact inputs.
 
@@ -310,6 +320,7 @@ class JudgeServerManager:
             "model": str(self.model_path),
             "system_prompt": system_prompt,
             "user_prompt": prompt,
+            "image_urls": image_urls,
             "max_tokens": max_tokens,
             "temperature": _JUDGE_COMPLETION_TEMPERATURE,
             "top_p": 1.0,
@@ -340,7 +351,7 @@ class JudgeServerManager:
             "model": str(self.model_path),
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": _judge_content(prompt, image_urls)},
             ],
             "max_tokens": max_tokens,
             "temperature": _JUDGE_COMPLETION_TEMPERATURE,
@@ -655,6 +666,7 @@ class RemoteJudgeClient:
         cache_namespace: str,
         max_tokens: int = _JUDGE_COMPLETION_MAX_TOKENS,
         structured_outputs: dict[str, Any] | None = None,
+        image_urls: tuple[str, ...] = (),
     ) -> JudgeCallResult[_T] | None:
         """Call the remote Judge API, retry parse failures, and cache exact inputs.
 
@@ -675,6 +687,7 @@ class RemoteJudgeClient:
             "api_base": self.api_base,
             "system_prompt": system_prompt,
             "user_prompt": prompt,
+            "image_urls": image_urls,
             "max_tokens": max_tokens,
             "temperature": self.temperature,
             "top_p": 1.0,
@@ -706,7 +719,7 @@ class RemoteJudgeClient:
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
+                        {"role": "user", "content": _judge_content(prompt, image_urls)},
                     ],
                     max_tokens=max_tokens,
                     temperature=self.temperature,
@@ -864,7 +877,7 @@ def create_judge_from_env(reward_arm: Any) -> JudgeServerManager | RemoteJudgeCl
         "WORKSPACE_DIR",
         os.path.join(os.path.dirname(__file__), "..", ".."),
     )
-    default_judge_model = os.path.join(workspace_dir, "models", "Qwen3-4B")
+    default_judge_model = os.path.join(workspace_dir, "models", "Qwen3.5-9B")
     return JudgeServerManager(
         model_path=os.environ.get(
             "HOTPOTQA_JUDGE_MODEL",

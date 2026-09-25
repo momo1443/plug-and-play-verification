@@ -20,7 +20,7 @@ from agent_r1.verifier import (
     apply_composed_reward,
     compose_verification_reward,
 )
-from recipes.llm_judge.scoring import score_candidate
+from recipes.llm_judge.scoring import ProcessStep, judge_reward_info, verify_process_steps
 from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord
 from recipes.taco_a9.protocol import parse_tool_call
 from recipes.taco_a9.prompts import (
@@ -182,11 +182,11 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
         developer_suite, private_suite = self.store.suites(task_id)
         is_validation = bool(kwargs.get("_agent_r1_is_validation", False))
         global_step = int(kwargs.get("_agent_r1_global_step", -1))
-        if self.reward_mode in {"terminal_private_binary", "llm_judge"}:
+        if self.reward_mode == "terminal_private_binary":
             schedule = UniformRewardSchedule(
                 1.0,
                 0.0,
-                "llm_judge_terminal" if self.reward_mode == "llm_judge" else "terminal_private_binary_only",
+                "terminal_private_binary_only",
                 "fixed",
                 None,
             )
@@ -210,6 +210,9 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
         submission_certificate: Any = None
         feedback: list[str] = []
         steps: list[AgentFlowStep] = []
+        judge_steps: list[ProcessStep] = []
+        terminal_info: dict[str, Any] = {}
+        outcome_reward = 0.0
         run_step_indices: dict[str, int] = {}
         metrics: dict[str, Any] = {"generate_sequences": 0.0, "tool_calls": 0.0, "step_generate_sequences": [], "step_tool_calls": []}
 
@@ -268,25 +271,6 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     )
                     outcome_reward = float(private_record.all_passed)
 
-                judge_result = None
-                judge_invalid = False
-                optimizer_terminal_reward = outcome_reward
-                if self.reward_mode == "llm_judge" and not is_validation and submitted_artifact is not None:
-                    judge_result = await score_candidate(
-                        self.judge_server,
-                        domain="taco",
-                        question=question,
-                        candidate=submitted_artifact.code,
-                        auxiliary={
-                            "developer_runs": [record.record() for record in records.values()],
-                            "certificate": submission_certificate,
-                        },
-                    )
-                    judge_invalid = judge_result is None
-                    optimizer_terminal_reward = 0.0 if judge_invalid else judge_result.score
-                elif self.reward_mode == "llm_judge" and not is_validation:
-                    optimizer_terminal_reward = 0.0
-
                 process_credit = 0.0
                 certificate_score = 0.0
                 verification = VerificationResult(
@@ -314,7 +298,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     )
                     process_credit = verification.process_reward
                 composed_reward = compose_verification_reward(
-                    terminal_reward=optimizer_terminal_reward,
+                    terminal_reward=outcome_reward,
                     verification=verification,
                     schedule=schedule,
                 )
@@ -333,18 +317,22 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     "reward_mode": self.reward_mode,
                     "verifier_timing": "terminal_trajectory_replay",
                     "training_global_step": global_step,
-                    "llm_judge_score": None if judge_result is None else judge_result.score,
-                    "llm_judge_input_hash": None if judge_result is None else judge_result.input_hash,
-                    "llm_judge_cache_hit": None if judge_result is None else judge_result.cache_hit,
-                    "llm_judge_attempts": None if judge_result is None else judge_result.attempts,
-                    "llm_judge_latency_s": None if judge_result is None else judge_result.latency_s,
-                    "judge_invalid": judge_invalid,
-                    "optimizer_total_reward": optimizer_terminal_reward,
                 }
             else:
                 feedback.append("Output exactly one valid tool call allowed for this turn.")
                 reward_score = 0.0
                 step_kind = "invalid_tool_call"
+
+            if self.reward_mode == "llm_judge" and process_weight > 0.0 and action_name != "submit":
+                judge_steps.append(ProcessStep(
+                    step_index=turn, action=response_text,
+                    observation={"feedback": feedback[-1] if feedback else None,
+                                 "code": _artifact_text(
+                                     artifact if step_kind == "run_developer_tests" else current_artifact,
+                                     self.max_code_prompt_chars,
+                                 )},
+                    valid=step_kind in {"write_code", "run_developer_tests"},
+                ))
 
             step = AgentFlowStep(
                 prompt_ids=prompt_ids,
@@ -371,7 +359,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                 },
             )
             steps.append(await self._postprocess(step, **kwargs))
-            if action_name == "submit":
+            if action_name == "submit" and self.reward_mode != "llm_judge":
                 apply_composed_reward(
                     steps,
                     composed_reward,
@@ -386,4 +374,20 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
 
         if not steps:
             raise RuntimeError("TACO A9 produced no agent steps")
+        if self.reward_mode == "llm_judge":
+            verification = (
+                await verify_process_steps(
+                    self.judge_server, domain="taco", question=question,
+                    steps=judge_steps, max_steps=self.max_steps,
+                ) if process_weight > 0.0 else VerificationResult(credits=(), audit={})
+            )
+            composed = compose_verification_reward(
+                terminal_reward=outcome_reward, verification=verification, schedule=schedule,
+            )
+            terminal_info.update({"acc": outcome_reward, "terminal_private_all_pass": outcome_reward,
+                                  "reward_mode": "llm_judge",
+                                  "verified_process_reward": verification.process_reward,
+                                  "verifier_timing": "causal_prefix_backfill",
+                                  **judge_reward_info(verification)})
+            apply_composed_reward(steps, composed, extra_final_info=terminal_info)
         return AgentFlowOutput(steps=steps, metrics=metrics)

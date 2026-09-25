@@ -15,3 +15,4 @@
   timeout_seconds: ${oc.env:TACO_A9_TIMEOUT_SECONDS,2}
   max_code_prompt_chars: ${oc.env:TACO_A9_MAX_CODE_PROMPT_CHARS,12000}
   reward_mode: llm_judge
+  terminal_warmup_steps: ${oc.env:TACO_A9_TERMINAL_WARMUP_STEPS,50}

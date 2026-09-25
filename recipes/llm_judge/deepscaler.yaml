@@ -1,6 +1,7 @@
 - name: deepscaler_tool_llm_judge
   _target_: recipes.deepscaler.tool_agent_flow.DeepScalerToolRewardAgentFlow
   reward_mode: llm_judge
+  em_warmup_steps: ${oc.env:DEEPSCALER_TOOL_EM_WARMUP_STEPS,50}
   env_type: tool
   tools:
     - check_deepscaler_answer
