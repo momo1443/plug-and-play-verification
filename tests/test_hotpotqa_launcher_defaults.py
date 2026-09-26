@@ -21,7 +21,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIs(parameters["actor_optimizer_offload"].default, False)
 
     def test_shell_and_cli_defaults_use_optimized_actor_settings(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_ACTOR_USE_DYNAMIC_BSZ:-true", launcher)
@@ -34,7 +34,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"--actor_optimizer_offload", type=_parse_bool, default=False', preflight)
 
     def test_all_training_arms_share_actor_loss_reference_kl(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
         parameters = inspect.signature(prepare_formal_rlvr_run).parameters
 
@@ -54,7 +54,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"coefficient": reference_kl_loss_coef', preflight)
 
     def test_formal_surface_uses_grpo_names(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
         parameters = inspect.signature(prepare_formal_rlvr_run).parameters
 
@@ -67,7 +67,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"grpo_micro_batch_size_per_gpu": grpo_micro_batch_size', preflight)
 
     def test_launcher_supports_validated_resume(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_RESUME_MODE:-disable", launcher)
         self.assertIn("HOTPOTQA_RESUME_FROM_PATH", launcher)
@@ -75,7 +75,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('trainer.resume_from_path="$RESUME_FROM_CONFIG"', launcher)
 
     def test_ray_sessions_use_project_storage_through_a_short_link(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_RAY_STORAGE_ROOT:-$WORKSPACE_DIR/.ray_tmp", launcher)
         self.assertIn("/tmp/ar1r-${UID}", launcher)
@@ -89,8 +89,8 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertFalse((config_dir / "agent_ppo_trainer.yaml").exists())
 
     def test_formal_launcher_and_manifest_support_a3_combined(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
-        a3_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a3.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        a3_launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_a3.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
 
         self.assertIn("A1|A2|A3", launcher)
@@ -101,8 +101,8 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"final_response_mask": reward_contract.final_response_mask', preflight)
 
     def test_a6_uses_one_external_judge_and_last_six_training_gpus(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a6.sh").read_text(encoding="utf-8")
-        shared_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_with_judge.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_a6.sh").read_text(encoding="utf-8")
+        shared_launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_with_judge.sh").read_text(encoding="utf-8")
         flow = (PROJECT_ROOT / "recipes/hotpotqa/hotpotqa_agent_flow.py").read_text(encoding="utf-8")
 
         self.assertIn('CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2,3,4,5,6,7}"', launcher)
@@ -113,21 +113,21 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("create_judge_from_env", flow)
 
     def test_a8_lr_v2_has_matched_resources_base_and_fail_closed_preflight(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr.sh").read_text(encoding="utf-8")
-        em100_dsl_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_em100.sh").read_text(encoding="utf-8")
-        claim_source_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source.sh").read_text(
+        launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr.sh").read_text(encoding="utf-8")
+        em100_dsl_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_em100.sh").read_text(encoding="utf-8")
+        claim_source_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_claim_source.sh").read_text(
             encoding="utf-8"
         )
-        em100_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_claim_source_em100.sh").read_text(
+        em100_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_claim_source_em100.sh").read_text(
             encoding="utf-8"
         )
-        generic_launcher = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        generic_launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa_lr/prepare_run.py").read_text(encoding="utf-8")
-        common = (PROJECT_ROOT / "examples/hotpotqa_lr/common_v2.sh").read_text(encoding="utf-8")
-        base_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_lr_base.sh").read_text(encoding="utf-8")
-        calibration_launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_calibration.sh").read_text(encoding="utf-8")
+        common = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/common_v2.sh").read_text(encoding="utf-8")
+        base_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_base.sh").read_text(encoding="utf-8")
+        calibration_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_calibration.sh").read_text(encoding="utf-8")
 
-        self.assertFalse((PROJECT_ROOT / "examples/hotpotqa/run_a8.sh").exists())
+        self.assertFalse((PROJECT_ROOT / "scripts/hotpotqa/run_a8.sh").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/answer_certificate_verifier.py").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/certificate_forest.py").exists())
         self.assertFalse((PROJECT_ROOT / "recipes/hotpotqa/task_sufficiency_verifier.py").exists())
@@ -196,7 +196,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         )
         self.assertNotIn('"a2_final_reward"', preflight)
         self.assertNotIn('"a2_final_response_mask"', preflight)
-        self.assertIn('f"examples/hotpotqa/run_{arm.value.lower()}.sh"', preflight)
+        self.assertIn('f"scripts/hotpotqa/run_{arm.value.lower()}.sh"', preflight)
         self.assertIn('"recipes/hotpotqa/prepare_formal_rlvr_run.py"', preflight)
         self.assertIn('"recipes/hotpotqa/validate_formal_a0_artifacts.py"', preflight)
 
@@ -214,7 +214,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         )
 
     def test_a0_validation_sampling_and_gpu_count_are_explicitly_configurable(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a0.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_a0.sh").read_text(encoding="utf-8")
         evaluator = (PROJECT_ROOT.parent / "scripts/evaluate_hotpotqa_full_validation.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_NUM_GPUS", launcher)
@@ -235,7 +235,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn("VALIDATION_INTERFACE=raw", launcher)
 
     def test_lr_native_validation_uses_its_training_interface(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa_lr/run_validation.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_validation.sh").read_text(encoding="utf-8")
         evaluator = (PROJECT_ROOT.parent / "scripts/evaluate_hotpotqa_full_validation.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_REWARD_ARM=A8_LR30", launcher)

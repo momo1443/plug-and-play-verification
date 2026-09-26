@@ -220,13 +220,13 @@ def main() -> None:
         "recipes/hotpotqa_lr/reward_fn.py",
         "recipes/hotpotqa_lr/agent_flow.py",
         "recipes/hotpotqa_lr/prepare_run.py",
-        "examples/hotpotqa/run_rlvr.sh",
-        "examples/hotpotqa_lr/run_lr.sh",
-        "examples/hotpotqa_lr/run_lr_em100.sh",
-        "examples/hotpotqa_lr/run_lr_claim_source.sh",
-        "examples/hotpotqa_lr/run_lr_claim_source_em100.sh",
-        "examples/hotpotqa_lr/run_lr_base.sh",
-        "examples/hotpotqa_lr/common_v2.sh",
+        "scripts/hotpotqa/run_rlvr.sh",
+        "scripts/extensions/hotpotqa_lr/run_lr.sh",
+        "scripts/extensions/hotpotqa_lr/run_lr_em100.sh",
+        "scripts/extensions/hotpotqa_lr/run_lr_claim_source.sh",
+        "scripts/extensions/hotpotqa_lr/run_lr_claim_source_em100.sh",
+        "scripts/extensions/hotpotqa_lr/run_lr_base.sh",
+        "scripts/extensions/hotpotqa_lr/common_v2.sh",
     ]
     code_hashes = {}
     for relative in code_paths:

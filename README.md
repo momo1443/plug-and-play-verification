@@ -59,12 +59,12 @@ Advantage estimation respects the **step-level MDP**: credit is assigned per age
 
 | Recipe | Dataset | Reward | Launch |
 |---|---|---|---|
-| DeepScaler ToolEnv A1 | DeepScaleR-Preview-Dataset | Strict terminal EM | `examples/deepmath/run_deepscaler_tool_a1.sh` |
-| DeepScaler ToolEnv A9 | DeepScaleR-Preview-Dataset | Uniform equation-process + terminal EM | `examples/deepmath/run_deepscaler_tool_a9.sh` |
-| DeepScaler paper A1 | DeepScaleR-Preview-Dataset | Terminal EM | `examples/deepmath/run_deepscaler_a1.sh` |
-| DeepScaler paper A9 | DeepScaleR-Preview-Dataset | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
-| DeepMath | DeepMath-103K | `\boxed{}` terminal EM | `examples/deepmath/run_deepmath.sh` |
-| AIME 2025 | AIME 2025 | EM | `examples/deepmath/run_aime2025_a0.sh` |
+| DeepScaler ToolEnv A1 | DeepScaleR-Preview-Dataset | Strict terminal EM | `scripts/extensions/deepscaler/run_deepscaler_tool_a1.sh` |
+| DeepScaler ToolEnv A9 | DeepScaleR-Preview-Dataset | Uniform equation-process + terminal EM | `scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` |
+| DeepScaler paper A1 | DeepScaleR-Preview-Dataset | Terminal EM | `scripts/deepscaler/run_deepscaler_a1.sh` |
+| DeepScaler paper A9 | DeepScaleR-Preview-Dataset | Step-equation verification + EM | `scripts/deepscaler/run_deepscaler_a9_uniform.sh` |
+| DeepMath | DeepMath-103K | `\boxed{}` terminal EM | `docs/archive/launchers/run_deepmath.sh` (historical; recipe absent) |
+| AIME 2025 | AIME 2025 | EM | `scripts/deepscaler/run_aime2025_a0.sh` |
 
 The ToolEnv answer-checking variants and DeepMath-103K recipe are extensions; paper math uses the shared single-turn flow with 2048/4096 tokens (4B) or 2048/5120 tokens (9B).
 
@@ -72,9 +72,9 @@ The ToolEnv answer-checking variants and DeepMath-103K recipe are extensions; pa
 
 | Recipe | Dataset | Reward | Launch |
 |---|---|---|---|
-| A9 Certificate (HotpotQA) | HotpotQA | Certificate audit + EM | `examples/hotpotqa/run_a9_uniform.sh` |
-| A8-LR (Local Reasoning) | HotpotQA | Local reward + EM | `examples/hotpotqa/run_rlvr.sh` |
-| Validation | HotpotQA | EM only | `examples/hotpotqa_a9/run_validation.sh` |
+| A9 Certificate (HotpotQA) | HotpotQA | Certificate audit + EM | `scripts/hotpotqa/run_a9_uniform.sh` |
+| A8-LR (Local Reasoning) | HotpotQA | Local reward + EM | `scripts/hotpotqa/run_rlvr.sh` |
+| Validation | HotpotQA | EM only | `scripts/hotpotqa/run_validation.sh` |
 
 ### Supported Models
 
@@ -85,6 +85,10 @@ The ToolEnv answer-checking variants and DeepMath-103K recipe are extensions; pa
 ---
 
 ## Architecture
+
+Run entrypoints are grouped in [scripts/README.md](scripts/README.md). The
+[repository guide](docs/README.md) separates paper code, optional extensions,
+writing drafts, and historical notes.
 
 ```
 recipes/<task>/
@@ -114,33 +118,33 @@ Follow the [veRL installation guide](https://verl.readthedocs.io/en/latest/start
 
 ```bash
 # Clone this repo
-git clone https://github.com/momo1443/agentic-rlvr.git
-cd agentic-rlvr
+git clone https://github.com/momo1443/plug-and-play-verification.git
+cd plug-and-play-verification
 
 # Apply patches (if needed for Qwen3.5 or FSDP2)
-python scripts/patch_qwen35_lm_head_device.py
-python scripts/patch_qwen35_rope_device.py
-python scripts/patch_verl_fsdp2_ipc.py
+python scripts/patches/patch_qwen35_lm_head_device.py
+python scripts/patches/patch_qwen35_rope_device.py
+python scripts/patches/patch_verl_fsdp2_ipc.py
 ```
 
 ### Quick Start: DeepScaler with A9 Certificate Reward
 
 ```bash
-# Prepare data
-python -m recipes.deepscaler.data_preprocess.process_deepscaler --local_save_dir data/corpus/deepscaler
+# Place the prepared train.parquet and validation.parquet files under
+# data/corpus/deepscaler/ before launching.
 
 # Train with certificate-grounded reward
-bash examples/deepmath/run_deepscaler_a9_uniform.sh
+bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
 ```
 
 ### Quick Start: HotpotQA with A9 Certificate Reward
 
 ```bash
 # Prepare data (see recipe for details)
-python -m recipes.hotpotqa.data_preprocess.process_hotpotqa --local_save_dir ~/data/hotpotqa
+python -m recipes.hotpotqa.data_preprocess.process_hotpotqa --output_dir data/corpus/hotpotqa
 
 # Train with certificate audit reward
-bash examples/hotpotqa/run_a9_uniform.sh
+bash scripts/hotpotqa/run_a9_uniform.sh
 ```
 
 ---
@@ -163,14 +167,14 @@ turns. A selected prefix of 10,000 rows does not mean every row is sampled in
 
 ```bash
 # Outcome-only / verifier: choose one command per experiment.
-bash examples/taco/run_a1_terminal.sh
-bash examples/taco/run_a9_uniform.sh
-bash examples/vision_r1/run_a1_terminal.sh
-bash examples/vision_r1/run_a9_uniform.sh
+bash scripts/taco/run_a1_terminal.sh
+bash scripts/taco/run_a9_uniform.sh
+bash scripts/vision_r1/run_a1_terminal.sh
+bash scripts/vision_r1/run_a9_uniform.sh
 # Existing step-level PPO, using each domain's terminal-only interface.
-bash examples/ppo/run_terminal.sh deepscaler  # also hotpotqa, taco, vision
+bash scripts/ppo/run_terminal.sh deepscaler  # also hotpotqa, taco, vision
 # Frozen judge: each domain uses its matched paper flow.
-bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler  # also hotpotqa, taco, vision
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh deepscaler  # also hotpotqa, taco, vision
 ```
 
 Task data, retrieval indexes, model files, and the Linux sandbox must be prepared
@@ -213,9 +217,9 @@ paper's numerical results. Full GPU training and checkpoint benchmark runs are s
 | Patch | Purpose |
 |---|---|
 | `verl_patches/bucketed_weight_transfer.py` | ZMQ + IPC bucketed weight sync for faster rollout→trainer transfer |
-| `scripts/patch_qwen35_lm_head_device.py` | Fix Qwen3.5 lm_head device placement under FSDP |
-| `scripts/patch_qwen35_rope_device.py` | Fix Qwen3.5 RoPE device placement under FSDP |
-| `scripts/patch_verl_fsdp2_ipc.py` | Patch veRL FSDP2 IPC configuration |
+| `scripts/patches/patch_qwen35_lm_head_device.py` | Fix Qwen3.5 lm_head device placement under FSDP |
+| `scripts/patches/patch_qwen35_rope_device.py` | Fix Qwen3.5 RoPE device placement under FSDP |
+| `scripts/patches/patch_verl_fsdp2_ipc.py` | Patch veRL FSDP2 IPC configuration |
 
 ---
 

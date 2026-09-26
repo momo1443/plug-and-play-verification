@@ -24,10 +24,10 @@ Wrong final answers and missing submissions yield binary outcome zero, while use
 From the repository root, on the existing GPU training host with prepared datasets and model files:
 
 ```bash
-bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
-bash examples/llm_judge/run_grpo_4b_judge_9b.sh hotpotqa
-bash examples/llm_judge/run_grpo_4b_judge_9b.sh taco
-bash examples/llm_judge/run_grpo_4b_judge_9b.sh vision
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh deepscaler
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh hotpotqa
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh taco
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh vision
 ```
 
 The `all` argument runs these sequentially. Defaults allocate GPUs 0-6 to the actor and GPU 7 to the frozen judge. `AGENT_R1_JUDGE_MODEL` can override the model path, so retain the actual model identity in run records. Vision requires the Qwen3.5 multimodal checkpoint and a serving configuration that accepts the two image inputs; this must be smoke-tested on the training host.
@@ -35,7 +35,7 @@ The `all` argument runs these sequentially. Defaults allocate GPUs 0-6 to the ac
 Configuration-only inspection does not load a model or launch training:
 
 ```bash
-AGENT_R1_JUDGE_CONFIG_ONLY=1 bash examples/llm_judge/run_grpo_4b_judge_9b.sh all
+AGENT_R1_JUDGE_CONFIG_ONLY=1 bash scripts/llm_judge/run_grpo_4b_judge_9b.sh all
 ```
 
 ## Verification scope

@@ -504,14 +504,14 @@ class A9SubmissionProtocolTest(unittest.TestCase):
 
 class LauncherTest(unittest.TestCase):
     def test_rlvr_sh_routes_a9_to_certificate_agent(self):
-        shared = (PROJECT_ROOT / "examples/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        shared = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
         self.assertIn("recipes/hotpotqa_a9/base.yaml", shared)
         self.assertIn("hotpotqa_certificate_agent", shared)
         self.assertIn("recipes/hotpotqa_a9/reward_fn.py", shared)
         self.assertIn("A9_CERT_MIX", shared)
 
     def test_a9_launcher_sets_arm_env(self):
-        launcher = (PROJECT_ROOT / "examples/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_a9.sh").read_text(encoding="utf-8")
         self.assertIn("HOTPOTQA_REWARD_ARM=A9_CERT_MIX", launcher)
         self.assertIn("HOTPOTQA_A9_EM_WARMUP_STEPS", launcher)
 

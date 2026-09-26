@@ -18,7 +18,7 @@ CODE_PATHS = (
     "agent_r1/agent_flow/agent_flow.py",
     "agent_r1/verifier/reward.py",
     "agent_r1/evaluation/consistency.py",
-    "examples/common/model_training.sh",
+    "scripts/common/model_training.sh",
     "agent_r1/trainer/main_agent_grpo.py",
     "agent_r1/trainer/ppo/core_algos.py",
     "recipes/reward_mixing.py",
@@ -34,9 +34,9 @@ CODE_PATHS = (
     "recipes/taco_a9/prepare_run.py",
     "recipes/llm_judge/scoring.py",
     "recipes/hotpotqa/judge_server.py",
-    "examples/taco/run_a9_uniform.sh",
-    "examples/llm_judge/run_with_frozen_judge.sh",
-    "examples/llm_judge/run_grpo_4b_judge_9b.sh",
+    "scripts/taco/run_a9_uniform.sh",
+    "scripts/llm_judge/run_with_frozen_judge.sh",
+    "scripts/llm_judge/run_grpo_4b_judge_9b.sh",
 )
 
 

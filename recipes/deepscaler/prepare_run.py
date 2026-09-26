@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Any
 
 CODE_PATHS = (
-    "examples/common/model_training.sh",
+    "scripts/common/model_training.sh",
     "agent_r1/verifier/reward.py",
     "agent_r1/trainer/main_agent_grpo.py",
     "agent_r1/trainer/ppo/core_algos.py",
     "agent_r1/trainer/ppo/ray_trainer.py",
     "agent_r1/trainer/rollout_jsonl.py",
     "recipes/reward_mixing.py",
-    "examples/deepmath/run_deepscaler_a9_uniform.sh",
+    "scripts/deepscaler/run_deepscaler_a9_uniform.sh",
     "recipes/deepscaler/prepare_run.py",
     "recipes/deepscaler/reward_fn.py",
     "recipes/deepscaler/agent_flow.py",

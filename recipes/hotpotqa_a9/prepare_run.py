@@ -195,8 +195,8 @@ def main() -> None:
         "recipes/hotpotqa_a9/reward_fn.py",
         "recipes/hotpotqa_a9/agent_flow.py",
         "recipes/hotpotqa_a9/prepare_run.py",
-        "examples/hotpotqa/run_rlvr.sh",
-        "examples/hotpotqa/run_a9.sh",
+        "scripts/hotpotqa/run_rlvr.sh",
+        "scripts/hotpotqa/run_a9.sh",
     ]
     code_hashes = {}
     for relative in code_paths:
