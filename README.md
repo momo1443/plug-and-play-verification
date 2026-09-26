@@ -4,9 +4,9 @@
 
 Research code for the ICLR 2027 manuscript. Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
 
-![Figure 1: Agent trajectories produce intermediate artifacts, which pass through a unified verifier interface before process and outcome rewards are combined.](assets/images/plug-and-play-verifier.png)
+![Figure 1: Overview of the plug-and-play verifier.](assets/images/plug-and-play-verifier.png)
 
-**Figure 1. Framework overview.** Domain modules extract and verify intermediate artifacts. A common credit interface connects their outputs to reward composition and RL training, allowing verifier reuse when an agent supplies compatible artifacts and records.
+**Figure 1: Overview of the plug-and-play verifier.** *Left:* artifacts are extracted per turn. *Middle:* a unified interface routes them to domain-specific verifiers, which return explicit and decoupled process rewards. *Right:* Rewards are combined with the final outcome reward. *Bottom:* verifiers interact with RL post-training through the interface and can be used independently across agents.
 
 [Overview](#overview) · [Method](#method) · [Results](#results) · [Getting Started](#getting-started) · [Evaluation](#evaluation) · [Project Structure](#project-structure)
 
@@ -26,9 +26,9 @@ The proposed process verifiers use deterministic checks rather than an LLM judge
 
 ## Method
 
-![Figure 2: Equal outcome rewards can conceal different intermediate verification results; fixed local checks produce bounded step credits for shared reward mixing and GRPO or PPO.](assets/images/method-overview.png)
+![Figure 2: Overview of plug-and-play process verification.](assets/images/method-overview.png)
 
-**Figure 2. From outcome ambiguity to explicit process supervision.** Local checks run outside the policy and return credits through a fixed interface. When trajectories have tied outcomes but different remaining process returns, those credits can supply an additional GRPO learning signal.
+**Figure 2: Overview of plug-and-play process verification.** (a) Identical outcome rewards can mask differences in intermediate verification results. (b) Local checks are decoupled from policy reasoning and provide step-attributed credits through a common interface. These credits are combined with outcome rewards for GRPO or PPO training. Differences in process returns can provide a last-mile signal within outcome-tied GRPO groups.
 
 ### Unified verification contract
 
@@ -88,9 +88,9 @@ Training is separate for each domain. Domain-specific parsers and checks remain 
 
 ### A concrete verification example
 
-![Figure 3: A HotpotQA trajectory first cites passage 9904, where the quoted sentence is absent, then cites passage 9898, where the sentence and action checks pass.](assets/images/hotpotqa-verification-example.png)
+![Figure 3: An example of our plug-and-play verifier on HotpotQA.](assets/images/hotpotqa-verification-example.png)
 
-**Figure 3. Checking evidence provenance on HotpotQA.** The first cited passage does not contain the quoted sentence. A later citation points to the passage containing it, and the source/action checks pass. The audit retains the earlier failure even after the later correction. This illustrates local evidence verification, rather than proof of every reasoning step.
+**Figure 3: An example of our plug-and-play verifier on HotpotQA.**
 
 ## Results
 
@@ -117,9 +117,9 @@ In the reported experiments, verification improved outcome accuracy over GRPO on
 
 ### Training dynamics
 
-![Figure 4: Training accuracy of Qwen3.5-4B over 500 updates on HotpotQA, TACO, Vision-R1, and DeepScaleR, comparing our verifier with an LLM process judge.](assets/images/training-accuracy.png)
+![Figure 4: Training accuracy of Qwen3.5-4B with Ours and GRPO with LLM-as-a-judge.](assets/images/training-accuracy.png)
 
-**Figure 4. Training accuracy reported in the manuscript.** Blue denotes our verifier; orange denotes GRPO with LLM-as-a-judge. These are training-domain curves, distinct from the held-out benchmark accuracies above. The supplied plot does not report uncertainty across random seeds.
+**Figure 4: Training accuracy of Qwen3.5-4B with Ours and GRPO with LLM-as-a-judge.**
 
 ### Reuse across policy optimizers
 
