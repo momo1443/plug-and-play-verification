@@ -15,10 +15,14 @@ from agent_r1.agent_flow.agent_flow import AgentFlowBase, AgentFlowOutput, Agent
 from agent_r1.reward_loop.reward_loop import RewardLoopWorker
 from agent_r1.verifier import (
     UniformRewardSchedule,
+    VerificationResult,
     apply_composed_reward,
     compose_verification_reward,
     uniform_reward_schedule,
 )
+from agent_r1.evaluation.consistency import consistency_record
+from recipes.llm_judge.scoring import ProcessStep, judge_reward_info, verify_process_steps
+from recipes.hotpotqa_a9.reward_sources import ARMS, arm_schedule, gold_evidence_verification, observable_search_verification, optimizer_reward_schedule, reward_schedule
 from recipes.hotpotqa.env.search_tool import (
     DEFAULT_HOTPOTQA_EMBEDDING_MODEL,
     HotpotQASearchToolLegacy,
@@ -75,50 +79,6 @@ def _coerce_nonnegative_int(value: Any, *, name: str) -> int:
     if parsed < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
     return parsed
-
-
-def reward_schedule(
-    *,
-    global_step: int,
-    is_validation: bool,
-    em_warmup_steps: int,
-    prompt_group_key: str,
-    process_reward_enabled: bool = True,
-) -> UniformRewardSchedule:
-    if not process_reward_enabled:
-        return UniformRewardSchedule(1.0, 0.0, "terminal_only", "disabled", None)
-    return uniform_reward_schedule(
-        global_step=global_step,
-        is_validation=is_validation,
-        warmup_steps=em_warmup_steps,
-        prompt_group_key=prompt_group_key,
-        namespace=_GROUP_WEIGHT_NAMESPACE,
-        warmup_phase="em_warmup",
-        validation_phase="validation_terminal_em",
-        mixed_phase="certificate_uniform",
-    )
-
-
-def optimizer_reward_schedule(
-    *,
-    global_step: int,
-    is_validation: bool,
-    em_warmup_steps: int,
-    prompt_group_key: str,
-) -> tuple[float, float, str]:
-    """Return (terminal_weight, process_weight, phase_label) for this step.
-
-    Post-warmup A9 deterministically samples one w ~ U(0, 1) from the optimizer
-    step and prompt-group key. All rollouts for that prompt therefore share the
-    same scalarization while different prompt groups retain varied mixtures.
-    """
-    schedule = reward_schedule(
-        global_step=global_step,
-        is_validation=is_validation,
-        em_warmup_steps=em_warmup_steps,
-        prompt_group_key=prompt_group_key,
-    )
-    return schedule.terminal_weight, schedule.process_weight, schedule.phase
 
 
 def _format_history(actions: list[str]) -> str:
@@ -201,6 +161,12 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
         dataset_config,
         **kwargs,
     ) -> None:
+        self.judge_server = kwargs.pop("shared_judge_server", None)
+        self.reward_arm = os.environ.get("HOTPOTQA_REWARD_ARM", "A9").upper()
+        if self.reward_arm not in ARMS:
+            raise ValueError(f"Unsupported paper HotpotQA arm: {self.reward_arm}")
+        if self.reward_arm == "A6" and self.judge_server is None:
+            raise ValueError("HotpotQA A6 requires a shared frozen Judge backend")
         super().__init__(
             trainer_config,
             server_manager,
@@ -224,7 +190,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                        os.environ.get("HOTPOTQA_A9_FORMAT_PENALTY", 0.0))
         )
         self.contract = CONTRACT_FORMAT_STRICT if coerce_bool(
-            os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"),
+            os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "1"),
             name="HOTPOTQA_A9_FORMAT_GATE",
         ) else CONTRACT_CERT_MIX
         self.process_reward_enabled = coerce_bool(
@@ -450,12 +416,13 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             gold_evidence_ids = sample.gold_evidence_ids
             unresolved_gold_facts = sample.unresolved_gold_facts
 
-        schedule = reward_schedule(
+        schedule = arm_schedule(
+            arm=self.reward_arm,
             global_step=global_step,
             is_validation=is_validation,
-            em_warmup_steps=self.em_warmup_steps,
+            warmup_steps=self.em_warmup_steps,
             prompt_group_key=sample_key,
-            process_reward_enabled=self.process_reward_enabled,
+            process_enabled=self.process_reward_enabled,
         )
         terminal_weight = schedule.terminal_weight
         process_weight = schedule.process_weight
@@ -469,6 +436,8 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             "step_tool_calls": [],
         }
         steps = []
+        judge_steps = []
+        action_checks = []
         passages: list[tuple[str, Passage]] = []
         actions: list[str] = []
         search_steps: list[dict[str, Any]] = []
@@ -567,12 +536,27 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     transition_flow_step_indices,
                     reward_horizon=self.reward_horizon,
                 )
+                deterministic_verification = verification
+                judge_info = {}
+                if self.reward_arm in {"A2", "A3"}:
+                    verification = gold_evidence_verification(search_steps, gold_evidence_ids, unresolved_gold_facts)
+                elif self.reward_arm == "A7":
+                    verification = observable_search_verification(search_steps, self.reward_horizon)
+                elif self.reward_arm == "A6":
+                    verification = (
+                        await verify_process_steps(self.judge_server, domain="hotpotqa", question=question,
+                                                   steps=judge_steps, max_steps=self.max_steps)
+                        if process_weight > 0 else VerificationResult(credits=(), audit={})
+                    )
+                    judge_info = judge_reward_info(verification)
+                eligible = answer is not None and bool(actions)
                 composed_reward = compose_verification_reward(
                     terminal_reward=terminal_em,
                     verification=verification,
                     schedule=schedule,
+                    terminal_gate_passed=eligible,
                 )
-                trajectory_audit = verification.audit["certificate_audit"]
+                trajectory_audit = deterministic_verification.audit["certificate_audit"]
                 audit_records = trajectory_audit["steps"]
                 local_reward = verification.process_reward
                 weighted_local = sum(composed_reward.process_step_components.values())
@@ -594,6 +578,9 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     steps,
                     composed_reward,
                     extra_final_info={
+                        **consistency_record(deterministic_verification, terminal_em, eligible=eligible, extra_checks=action_checks),
+                        **judge_info,
+                        "reward_arm": self.reward_arm,
                         "acc": terminal_em,
                         "terminal_em": terminal_em,
                         "local_reward": local_reward,
@@ -634,37 +621,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
 
                 final_step = steps[-1]
                 reward_info = final_step.extra_fields["reward_extra_info"]
-                # ── format_gate: zero all reward when finish is missing ────
-                # If format_gate is enabled and the model failed to produce a
-                # valid finish tool call (answer is None), zero out reward for
-                # every step in the trajectory so the model learns that it MUST
-                # write a compliant finish call to earn any credit.  Suppressed
-                # during EM warmup to avoid cold-start deadlock.
-                format_gate_active = (
-                    self.contract.format_gate
-                    and reward_phase != "em_warmup"
-                    and (finish is None or finish.answer is None)
-                )
-                if format_gate_active:
-                    for step in steps:
-                        step.reward_score = 0.0
-                        step_info = step.extra_fields.get("reward_extra_info", {})
-                        if "optimizer_process_component" in step_info:
-                            step_info["optimizer_process_component"] = 0.0
-                            step_info["process_component_valid"] = False
-                            step_info["a9_process_component_valid"] = False
-                            step.extra_fields["reward_extra_info"] = step_info
-                    reward_info.update(
-                        {
-                            "optimizer_terminal_component": 0.0,
-                            "optimizer_local_component": 0.0,
-                            "optimizer_process_component": 0.0,
-                            "optimizer_process_total": 0.0,
-                            "optimizer_total_reward": 0.0,
-                            "optimizer_assigned_total_reward": 0.0,
-                        }
-                    )
-                    reward_info["format_gate_triggered"] = True
+                reward_info["format_gate_triggered"] = not eligible
                 self._record_step_timing(metrics, step_metrics)
                 break
 
@@ -711,13 +668,22 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                 )
                 step_kind = "invalid_tool_call"
 
+            action_checks.append(step_kind == "search" and bool(search_step.get("success")))
+            if self.reward_arm == "A6" and process_weight > 0:
+                # Only policy-visible retrieval text, never supporting-fact labels.
+                judge_steps.append(ProcessStep(
+                    step_index=turn, action=visible_text,
+                    observation=[{"title": item.get("title"), "text": item.get("text")}
+                                 for item in search_step.get("returned_evidence", [])] if query is not None else None,
+                    valid=step_kind == "search",
+                ))
             step = AgentFlowStep(
                 prompt_ids=prompt_ids,
                 response_ids=response_ids,
                 response_logprobs=(
                     output.log_probs[: self.response_length] if output.log_probs else None
                 ),
-                reward_score=-self.format_penalty if step_kind == "invalid_tool_call" else 0.0,
+                reward_score=0.0,
                 extra_fields=self._extra_fields(
                     anchor_obs=anchor_obs,
                     step_kind=step_kind,

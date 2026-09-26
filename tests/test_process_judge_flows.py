@@ -42,6 +42,8 @@ from recipes.llm_judge.scoring import (
     verify_process_steps,
 )
 from recipes.reward_mixing import prompt_group_key_from_extra_info
+from agent_r1.evaluation.consistency import consistency_record
+from recipes.taco_a9.verifier import verify_process as verify_taco_process
 from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord
 from recipes.taco_a9.protocol import parse_tool_call
 from recipes.taco_a9.reward_contract import reward_schedule as taco_schedule
@@ -224,6 +226,7 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             module = load_source(
                 "recipes/taco_a9/agent_flow.py",
                 reward_schedule=taco_schedule,
+                verify_process=verify_taco_process,
                 SYSTEM_PROMPT=taco_prompts.SYSTEM_PROMPT,
                 USER_PROMPT=taco_prompts.USER_PROMPT,
                 FINAL_TURN_PROMPT=taco_prompts.FINAL_TURN_PROMPT,
@@ -257,6 +260,7 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
                 return record, {"outcomes": [{"passed": correct, "case_index": 0, "stdin": hidden}]}
 
             flow._run_suite = run_suite
+            flow.executor = SimpleNamespace()
             flow.max_code_prompt_chars = 12000
             flow.terminal_warmup_steps = 50
         else:
@@ -264,6 +268,9 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
                 "recipes/vision_r1/agent_flow.py",
                 ToolFormatWrapper=tool_format.ToolFormatWrapper,
                 VisualArtifact=visual_artifacts.VisualArtifact,
+                verify_process=load_source("recipes/vision_r1/verifier.py",
+                    parse_visual_certificate=visual_artifacts.parse_visual_certificate,
+                    image_sha256=visual_artifacts.image_sha256).verify_process,
                 outcome_reward=vision_contract.outcome_reward,
                 reward_schedule=vision_contract.reward_schedule,
                 SYSTEM_PROMPT=vision_prompts.SYSTEM_PROMPT,
@@ -334,10 +341,10 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(judge.calls, [])
                 self.assertEqual([s.reward_score for s in output.steps], [0.0, 1.0])
 
-    async def test_incomplete_trajectories_keep_intermediate_credit_and_zero_outcome(self):
+    async def test_incomplete_trajectories_zero_all_composed_rewards(self):
         for domain in ("deepmath", "taco", "vision_r1"):
             output, judge = await self.run_domain(domain, incomplete=True)
-            self.assertGreater(output.steps[0].reward_score, 0.0)
+            self.assertTrue(all(step.reward_score == 0 for step in output.steps))
             self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["terminal_reward"], 0.0)
             self.assertTrue(judge.calls)
 

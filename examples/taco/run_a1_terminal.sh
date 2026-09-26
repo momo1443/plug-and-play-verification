@@ -31,10 +31,12 @@ TRAINER_GPUS="${TACO_A1_TRAINER_GPUS:-$NUM_GPUS}"
 MODEL_PATH="${TACO_A1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 source "$PROJECT_DIR/examples/common/model_training.sh"
 agent_r1_model_overrides "$MODEL_PATH"
+agent_r1_optimizer_overrides "$MODEL_PATH"
+agent_r1_paper_profile taco "$MODEL_PATH"
 TRAIN_BATCH_SIZE="${TACO_A1_TRAIN_BATCH_SIZE:-20}"
 ROLLOUT_N="${TACO_A1_ROLLOUT_N:-4}"
 TOTAL_EPOCHS="${TACO_A1_TOTAL_EPOCHS:-1}"
-TOTAL_STEPS="${TACO_A1_TOTAL_TRAINING_STEPS:-300}"
+TOTAL_STEPS="${TACO_A1_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
 SAVE_FREQ="${TACO_A1_SAVE_FREQ:-50}"
 SEED="${TACO_A1_SEED:-42}"
 TP_SIZE="${TACO_A1_TENSOR_PARALLEL_SIZE:-$NUM_GPUS}"
@@ -63,7 +65,7 @@ import pyarrow.parquet as pq
 print(pq.ParquetFile(sys.argv[1]).metadata.num_rows)
 PY
 )"
-TRAIN_MAX_SAMPLES="${TACO_A1_TRAIN_MAX_SAMPLES:-$((TOTAL_STEPS * TRAIN_BATCH_SIZE))}"
+TRAIN_MAX_SAMPLES="${TACO_A1_TRAIN_MAX_SAMPLES:-$PAPER_TRAIN_SAMPLES}"
 if (( TRAIN_MAX_SAMPLES > TRAIN_ROWS || TRAIN_MAX_SAMPLES % TRAIN_BATCH_SIZE != 0 )); then
     echo "TACO_A1_TRAIN_MAX_SAMPLES must not exceed $TRAIN_ROWS and divide batch size $TRAIN_BATCH_SIZE" >&2
     exit 2
@@ -82,12 +84,12 @@ fi
 "$PYTHON_BIN" -m recipes.taco_a1.prepare_run \
     --project-dir "$PROJECT_DIR" --output-dir "$OUTPUT_DIR" --model-path "$MODEL_PATH" \
     --train-path "$TRAIN_PATH" --validation-path "$VAL_PATH" --sidecar-path "$TACO_A1_SIDECAR" \
-    --num-gpus "$TRAINER_GPUS" --train-batch-size "$TRAIN_BATCH_SIZE" --rollout-n "$ROLLOUT_N" \
+    --num-gpus "$TRAINER_GPUS" --train-max-samples "$TRAIN_MAX_SAMPLES" --train-batch-size "$TRAIN_BATCH_SIZE" --rollout-n "$ROLLOUT_N" \
     --total-training-steps "$TOTAL_STEPS" --total-epochs "$TOTAL_EPOCHS" --save-freq "$SAVE_FREQ" --seed "$SEED" "${PREPARE_ARGS[@]}"
 
-"$PYTHON_BIN" -m agent_r1.trainer.main_agent_grpo \
-    algorithm.adv_estimator=grpo ++algorithm.grpo.credit_assignment=step_causal \
-    algorithm.norm_adv_by_std_in_grpo=True algorithm.gamma=1.0 algorithm.use_kl_in_reward=false \
+"$PYTHON_BIN" -m "$AGENT_R1_TRAINER_MODULE" \
+    "${AGENT_R1_ALGORITHM_ARGS[@]}" \
+    algorithm.gamma=1.0 algorithm.use_kl_in_reward=false \
     data.train_files="$TRAIN_PATH" data.val_files="$VAL_PATH" data.train_batch_size="$TRAIN_BATCH_SIZE" \
     data.shuffle=false data.seed="$SEED" data.train_max_samples="$TRAIN_MAX_SAMPLES" \
     data.val_batch_size=8 data.max_prompt_length="$MAX_PROMPT_LENGTH" data.max_response_length="$MAX_RESPONSE_LENGTH" \
@@ -120,7 +122,7 @@ fi
     actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/taco_a1/base.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow=taco_a1_terminal_code_agent actor_rollout_ref.rollout.agent.num_workers="$NUM_GPUS" \
     actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=false \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0 critic.enable=false reward_model.enable=false \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0 "${AGENT_R1_CRITIC_ARGS[@]}" reward_model.enable=false \
     +reward_model.launch_reward_fn_async=false \
     custom_reward_function.path="$PROJECT_DIR/recipes/taco_a9/reward_fn.py" custom_reward_function.name=compute_score \
     reward.custom_reward_function.path="$PROJECT_DIR/recipes/taco_a9/reward_fn.py" reward.custom_reward_function.name=compute_score \

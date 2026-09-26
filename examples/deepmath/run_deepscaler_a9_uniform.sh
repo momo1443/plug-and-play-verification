@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Legacy completion-level DeepScaleR GRPO with uniform process reward mixing.
+# Paper single-turn DeepScaleR GRPO with pluggable process verification.
 # For the multi-turn 4096/2048 ToolEnv profile use run_deepscaler_tool_a9.sh.
-# This entrypoint preserves the legacy 2048/4096 token allocation.
+# Paper allocation: 2048/4096 (4B), 2048/5120 (9B).
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
 #   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
-#   Steps 51-300:  w ~ U(0,1), reward = w * EM + (1-w) * process_reward
+#   Steps 51-500:  w ~ U(0,1), reward = w * EM + (1-w) * process_reward
 #
 # Process reward: average verified-equation fractions over equation-bearing
 # reasoning steps; the process reward is zero when no equations are extracted.
@@ -19,7 +19,7 @@ set -euo pipefail
 #   - grpo_micro_batch_size=1
 #   - rollout_n=4
 #   - train_batch_size=20
-#   - total_training_steps=300 by default
+#   - total_training_steps=500 by default
 #   - save_freq=50
 #   - ref_kl=0.001 (low_var_kl)
 
@@ -33,9 +33,12 @@ export VLLM_USE_V1=1
 export TOKENIZERS_PARALLELISM=false
 
 # Model
-export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+export HOTPOTQA_MODEL_PATH="${DEEPSCALER_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}}"
 source "$PROJECT_DIR/examples/common/model_training.sh"
 agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
+agent_r1_optimizer_overrides "$HOTPOTQA_MODEL_PATH"
+agent_r1_paper_profile deepscaler "$HOTPOTQA_MODEL_PATH"
+export DEEPSCALER_REWARD_MODE="${DEEPSCALER_REWARD_MODE:-uniform_equation_process}"
 
 # ── A9 Schedule Config ───────────────────────────────────────────
 export DEEPSCALER_EM_WARMUP_STEPS="${DEEPSCALER_EM_WARMUP_STEPS:-50}"
@@ -45,11 +48,11 @@ TRAIN_PATH="$PROJECT_DIR/data/corpus/deepscaler/train.parquet"
 VAL_PATH="$PROJECT_DIR/data/corpus/deepscaler/validation.parquet"
 
 # Training config
-TRAIN_MAX_SAMPLES="${HOTPOTQA_TRAIN_MAX_SAMPLES:-30000}"
+TRAIN_MAX_SAMPLES="${DEEPSCALER_TRAIN_MAX_SAMPLES:-${HOTPOTQA_TRAIN_MAX_SAMPLES:-$PAPER_TRAIN_SAMPLES}}"
 TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-20}"
 ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
 
-TOTAL_TRAINING_STEPS="${HOTPOTQA_TOTAL_TRAINING_STEPS:-300}"
+TOTAL_TRAINING_STEPS="${DEEPSCALER_TOTAL_TRAINING_STEPS:-${HOTPOTQA_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}}"
 if ! [[ "$TOTAL_TRAINING_STEPS" =~ ^[1-9][0-9]*$ ]]; then
     echo "HOTPOTQA_TOTAL_TRAINING_STEPS must be a positive integer" >&2
     exit 2
@@ -72,7 +75,7 @@ KL_IN_REWARD=false
 
 # Sequence length config — aligned with DeepMath experiment
 MAX_PROMPT_LENGTH=2048
-MAX_RESPONSE_LENGTH=4096
+MAX_RESPONSE_LENGTH=$PAPER_RESPONSE_LENGTH
 MAX_MODEL_LENGTH=8192
 MAX_NUM_BATCHED_TOKENS=8192
 MAX_NUM_SEQS=20
@@ -165,16 +168,14 @@ echo "Val:   $VAL_PATH ($VAL_MAX_SAMPLES samples)"
 echo "GPUs:  $CUDA_VISIBLE_DEVICES ($NUM_GPUS)"
 echo "Steps: $TOTAL_TRAINING_STEPS"
 echo "Warmup: $DEEPSCALER_EM_WARMUP_STEPS (EM-only steps)"
-echo "Runtime profile: deepscaler_legacy; prompt=$MAX_PROMPT_LENGTH; completion=$MAX_RESPONSE_LENGTH"
+echo "Runtime profile: deepscaler_paper; prompt=$MAX_PROMPT_LENGTH; completion=$MAX_RESPONSE_LENGTH"
 echo "Output: $OUTPUT_DIR"
 echo "=================================="
 
 CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
 
-"$PYTHON_BIN" -m agent_r1.trainer.main_agent_grpo \
-    algorithm.adv_estimator=grpo \
-    ++algorithm.grpo.credit_assignment=step_causal \
-    algorithm.norm_adv_by_std_in_grpo=True \
+"$PYTHON_BIN" -m "$AGENT_R1_TRAINER_MODULE" \
+    "${AGENT_R1_ALGORITHM_ARGS[@]}" \
     algorithm.gamma="$GRPO_GAMMA" \
     algorithm.use_kl_in_reward="$KL_IN_REWARD" \
     data.train_files="$TRAIN_PATH" \
@@ -236,12 +237,14 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.seed="$EXPERIMENT_SEED" \
     actor_rollout_ref.rollout.multi_turn.enable=False \
+    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/deepscaler/paper.yaml" \
+    actor_rollout_ref.rollout.agent.default_agent_flow=deepscaler_paper_agent \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0 \
     actor_rollout_ref.rollout.val_kwargs.top_p=1 \
     actor_rollout_ref.rollout.val_kwargs.top_k=-1 \
-    critic.enable=False \
+    "${AGENT_R1_CRITIC_ARGS[@]}" \
     reward_model.enable=False \
     +reward_model.launch_reward_fn_async=False \
     custom_reward_function.path="$PROJECT_DIR/recipes/deepscaler/reward_fn.py" \

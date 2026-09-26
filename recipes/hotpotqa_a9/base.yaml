@@ -10,4 +10,4 @@
   require_sentence_evidence: ${oc.env:HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE,true}
   embedding_devices: null
   enable_tool_parse_feedback: true
-  format_gate: ${oc.env:HOTPOTQA_A9_FORMAT_GATE,0}
+  format_gate: ${oc.env:HOTPOTQA_A9_FORMAT_GATE,1}

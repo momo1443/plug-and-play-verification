@@ -109,6 +109,7 @@ def build_verification_result(
             "verifier": VERIFIER_VERSION,
             "artifact_process_audits": [item.record() for item in artifact_audits],
             "certificate_audit": certificate_record,
+            "applicable_checks": [certificate_audit.own_valid] + [item.verified_score for item in artifact_audits],
             "credits_by_step": credits_by_step,
         },
     )
@@ -271,9 +272,18 @@ def verify_process(
         developer_suite=developer_suite,
         replay_valid_run_ids=replay_valid_run_ids,
     )
-    return build_verification_result(
+    result = build_verification_result(
         artifact_audits,
         certificate_audit,
         run_step_indices=run_step_indices,
         final_step_index=final_step_index,
     )
+
+    # Keep failed or inconsistent earlier runs even if a later version passes.
+    result.audit["applicable_checks"].extend(
+        int(record.all_passed and record.run_id in replay_valid_run_ids)
+        for record in records.values()
+    )
+    result.audit["revision_count"] = max(0, len(artifacts) - 1)
+    result.audit["developer_test_count"] = len(records)
+    return result

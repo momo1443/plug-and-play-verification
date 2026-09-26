@@ -8,15 +8,11 @@ A research framework for training tool-using LLM agents to produce **verifiable,
 
 ## Research Goal
 
-Can agentic post-training move verification from a bolted-on test-time procedure into the policy itself? We train tool-using models to make every load-bearing action and answer claim ship with an **explicit, structured certificate** that a cheap deterministic program can check, so certificate-complete behavior becomes the policy's default rather than an occasional result of prompting.
+This repository implements the plug-and-play verifier interface and decoupled process/outcome reward composition in `37799_Plug_and_Play_Verifier_f.pdf`. Domain adapters extract artifacts and return a shared `VerificationResult`; reward composition and the optimizer consume bounded, step-attributed credits.
 
-The learned behavior should be a **general schema-following and evidence-grounding capability**, including transfer to held-out or previously unseen tool schemas supplied in context — not memorization of one tool name or one benchmark format.
+The checks establish local properties: numeric equalities, retrieved-text grounding and action coupling, developer-test lineage/replay, or crop replay and answer-claim coupling. They do not prove every reasoning step or reconstruct a globally correct answer from a certificate.
 
-### Key Hypotheses
-
-1. **Certificate sufficiency**: A deterministic re-executor can reproduce the final answer from emitted evidence artifacts and declared computation alone.
-2. **Verifier demotion**: Post-training should reduce the need for test-time verification, revision, or rejection at matched quality.
-3. **Legibility tax**: Any accuracy, recall, latency, or token-cost loss caused by making behavior checkable should be measured and minimized.
+The implementation contract, model profiles, and validation limits are in [docs/paper-contract.md](docs/paper-contract.md).
 
 ---
 
@@ -33,20 +29,23 @@ The A9 reward arm composes **terminal task reward** (exact match) with a **deter
 reward = w * terminal_EM + (1-w) * certificate_process_reward
 ```
 
-A9 uses a two-stage trajectory-level schedule: the first 50 optimizer steps use
-terminal reward only, then each complete trajectory samples one
-\(w\sim U(0,1)\). The optional **format_strict** ablation retains the same
-uniform mixture and additionally zeros rewards for a missing finish call.
+A9 uses outcome-only reward for the first 50 updates. After warmup, one reproducible
+uniform weight is shared by all rollouts of a prompt in the same update. A valid
+final submission is required for composed reward; the answer may still be wrong
+and the certificate may fail. Missing final submissions receive zero reward.
+Validation always uses outcome-only reward. The historical `format_strict`
+launcher now shares this eligibility rule.
 
 ### Deterministic Process Rewards
 
-All process rewards are **deterministic and execution-based** — no trainable reward model or LLM judge required:
+The proposed verifier supplies deterministic local checks. The frozen LLM judge is a separate comparison arm:
 
 | Task | Process Signal | Verification Method |
 |---|---|---|
 | DeepScaler (math) | Per-step equation verification | LaTeX→Python conversion + numerical equality check |
-| DeepMath (math) | Format compliance (`\boxed{}`) | Regex extraction + symbolic equivalence |
-| HotpotQA (multi-hop QA) | Certificate trail audit | Schema validation + evidence provenance + answer traceability |
+| HotpotQA (multi-hop QA) | Certificate trail audit | Retrieved span/hash grounding + search/answer coupling |
+| TACO (code) | Artifact and execution audit | Code lineage + developer-test replay |
+| Vision-R1 (vision) | Visual artifact audit | Crop replay + answer-claim coupling |
 
 ### Step-Level Causal Advantage
 
@@ -60,11 +59,14 @@ Advantage estimation respects the **step-level MDP**: credit is assigned per age
 
 | Recipe | Dataset | Reward | Launch |
 |---|---|---|---|
-| DeepScaler ToolEnv A1 | DeepScaleR-1.5K | Strict terminal EM | `examples/deepmath/run_deepscaler_tool_a1.sh` |
-| DeepScaler ToolEnv A9 | DeepScaleR-1.5K | Uniform equation-process + terminal EM | `examples/deepmath/run_deepscaler_tool_a9.sh` |
-| DeepScaler single-turn A9 | DeepScaleR-1.5K | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
+| DeepScaler ToolEnv A1 | DeepScaleR-Preview-Dataset | Strict terminal EM | `examples/deepmath/run_deepscaler_tool_a1.sh` |
+| DeepScaler ToolEnv A9 | DeepScaleR-Preview-Dataset | Uniform equation-process + terminal EM | `examples/deepmath/run_deepscaler_tool_a9.sh` |
+| DeepScaler paper A1 | DeepScaleR-Preview-Dataset | Terminal EM | `examples/deepmath/run_deepscaler_a1.sh` |
+| DeepScaler paper A9 | DeepScaleR-Preview-Dataset | Step-equation verification + EM | `examples/deepmath/run_deepscaler_a9_uniform.sh` |
 | DeepMath | DeepMath-103K | `\boxed{}` terminal EM | `examples/deepmath/run_deepmath.sh` |
 | AIME 2025 | AIME 2025 | EM | `examples/deepmath/run_aime2025_a0.sh` |
+
+The ToolEnv answer-checking variants and DeepMath-103K recipe are extensions; paper math uses the shared single-turn flow with 2048/4096 tokens (4B) or 2048/5120 tokens (9B).
 
 ### Multi-Hop Question Answering
 
@@ -76,9 +78,9 @@ Advantage estimation respects the **step-level MDP**: credit is assigned per age
 
 ### Supported Models
 
-- Qwen3-4B / Qwen3.5-4B (primary)
-- Qwen2.5-7B / Qwen2.5-9B
-- LoRA and full fine-tuning supported
+- Paper 4B: Qwen3.5-4B, full fine-tuning.
+- Paper 9B: Qwen3.5-9B, LoRA rank/alpha 64 on seven projection modules.
+- For renamed 9B checkpoints, set `AGENT_R1_MODEL_SCALE=9b`; explicit LoRA overrides are available.
 
 ---
 
@@ -125,7 +127,7 @@ python scripts/patch_verl_fsdp2_ipc.py
 
 ```bash
 # Prepare data
-python -m recipes.deepscaler.data_preprocess.process_deepscaler --local_save_dir ~/data/deepscaler
+python -m recipes.deepscaler.data_preprocess.process_deepscaler --local_save_dir data/corpus/deepscaler
 
 # Train with certificate-grounded reward
 bash examples/deepmath/run_deepscaler_a9_uniform.sh
@@ -147,10 +149,62 @@ bash examples/hotpotqa/run_a9_uniform.sh
 
 | Arm | Description | Reward Composition |
 |---|---|---|
-| **A9 cert_mix** | Certificate-grounded, trajectory-level uniform mixing | Warmup: EM; then \(w\times\) EM + \((1-w)\times\) process |
-| **A9 format_strict** | Certificate-grounded, random weights + format gate | U(0,1) × EM + (1-U) × process, gated |
-| **A8-LR** | Local reasoning with per-step reward | Local reward + terminal EM |
-| **A0** | Baseline: terminal EM only | EM |
+| **A1 / GRPO** | Outcome only, matched domain interface | Terminal reward |
+| **A9 / ours** | Deterministic verifier, group-shared mixture | Warmup: outcome; then `w E + (1-w) p` |
+| **A6 / JUDGE** | Frozen Qwen3.5-9B process judge | Same mixture; no reference answer in judge input |
+| **A2 / A3** | HotpotQA privileged gold-evidence ablations | Process only / fixed 0.5 mixture |
+| **A0 / ReAct** | Untrained actor evaluation | No optimizer updates |
+
+The formal launchers use a 10,000-row prepared training prefix, 500 updates,
+4 rollouts/prompt, seed 42, actor LR 1e-6, and actor-loss KL 0.001. HotpotQA
+uses the same certificate interface for every paper arm; TACO arms all use five
+turns. A selected prefix of 10,000 rows does not mean every row is sampled in
+500 updates: batch 8 consumes 4,000 prompts. Manifests record both quantities.
+
+```bash
+# Outcome-only / verifier: choose one command per experiment.
+bash examples/taco/run_a1_terminal.sh
+bash examples/taco/run_a9_uniform.sh
+bash examples/vision_r1/run_a1_terminal.sh
+bash examples/vision_r1/run_a9_uniform.sh
+# Existing step-level PPO, using each domain's terminal-only interface.
+bash examples/ppo/run_terminal.sh deepscaler  # also hotpotqa, taco, vision
+# Frozen judge: each domain uses its matched paper flow.
+bash examples/llm_judge/run_grpo_4b_judge_9b.sh deepscaler  # also hotpotqa, taco, vision
+```
+
+Task data, retrieval indexes, model files, and the Linux sandbox must be prepared
+before a real run. In-training TACO/Vision validation is diagnostic; paper
+results still require LiveCodeBench/MATH-Vision evaluation on the chosen checkpoint.
+
+### Independent verification metrics
+
+Every paper flow records all applicable deterministic checks for every reward
+arm. `verification_consistency` implements `C_d`; `verified_success` implements
+`E * C_d`. Earlier failures are retained after a repair. Missing evidence cannot
+be inferred from positive credits alone. Code revision/retest counts are logged
+separately and are not evidence of global reasoning correctness.
+
+```bash
+python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json
+# A training dump must select one update, rather than pool checkpoints:
+python -m agent_r1.evaluation.summarize rollouts.jsonl --global-step 500
+```
+
+AIME scoring selects one final answer before consulting the reference and
+rejects fractional/out-of-range integers. Old AIME scores and dumps without
+verification audits need re-evaluation; they are not retroactively corrected.
+
+CPU regression checks (the flow tests mock generation and execution boundaries):
+
+```bash
+python -m pytest -q tests/test_paper_alignment.py tests/test_paper_launcher_config.py \
+  tests/test_deepscaler_reward.py tests/test_verifier_reward.py tests/test_hotpotqa_a9.py \
+  tests/test_taco_a9.py tests/test_cross_domain_llm_judge.py tests/test_process_judge_flows.py
+```
+
+Passing these tests verifies implementation contracts, not reproduction of the
+paper's numerical results. Full GPU training and checkpoint benchmark runs are separate.
 
 ---
 

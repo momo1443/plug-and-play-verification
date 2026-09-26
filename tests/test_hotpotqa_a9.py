@@ -21,7 +21,7 @@ from recipes.hotpotqa_a9.reward_contract import (
     CONTRACT_CERT_MIX,
     CONTRACT_FORMAT_STRICT,
 )
-from recipes.hotpotqa_a9.agent_flow import optimizer_reward_schedule
+from recipes.hotpotqa_a9.reward_sources import optimizer_reward_schedule
 from recipes.hotpotqa_a9.verifier import (
     trajectory_audit_record,
     verify_coupling,
@@ -279,8 +279,8 @@ class RewardContractTest(unittest.TestCase):
     def test_cert_mix_weights_sum(self):
         self.assertAlmostEqual(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight, 1.0, places=10)
 
-    def test_cert_mix_format_gate_off(self):
-        self.assertFalse(CONTRACT_CERT_MIX.format_gate)
+    def test_cert_mix_format_gate_on(self):
+        self.assertTrue(CONTRACT_CERT_MIX.format_gate)
 
     def test_format_strict_weights(self):
         self.assertAlmostEqual(CONTRACT_FORMAT_STRICT.terminal_weight, 0.5)
@@ -386,18 +386,16 @@ class FormatGateTest(unittest.TestCase):
     """Tests for the format_gate mechanism that zeros all trajectory reward
     when the model fails to produce a valid finish tool call."""
 
-    def test_format_gate_default_off(self):
-        """By default, format_gate is disabled."""
-        self.assertFalse(CONTRACT_CERT_MIX.format_gate)
+    def test_format_gate_default_on(self):
+        """Every paper arm requires a valid final submission."""
+        self.assertTrue(CONTRACT_CERT_MIX.format_gate)
 
     def test_format_gate_strict_on(self):
         """CONTRACT_FORMAT_STRICT has format_gate enabled."""
         self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
 
-    def test_format_gate_warmup_exempt(self):
-        """During EM warmup, format_gate should not trigger regardless of
-        finish validity.  Verify via optimizer_reward_schedule returning
-        'em_warmup' phase which the gate checks."""
+    def test_warmup_schedule_remains_outcome_only(self):
+        """Eligibility is separate from the warmup mixture weights."""
         tw, pw, phase = optimizer_reward_schedule(
             global_step=50,
             is_validation=False,
@@ -439,21 +437,13 @@ class RewardArmTest(unittest.TestCase):
         self.assertAlmostEqual(result, 0.33 * 0.5)# -- Validation-time Lenient Fallback --
 
 
-class A9LenientFallbackTest(unittest.TestCase):
-    """Tests for A9 compute_score falling back to <answer> tags during
-    validation while remaining strict during training."""
+class A9SubmissionProtocolTest(unittest.TestCase):
+    """Training and validation use the same final-submission extraction."""
 
-    def test_validation_lenient_fallback_answer_tag(self):
-        """When no finish tool call is present but <answer> tag is,
-        validation-time scoring should extract the answer leniently."""
-        from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
-
-        completion = "<answer>American</answer>"
-        extra_info = {"_agent_r1_is_validation": True}
-        self.assertEqual(
-            a9_compute_score("hotpotqa_distractor", completion, "American", extra_info=extra_info),
-            1.0,
-        )
+    def test_validation_rejects_answer_tag_without_finish(self):
+        from recipes.hotpotqa_a9.reward_fn import compute_score
+        self.assertEqual(compute_score("hotpotqa_distractor", "<answer>American</answer>",
+                                      "American", extra_info={"_agent_r1_is_validation": True}), 0.0)
 
     def test_training_stays_strict_without_validation_flag(self):
         """Without _agent_r1_is_validation=True, the strict behaviour is

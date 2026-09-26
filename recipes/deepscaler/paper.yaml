@@ -1,0 +1,4 @@
+- name: deepscaler_paper_agent
+  _target_: recipes.deepscaler.agent_flow.DeepScaleRPaperAgentFlow
+  reward_mode: ${oc.env:DEEPSCALER_REWARD_MODE,uniform_equation_process}
+  em_warmup_steps: ${oc.env:DEEPSCALER_EM_WARMUP_STEPS,50}
