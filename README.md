@@ -1,258 +1,310 @@
-# Agentic RLVR
+# Plug-and-Play Verifier for Decoupling Process Reward in Stabilizing Long-Horizon Agentic Reasoning
 
-**Certificate-Grounded Agentic Reinforcement Learning for Verifiable Reasoning**
+> Turn checks of intermediate artifacts into bounded, step-attributed process rewards through a shared interface, and reuse them across compatible agents and policy optimizers.
 
-A research framework for training tool-using LLM agents to produce **verifiable, certificate-bearing reasoning** through end-to-end reinforcement learning. Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
+Research code for the ICLR 2027 manuscript. Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
 
----
+![Figure 1: Agent trajectories produce intermediate artifacts, which pass through a unified verifier interface before process and outcome rewards are combined.](assets/images/plug-and-play-verifier.png)
 
-## Research Goal
+**Figure 1. Framework overview.** Domain modules extract and verify intermediate artifacts. A common credit interface connects their outputs to reward composition and RL training, allowing verifier reuse when an agent supplies compatible artifacts and records.
 
-This repository implements the plug-and-play verifier interface and decoupled process/outcome reward composition in `37799_Plug_and_Play_Verifier_f.pdf`. Domain adapters extract artifacts and return a shared `VerificationResult`; reward composition and the optimizer consume bounded, step-attributed credits.
+[Overview](#overview) · [Method](#method) · [Results](#results) · [Getting Started](#getting-started) · [Evaluation](#evaluation) · [Project Structure](#project-structure)
 
-The checks establish local properties: numeric equalities, retrieved-text grounding and action coupling, developer-test lineage/replay, or crop replay and answer-claim coupling. They do not prove every reasoning step or reconstruct a globally correct answer from a certificate.
+## Overview
 
-The implementation contract, model profiles, and validation limits are in [docs/paper-contract.md](docs/paper-contract.md).
+A correct final answer does not reveal whether the intermediate work was valid. An incorrect answer can also conceal useful progress. Outcome-only rewards therefore leave important differences between reasoning trajectories unresolved.
 
----
+We make that progress explicit by checking artifacts such as numeric equalities, evidence citations, code executions, and image crops. Each domain verifier returns **bounded credits and their source-step indices** through the same `VerificationResult` contract. A shared reward composer combines these credits with final-answer correctness before GRPO or PPO optimization.
 
-## Core Contributions
+The framework separates three responsibilities:
 
-### Certificate-Grounded Reward (A9)
+1. **Verification:** domain modules own artifact parsing, evidence access, local checks, and credit normalization.
+2. **Reward composition:** shared code controls outcome/process mixing and places rewards at the appropriate policy steps.
+3. **Policy optimization:** the trainer consumes composed step rewards without interpreting domain artifacts or verification rules.
 
-The A9 reward arm composes **terminal task reward** (exact match) with a **deterministic process reward** that audits the agent's certificate trail:
+The proposed process verifiers use deterministic checks rather than an LLM judge or annotated gold evidence. Reference answers and held-out tests are still used for **outcome rewards**. A frozen LLM judge and gold-evidence supervision are separate comparison arms.
 
-- **Terminal reward**: Did the agent produce the correct answer?
-- **Certificate process reward**: Did each reasoning step produce a verifiable certificate (e.g., numerically checkable equation, retrieved evidence citation)?
+## Method
 
-```
-reward = w * terminal_EM + (1-w) * certificate_process_reward
-```
+![Figure 2: Equal outcome rewards can conceal different intermediate verification results; fixed local checks produce bounded step credits for shared reward mixing and GRPO or PPO.](assets/images/method-overview.png)
 
-A9 uses outcome-only reward for the first 50 updates. After warmup, one reproducible
-uniform weight is shared by all rollouts of a prompt in the same update. A valid
-final submission is required for composed reward; the answer may still be wrong
-and the certificate may fail. Missing final submissions receive zero reward.
-Validation always uses outcome-only reward. The historical `format_strict`
-launcher now shares this eligibility rule.
+**Figure 2. From outcome ambiguity to explicit process supervision.** Local checks run outside the policy and return credits through a fixed interface. When trajectories have tied outcomes but different remaining process returns, those credits can supply an additional GRPO learning signal.
 
-### Deterministic Process Rewards
+### Unified verification contract
 
-The proposed verifier supplies deterministic local checks. The frozen LLM judge is a separate comparison arm:
+A domain adapter returns source-step indices and nonnegative credits:
 
-| Task | Process Signal | Verification Method |
-|---|---|---|
-| DeepScaler (math) | Per-step equation verification | LaTeX→Python conversion + numerical equality check |
-| HotpotQA (multi-hop QA) | Certificate trail audit | Retrieved span/hash grounding + search/answer coupling |
-| TACO (code) | Artifact and execution audit | Code lineage + developer-test replay |
-| Vision-R1 (vision) | Visual artifact audit | Crop replay + answer-claim coupling |
-
-### Step-Level Causal Advantage
-
-Advantage estimation respects the **step-level MDP**: credit is assigned per agent step (tool call + observation), not per token or per trajectory. This aligns policy gradient signals with the actual decision boundaries that matter for agentic behavior.
-
----
-
-## Tasks & Recipes
-
-### Math Reasoning
-
-| Recipe | Dataset | Reward | Launch |
-|---|---|---|---|
-| DeepScaler ToolEnv A1 | DeepScaleR-Preview-Dataset | Strict terminal EM | `scripts/extensions/deepscaler/run_deepscaler_tool_a1.sh` |
-| DeepScaler ToolEnv A9 | DeepScaleR-Preview-Dataset | Uniform equation-process + terminal EM | `scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` |
-| DeepScaler paper A1 | DeepScaleR-Preview-Dataset | Terminal EM | `scripts/deepscaler/run_deepscaler_a1.sh` |
-| DeepScaler paper A9 | DeepScaleR-Preview-Dataset | Step-equation verification + EM | `scripts/deepscaler/run_deepscaler_a9_uniform.sh` |
-| DeepMath | DeepMath-103K | `\boxed{}` terminal EM | `docs/archive/launchers/run_deepmath.sh` (historical; recipe absent) |
-| AIME 2025 | AIME 2025 | EM | `scripts/deepscaler/run_aime2025_a0.sh` |
-
-The ToolEnv answer-checking variants and DeepMath-103K recipe are extensions; paper math uses the shared single-turn flow with 2048/4096 tokens (4B) or 2048/5120 tokens (9B).
-
-### Multi-Hop Question Answering
-
-| Recipe | Dataset | Reward | Launch |
-|---|---|---|---|
-| A9 Certificate (HotpotQA) | HotpotQA | Certificate audit + EM | `scripts/hotpotqa/run_a9_uniform.sh` |
-| A8-LR (Local Reasoning) | HotpotQA | Local reward + EM | `scripts/hotpotqa/run_rlvr.sh` |
-| Validation | HotpotQA | EM only | `scripts/hotpotqa/run_validation.sh` |
-
-### Supported Models
-
-- Paper 4B: Qwen3.5-4B, full fine-tuning.
-- Paper 9B: Qwen3.5-9B, LoRA rank/alpha 64 on seven projection modules.
-- For renamed 9B checkpoints, set `AGENT_R1_MODEL_SCALE=9b`; explicit LoRA overrides are available.
-
----
-
-## Architecture
-
-Run entrypoints are grouped in [scripts/README.md](scripts/README.md). The
-[repository guide](docs/README.md) separates paper code, optional extensions,
-writing drafts, and historical notes.
-
-```
-recipes/<task>/
-  base.yaml                          # Hydra config
-  data_preprocess/process_<task>.py  # Dataset preparation
-  <task>_agent_flow.py               # Agent loop & certificate assembly
-  reward_fn.py                        # Deterministic reward computation
-  reward_contract.py                  # Frozen reward-arm semantics
-  prompts.py                          # System/user/tool prompts
-  protocol.py                         # Tool-call parsing
-  verifier.py                         # Certificate verification
-  env/                                # Environment services (optional)
+```math
+\Phi_d(x,\tau)=\{(s_\ell,q_\ell)\}_{\ell=1}^{n},
+\qquad q_\ell\geq 0,\quad \sum_{\ell=1}^{n}q_\ell\leq 1.
 ```
 
-Key design principles:
-- **Algorithm-system decoupling**: Task workflows, rollout, rewards, and policy objectives evolve independently.
-- **Step-level trajectory representation**: Each transition stores observation, action, environment feedback, reward, and termination — preserving action boundaries.
-- **Flexible context management**: The environment decides what the model sees next; history can be appended, truncated, or augmented.
+The implementation also carries credit-level and trajectory-level audit metadata:
 
----
+```python
+from agent_r1.verifier.reward import VerificationCredit, VerificationResult
+
+# Illustrative output from a domain verifier.
+result = VerificationResult(
+    credits=(
+        VerificationCredit(step_index=2, score=0.25, audit={"check": "passed"}),
+        VerificationCredit(step_index=3, score=0.50, audit={"check": "passed"}),
+    ),
+    audit={"domain": "example"},
+)
+```
+
+**Plug-and-play means preserving this contract.** Replacing a compatible verifier leaves reward composition and policy optimization unchanged. Reusing it with another agent still requires an adapter for that agent's artifacts and evidence records. A passing check establishes the property tested by its rule; it does not certify the entire reasoning narrative or guarantee a correct final answer.
+
+### Decoupled reward composition
+
+Let `E` be the final outcome reward, and let `p_t` sum the process credits assigned to interaction step `t`. For a trajectory with a valid final submission:
+
+```math
+r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
+\qquad R=\sum_t r_t=w_{k,g}E+(1-w_{k,g})P.
+```
+
+- **Updates 1-50:** use outcome-only reward, `w = 1`.
+- **After warmup:** sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by that group's rollouts.
+- **Credit placement:** outcome reward goes to the final policy step; process credits remain at their source steps, even when checked after rollout.
+- **Final-submission eligibility:** missing final submissions receive zero composed reward. A submitted answer can be incorrect and still receive valid process credit.
+- **Validation:** uses outcome-only rewards, with verification audits recorded separately.
+
+GRPO computes undiscounted reward-to-go and normalizes returns within the same prompt and step index. Each step's advantage applies to its generated policy tokens; prompt and environment-observation tokens are masked. PPO can consume the same composed rewards through its critic and GAE path.
+
+The interface and composer live in [`agent_r1/verifier/reward.py`](agent_r1/verifier/reward.py). See the [implementation contract](docs/paper-contract.md) for normalization, eligibility, and evaluation details.
+
+### Domain verifiers
+
+| Domain | Training data | Evaluation benchmark | Locally checked artifacts |
+| --- | --- | --- | --- |
+| Mathematics | DeepScaleR-Preview-Dataset | AIME 2025 | Extracted numeric equalities |
+| Multi-hop QA | HotpotQA | HotpotQA validation | Retrieved source spans, provenance, and action/answer coupling |
+| Code | TACO | LiveCodeBench | Code-version lineage, developer-test evidence, and execution replay |
+| Vision | Vision-R1-RL | MATH-Vision | Image-crop replay and string-level answer/claim coupling |
+
+Training is separate for each domain. Domain-specific parsers and checks remain inside the recipes; downstream training uses the shared credit contract.
+
+### A concrete verification example
+
+![Figure 3: A HotpotQA trajectory first cites passage 9904, where the quoted sentence is absent, then cites passage 9898, where the sentence and action checks pass.](assets/images/hotpotqa-verification-example.png)
+
+**Figure 3. Checking evidence provenance on HotpotQA.** The first cited passage does not contain the quoted sentence. A later citation points to the passage containing it, and the source/action checks pass. The audit retains the earlier failure even after the later correction. This illustrates local evidence verification, rather than proof of every reasoning step.
+
+## Results
+
+The values below are transcribed from **Tables 1-3 of the accompanying manuscript**. They are paper-reported results, not measurements generated by the repository's CPU tests. Accuracy is based on the final submitted answer or program; `Avg.` is the unweighted mean across the four benchmarks.
+
+### Qwen3.5-4B
+
+| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ReAct | 26.67 | 46.78 | 40.47 | 75.72 | 47.41 |
+| GRPO | 33.33 | 57.73 | 47.96 | 79.80 | 54.71 |
+| GRPO + LLM-as-a-judge | 36.67 | 58.28 | 48.72 | **82.01** | 56.42 |
+| **Ours (verification)** | **40.00** | **60.18** | **49.57** | 81.51 | **57.82** |
+
+### Qwen3.5-9B
+
+| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ReAct | 36.67 | 52.56 | 49.00 | 79.47 | 54.43 |
+| GRPO | 43.33 | 63.20 | 56.59 | 83.19 | 61.58 |
+| **Ours (verification)** | **46.67** | **66.67** | **58.48** | **84.80** | **64.16** |
+
+In the reported experiments, verification improved outcome accuracy over GRPO on all four benchmarks at both model scales. At 4B, it also achieved higher average accuracy than the frozen Qwen3.5-9B process-judge baseline, with gains on three benchmarks; the judge baseline remained higher on MATH-Vision.
+
+### Training dynamics
+
+![Figure 4: Training accuracy of Qwen3.5-4B over 500 updates on HotpotQA, TACO, Vision-R1, and DeepScaleR, comparing our verifier with an LLM process judge.](assets/images/training-accuracy.png)
+
+**Figure 4. Training accuracy reported in the manuscript.** Blue denotes our verifier; orange denotes GRPO with LLM-as-a-judge. These are training-domain curves, distinct from the held-out benchmark accuracies above. The supplied plot does not report uncertainty across random seeds.
+
+### Reuse across policy optimizers
+
+HotpotQA with Qwen3.5-4B, as reported in manuscript Table 3:
+
+| Algorithm | Outcome only | + Verification | Gain (percentage points) |
+| --- | ---: | ---: | ---: |
+| GRPO | 57.73 | **60.18** | +2.45 |
+| PPO | 55.10 | **57.60** | +2.50 |
+
+<details>
+<summary><strong>HotpotQA ablations: verification source and reward composition</strong></summary>
+
+All values below are reported for Qwen3.5-4B with GRPO in manuscript Table 2.
+
+| Process feedback added to outcome-only GRPO | Accuracy (%) |
+| --- | ---: |
+| None: outcome-only GRPO | 57.73 |
+| Frozen LLM judge | 58.28 |
+| **Our verifier** | **60.18** |
+| Gold evidence (privileged upper bound) | 61.40 |
+
+Our verifier does not require annotated gold evidence. The following reward-composition ablation **does use gold-evidence process rewards**; its 61.40 score is not the proposed verifier's score.
+
+| Reward configuration | Accuracy (%) |
+| --- | ---: |
+| ReAct | 46.78 |
+| Outcome only | 57.73 |
+| Gold process only | 47.27 |
+| Outcome + gold process | 61.40 |
+
+</details>
 
 ## Getting Started
 
-### Environment Setup
+### Environment
 
-Follow the [veRL installation guide](https://verl.readthedocs.io/en/latest/start/install.html). This project requires `verl==0.7.0`.
+Use a Linux GPU environment with **veRL 0.7.0**, PyTorch/FSDP, vLLM, Ray, and compatible Transformers dependencies. The launchers use Bash features available in Bash 4 or later. Follow the [veRL installation documentation](https://verl.readthedocs.io/en/latest/start/install.html) for the infrastructure overview, selecting a dependency stack compatible with this repository's veRL version; the latest upstream defaults target a newer stack.
 
 ```bash
-# Clone this repo
 git clone https://github.com/momo1443/plug-and-play-verification.git
 cd plug-and-play-verification
 
-# Apply patches (if needed for Qwen3.5 or FSDP2)
-python scripts/patches/patch_qwen35_lm_head_device.py
-python scripts/patches/patch_qwen35_rope_device.py
-python scripts/patches/patch_verl_fsdp2_ipc.py
+# Use the Python interpreter from your activated training environment.
+export PYTHON_BIN="$(command -v python)"
 ```
 
-### Quick Start: DeepScaler with A9 Certificate Reward
+Run commands from the repository root. HotpotQA additionally needs the packages in [`recipes/hotpotqa/requirements.txt`](recipes/hotpotqa/requirements.txt), a retrieval index, an embedding model, and an evidence sidecar. TACO execution requires the Linux `bubblewrap` sandbox. Environment-specific compatibility patches are under [`scripts/patches/`](scripts/patches/).
+
+### Prepare data and models
+
+| Domain | Inputs expected by the paper launcher | Setup entry point |
+| --- | --- | --- |
+| DeepScaleR | Prepared `train.parquet` and `validation.parquet` in `data/corpus/deepscaler/` | [Recipe notes](recipes/deepscaler/README.md); source-to-paper-parquet preprocessing is not bundled |
+| HotpotQA | Prepared splits, corpus, FAISS index, embedding model, and evidence sidecar | [Data and retrieval setup](recipes/hotpotqa/README.md) |
+| TACO | Prepared splits and developer/private-test sidecars | [`prepare_data.py`](recipes/taco_a9/prepare_data.py), [`build_sidecar_index.py`](recipes/taco_a9/build_sidecar_index.py) |
+| Vision-R1 | Official `train.parquet` and `test.parquet`, with resolvable image data | [`prepare_data.py`](recipes/vision_r1/prepare_data.py); invoked by the launcher |
+
+Default model paths are `../models/Qwen3.5-4B` and `../models/Qwen3.5-9B`. Set the corresponding domain variable (`DEEPSCALER_MODEL_PATH`, `HOTPOTQA_MODEL_PATH`, `TACO_A9_MODEL_PATH`, or `VISION_R1_MODEL_PATH`) when using another location. Data paths and GPU layouts are configured by each launcher; check them before starting a run.
+
+### Train with the verifier
+
+Choose the command for the prepared domain:
 
 ```bash
-# Place the prepared train.parquet and validation.parquet files under
-# data/corpus/deepscaler/ before launching.
+bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+bash scripts/hotpotqa/run_a9_uniform.sh
+bash scripts/taco/run_a9_uniform.sh
+bash scripts/vision_r1/run_a9_uniform.sh
+```
 
-# Train with certificate-grounded reward
+Example with an explicit model path and run name:
+
+```bash
+DEEPSCALER_MODEL_PATH=/path/to/Qwen3.5-4B \
+RUN_ID=deepscaler_4b_verifier \
 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
 ```
 
-### Quick Start: HotpotQA with A9 Certificate Reward
+### Baselines and comparisons
+
+| Domain | Outcome-only GRPO |
+| --- | --- |
+| DeepScaleR | `bash scripts/deepscaler/run_deepscaler_a1.sh` |
+| HotpotQA | `bash scripts/hotpotqa/run_a1.sh` |
+| TACO | `bash scripts/taco/run_a1_terminal.sh` |
+| Vision-R1 | `bash scripts/vision_r1/run_a1_terminal.sh` |
 
 ```bash
-# Prepare data (see recipe for details)
-python -m recipes.hotpotqa.data_preprocess.process_hotpotqa --output_dir data/corpus/hotpotqa
+# Frozen process judge: deepscaler, hotpotqa, taco, or vision.
+bash scripts/llm_judge/run_grpo_4b_judge_9b.sh hotpotqa
 
-# Train with certificate audit reward
-bash scripts/hotpotqa/run_a9_uniform.sh
+# Outcome-only PPO through the matched task interface.
+bash scripts/ppo/run_terminal.sh hotpotqa
+
+# HotpotQA verifier with PPO.
+HOTPOTQA_OPTIMIZER=ppo bash scripts/hotpotqa/run_a9_uniform.sh
+
+# Privileged gold-evidence ablations on HotpotQA.
+bash scripts/hotpotqa/run_a2.sh  # process only
+bash scripts/hotpotqa/run_a3.sh  # fixed 0.5 outcome/process mixture
 ```
 
----
+The [launcher index](scripts/README.md) lists evaluation entrypoints, 9B wrappers, and optional extensions. DeepScaleR ToolEnv and HotpotQA A8 have separate protocols under `scripts/extensions/`.
 
-## Experimental Arms
+### Paper training profiles
 
-| Arm | Description | Reward Composition |
-|---|---|---|
-| **A1 / GRPO** | Outcome only, matched domain interface | Terminal reward |
-| **A9 / ours** | Deterministic verifier, group-shared mixture | Warmup: outcome; then `w E + (1-w) p` |
-| **A6 / JUDGE** | Frozen Qwen3.5-9B process judge | Same mixture; no reference answer in judge input |
-| **A2 / A3** | HotpotQA privileged gold-evidence ablations | Process only / fixed 0.5 mixture |
-| **A0 / ReAct** | Untrained actor evaluation | No optimizer updates |
+All paper profiles select a 10,000-row training prefix and use 500 updates, four rollouts per prompt, actor learning rate `1e-6`, actor-loss KL coefficient `0.001`, and seed `42`. Qwen3.5-4B uses full fine-tuning; Qwen3.5-9B uses LoRA with rank and alpha `64`.
 
-The formal launchers use a 10,000-row prepared training prefix, 500 updates,
-4 rollouts/prompt, seed 42, actor LR 1e-6, and actor-loss KL 0.001. HotpotQA
-uses the same certificate interface for every paper arm; TACO arms all use five
-turns. A selected prefix of 10,000 rows does not mean every row is sampled in
-500 updates: batch 8 consumes 4,000 prompts. Manifests record both quantities.
+| Domain | Prompt batch (4B / 9B) | Max prompt tokens | Max completion tokens (4B / 9B) | Max policy steps |
+| --- | ---: | ---: | ---: | ---: |
+| DeepScaleR | 20 / 20 | 2048 | 4096 / 5120 | 1 |
+| HotpotQA | 20 / 8 | 8192 | 1024 / 1024 | 4 |
+| TACO | 20 / 20 | 8192 | 2048 / 2048 | 5 |
+| Vision-R1 | 8 / 8 | 8192 | 2048 / 2048 | 3 |
+
+Completion limits apply per policy generation. A selected prefix is not the same as the number of sampled prompts: for example, batch 8 over 500 updates samples 4,000 prompts. Run manifests record both quantities. Model adaptation and overrides are documented in [`scripts/common/README.md`](scripts/common/README.md).
+
+## Evaluation
+
+AIME 2025, HotpotQA, LiveCodeBench, and MATH-Vision measure final task correctness. Select the intended checkpoint, benchmark release, and inference budget explicitly. TACO and Vision-R1 training validation are diagnostics; they do not replace LiveCodeBench and MATH-Vision evaluation.
+
+For a checkpoint exported in a format accepted by vLLM, with prepared AIME data:
 
 ```bash
-# Outcome-only / verifier: choose one command per experiment.
-bash scripts/taco/run_a1_terminal.sh
-bash scripts/taco/run_a9_uniform.sh
-bash scripts/vision_r1/run_a1_terminal.sh
-bash scripts/vision_r1/run_a9_uniform.sh
-# Existing step-level PPO, using each domain's terminal-only interface.
-bash scripts/ppo/run_terminal.sh deepscaler  # also hotpotqa, taco, vision
-# Frozen judge: each domain uses its matched paper flow.
-bash scripts/llm_judge/run_grpo_4b_judge_9b.sh deepscaler  # also hotpotqa, taco, vision
+CUDA_VISIBLE_DEVICES=0 \
+MODEL_PATH=/path/to/exported-checkpoint \
+AIME2025_DATA_DIR=/path/to/prepared/aime2025 \
+OUTPUT_DIR=outputs/aime2025 \
+python scripts/deepscaler/eval_aime2025.py
 ```
 
-Task data, retrieval indexes, model files, and the Linux sandbox must be prepared
-before a real run. In-training TACO/Vision validation is diagnostic; paper
-results still require LiveCodeBench/MATH-Vision evaluation on the chosen checkpoint.
+For a renamed 9B checkpoint, also set `AGENT_R1_MODEL_SCALE=9b` to select the 9B completion budget. The [evaluation index](scripts/README.md#evaluation) points to the other benchmark utilities.
 
-### Independent verification metrics
-
-Every paper flow records all applicable deterministic checks for every reward
-arm. `verification_consistency` implements `C_d`; `verified_success` implements
-`E * C_d`. Earlier failures are retained after a repair. Missing evidence cannot
-be inferred from positive credits alone. Code revision/retest counts are logged
-separately and are not evidence of global reasoning correctness.
+Verification audits provide two additional quantities from manuscript Eq. (9): `C_d` indicates that a nonempty set of applicable checks all pass; `M_d` averages `E_d * C_d`. Missing required evidence and earlier failed checks remain part of the audit. These quantities are separate from the graded process reward and from revision/retesting statistics.
 
 ```bash
 python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json
-# A training dump must select one update, rather than pool checkpoints:
+# Select one update when summarizing a training dump.
 python -m agent_r1.evaluation.summarize rollouts.jsonl --global-step 500
 ```
 
-AIME scoring selects one final answer before consulting the reference and
-rejects fractional/out-of-range integers. Old AIME scores and dumps without
-verification audits need re-evaluation; they are not retroactively corrected.
+## Project Structure
 
-CPU regression checks (the flow tests mock generation and execution boundaries):
+```text
+plug-and-play-verification/
+├── agent_r1/
+│   ├── verifier/          # Shared credit contract and reward composition
+│   ├── agent_flow/        # Policy generation and environment interaction
+│   ├── trainer/           # GRPO/PPO, step advantages, and training records
+│   ├── evaluation/        # Final-answer extraction and verification metrics
+│   └── config/            # Shared Hydra configuration
+├── recipes/               # Domain flows, verifiers, data preparation, and YAML configs
+├── scripts/
+│   ├── deepscaler/        # Paper math training and AIME evaluation
+│   ├── hotpotqa/          # QA training, ablations, and validation
+│   ├── taco/              # Code training
+│   ├── vision_r1/         # Visual-agent training
+│   ├── llm_judge/          # Frozen process-judge baseline
+│   ├── ppo/               # Outcome-only PPO entrypoint
+│   ├── common/            # Shared model adaptation and paper budgets
+│   ├── extensions/        # Optional and historical experiment profiles
+│   └── patches/           # Runtime compatibility patches
+├── tests/                 # Verifier, reward, launcher, and trainer checks
+├── assets/images/         # Figures 1-4 from the manuscript
+├── docs/                  # Implementation notes and archived records
+└── verl_patches/          # Weight-transfer support
+```
+
+See the [repository guide](docs/README.md) for the complete directory map and the paths moved during cleanup.
+
+## Validation and Reproducibility
+
+The focused CPU suite checks reward contracts, answer extraction, launcher arguments, and agent-flow wiring with mocked generation/execution boundaries:
 
 ```bash
-python -m pytest -q tests/test_paper_alignment.py tests/test_paper_launcher_config.py \
-  tests/test_deepscaler_reward.py tests/test_verifier_reward.py tests/test_hotpotqa_a9.py \
-  tests/test_taco_a9.py tests/test_cross_domain_llm_judge.py tests/test_process_judge_flows.py
+python -m pytest -q \
+  tests/test_paper_alignment.py tests/test_paper_launcher_config.py \
+  tests/test_deepscaler_reward.py tests/test_verifier_reward.py \
+  tests/test_hotpotqa_a9.py tests/test_taco_a9.py \
+  tests/test_cross_domain_llm_judge.py tests/test_process_judge_flows.py
 ```
 
-Passing these tests verifies implementation contracts, not reproduction of the
-paper's numerical results. Full GPU training and checkpoint benchmark runs are separate.
+These checks do not establish GPU training stability or reproduce the paper's reported scores. Reproduction requires the corresponding model checkpoints, data snapshots, environment, run manifests, and raw evaluation outputs. The current protocols and known implementation limits are recorded in [the paper contract](docs/paper-contract.md).
 
----
+## Acknowledgements and License
 
-## Infrastructure Patches
-
-| Patch | Purpose |
-|---|---|
-| `verl_patches/bucketed_weight_transfer.py` | ZMQ + IPC bucketed weight sync for faster rollout→trainer transfer |
-| `scripts/patches/patch_qwen35_lm_head_device.py` | Fix Qwen3.5 lm_head device placement under FSDP |
-| `scripts/patches/patch_qwen35_rope_device.py` | Fix Qwen3.5 RoPE device placement under FSDP |
-| `scripts/patches/patch_verl_fsdp2_ipc.py` | Patch veRL FSDP2 IPC configuration |
-
----
-
-## Monitoring
-
-Training runs log to TensorBoard and `rollouts.jsonl`:
-
-```bash
-tensorboard --logdir <experiment_dir>/tensorboard --host 0.0.0.0 --port 6006
-```
-
-Validation-only runs produce evaluation metrics without training curves or rollout files.
-
----
-
-## Acknowledgements
-
-This project is built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.com/volcengine/verl), [DeepSeek-R1](https://github.com/deepseek-ai/DeepSeek-R1), and [RAGEN](https://github.com/ZihanWang314/ragen).
-
----
-
-## Citation
-
-If you find this work useful, please cite:
-
-```bibtex
-@misc{cheng2026agentr1unifiedmodularframework,
-      title={Agent-R1: A Unified and Modular Framework for Agentic Reinforcement Learning},
-      author={Mingyue Cheng and Shuo Yu and Daoyu Wang and Qingchuan Li and Xiaoyu Tao and Jie Ouyang and Yucong Luo and Yitong Zhou and Qi Liu and Enhong Chen},
-      year={2026},
-      eprint={2511.14460},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2511.14460},
-}
-```
+This implementation builds on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.com/volcengine/verl), and [vLLM](https://github.com/vllm-project/vllm). We thank their contributors and the creators of the evaluation benchmarks. See [LICENSE](LICENSE) for the repository license and retained upstream notice.
