@@ -33,8 +33,8 @@ def main():
     code_paths = ["recipes/vision_r1/agent_flow.py", "recipes/vision_r1/verifier.py", "recipes/vision_r1/base.yaml",
                   "recipes/vision_r1/prepare_data.py", "recipes/vision_r1/prepare_run.py",
                   "agent_r1/verifier/reward.py", "agent_r1/evaluation/consistency.py",
-                  "agent_r1/trainer/ppo/core_algos.py", "examples/common/model_training.sh",
-                  "examples/vision_r1/run_visual_agent.sh"]
+                  "agent_r1/trainer/ppo/core_algos.py", "scripts/common/model_training.sh",
+                  "scripts/vision_r1/run_visual_agent.sh"]
     manifest = {
         "contract_version": "vision-r1-paper-v1", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "arm": args.arm, "model": file_identity(Path(args.model_path) / "config.json"),

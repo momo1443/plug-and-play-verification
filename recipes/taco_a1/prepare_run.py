@@ -24,7 +24,7 @@ CODE_PATHS = (
     "recipes/taco_a9/protocol.py",
     "recipes/taco_a1/base.yaml",
     "recipes/taco_a1/prepare_run.py",
-    "examples/taco/run_a1_terminal.sh",
+    "scripts/taco/run_a1_terminal.sh",
 )
 
 

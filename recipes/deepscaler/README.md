@@ -1,6 +1,6 @@
 # DeepScaleR paper profile and ToolEnv extension
 
-Paper experiments use `examples/deepmath/run_deepscaler_a1.sh` and
+Paper experiments use `scripts/deepscaler/run_deepscaler_a1.sh` and
 `run_deepscaler_a9_uniform.sh`: the same single-turn flow, 10,000 selected rows,
 500 updates, 4 rollouts, and the common `VerificationResult` composer. The
 frozen-judge launcher uses this same flow. Token limits are 2048/4096 for 4B and

@@ -202,7 +202,7 @@ class CrossDomainJudgeConfigTests(unittest.TestCase):
         deep = (PROJECT_ROOT / "recipes/llm_judge/deepscaler.yaml").read_text()
         taco = (PROJECT_ROOT / "recipes/taco_a9/base.yaml").read_text()
         vision = (PROJECT_ROOT / "recipes/vision_r1/base.yaml").read_text()
-        launcher = (PROJECT_ROOT / "examples/llm_judge/run_grpo_4b_judge_9b.sh").read_text()
+        launcher = (PROJECT_ROOT / "scripts/llm_judge/run_grpo_4b_judge_9b.sh").read_text()
         self.assertIn("deepscaler_tool_llm_judge", deep)
         self.assertIn("taco_llm_judge_code_agent", taco)
         self.assertIn("vision_r1_llm_judge_visual_agent", vision)

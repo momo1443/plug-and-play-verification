@@ -87,10 +87,10 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "recipes/deepscaler/tool.py",
         "recipes/deepscaler/prepare_tool_data.py",
         "recipes/deepscaler/prepare_tool_pair_run.py",
-        "examples/deepmath/run_deepscaler_tool_pair.sh",
-        "examples/common/model_training.sh",
-        "examples/llm_judge/run_with_frozen_judge.sh",
-        "examples/llm_judge/run_grpo_4b_judge_9b.sh",
+        "scripts/extensions/deepscaler/run_deepscaler_tool_pair.sh",
+        "scripts/common/model_training.sh",
+        "scripts/llm_judge/run_with_frozen_judge.sh",
+        "scripts/llm_judge/run_grpo_4b_judge_9b.sh",
     ]
     missing_code = [relative for relative in code_paths if not (project_dir / relative).is_file()]
     if missing_code:
