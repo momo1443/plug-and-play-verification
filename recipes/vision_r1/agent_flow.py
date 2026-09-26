@@ -15,6 +15,7 @@ from agent_r1.verifier import (
     apply_composed_reward,
     compose_verification_reward,
 )
+from agent_r1.evaluation.consistency import consistency_record
 from recipes.llm_judge.scoring import (
     ProcessStep, image_data_url, judge_reward_info, question_from_raw_prompt, verify_process_steps,
 )
@@ -144,6 +145,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
         submitted_answer: str | None = None
         raw_certificate: Any = None
         terminal_applied = False
+        action_checks = []
 
         for turn in range(1, self.max_steps + 1):
             if turn == self.max_steps:
@@ -225,6 +227,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                     valid=step_kind == "inspect_region" and feedback_image is not None,
                 ))
 
+            action_checks.append(step_kind == "submit_answer" or (step_kind == "inspect_region" and feedback_image is not None))
             step = AgentFlowStep(
                 prompt_ids=prompt_ids,
                 response_ids=response_ids,
@@ -260,11 +263,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                         raw_certificate=raw_certificate,
                         submitted_answer=submitted_answer,
                     )
-                    if self.reward_mode == "uniform_visual_certificate"
-                    else VerificationResult(
-                        credits=(),
-                        audit={"verifier": "disabled_terminal_only"},
-                    )
+
                 )
                 composed = compose_verification_reward(
                     terminal_reward=terminal_score,
@@ -275,6 +274,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                     steps,
                     composed,
                     extra_final_info={
+                        **consistency_record(verification, terminal_score, eligible=True, extra_checks=action_checks),
                         "acc": terminal_score,
                         "terminal_exact_math_match": terminal_score,
                         "verified_process_reward": verification.process_reward,
@@ -316,8 +316,13 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             )
             composed = compose_verification_reward(
                 terminal_reward=terminal_score, verification=verification, schedule=schedule,
+                terminal_gate_passed=submitted_answer is not None,
             )
             apply_composed_reward(steps, composed, extra_final_info={
+                **consistency_record(verify_process(
+                    artifacts=artifacts, raw_certificate=raw_certificate,
+                    submitted_answer=submitted_answer or "",
+                ), terminal_score, eligible=submitted_answer is not None, extra_checks=action_checks),
                 "acc": terminal_score, "terminal_exact_math_match": terminal_score,
                 "verified_process_reward": verification.process_reward, "reward_mode": "llm_judge",
                 "verifier_timing": "causal_prefix_backfill", **judge_reward_info(verification),
@@ -336,6 +341,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                 steps,
                 composed,
                 extra_final_info={
+                    **consistency_record(VerificationResult(credits=(), audit={"applicable_checks": [0]}), 0.0, eligible=False),
                     "acc": 0.0,
                     "terminal_exact_math_match": 0.0,
                     "verified_process_reward": 0.0,

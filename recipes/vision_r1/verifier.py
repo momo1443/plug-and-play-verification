@@ -57,6 +57,8 @@ def verify_process(
 ) -> VerificationResult:
     """Verify certificate schema, answer coupling, lineage, and crop replay."""
 
+    all_crop_checks = [_replay_artifact(artifact, artifacts)[0]
+                       for artifact in artifacts.values() if artifact.parent_artifact_id is not None]
     certificate, certificate_errors = parse_visual_certificate(raw_certificate)
     if certificate is None:
         return VerificationResult(
@@ -64,6 +66,7 @@ def verify_process(
             audit={
                 "verifier": "vision_r1_visual_replay",
                 "schema_valid": False,
+                "applicable_checks": [0] + [int(value) for value in all_crop_checks],
                 "answer_coupled": False,
                 "certificate_errors": list(certificate_errors),
                 "artifact_audits": [],
@@ -103,6 +106,7 @@ def verify_process(
         audit={
             "verifier": "vision_r1_visual_replay",
             "schema_valid": True,
+            "applicable_checks": [1, int(answer_coupled)] + [int(not item["errors"]) for item in artifact_audits] + [int(value) for value in all_crop_checks],
             "answer_coupled": answer_coupled,
             "certificate_errors": [],
             "artifact_audits": artifact_audits,

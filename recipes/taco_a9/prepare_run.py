@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,8 @@ import pyarrow.parquet as pq
 CODE_PATHS = (
     "agent_r1/agent_flow/agent_flow.py",
     "agent_r1/verifier/reward.py",
+    "agent_r1/evaluation/consistency.py",
+    "examples/common/model_training.sh",
     "agent_r1/trainer/main_agent_grpo.py",
     "agent_r1/trainer/ppo/core_algos.py",
     "recipes/reward_mixing.py",
@@ -64,6 +67,7 @@ def main() -> None:
     parser.add_argument("--validation-path", required=True)
     parser.add_argument("--sidecar-path", required=True)
     parser.add_argument("--num-gpus", type=int, required=True)
+    parser.add_argument("--train-max-samples", type=int, required=True)
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--rollout-n", type=int, required=True)
     parser.add_argument("--total-training-steps", type=int, required=True)
@@ -119,8 +123,10 @@ def main() -> None:
             "reference_solutions_model_visible": False,
         },
         "training": {
-            "algorithm": "GRPO",
+            "algorithm": os.environ.get("AGENT_R1_OPTIMIZER", "grpo").upper(),
             "credit_assignment": "step_causal",
+            "train_max_samples": args.train_max_samples,
+            "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "data_selection": "source_prefix",
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
             "ppo_micro_batch_size_per_gpu": 2,

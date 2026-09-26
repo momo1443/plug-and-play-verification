@@ -84,6 +84,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
         credits=credits,
         audit={
             "verifier": "deepscaler_numeric_equations",
+            "applicable_checks": [int(check["valid"]) for record in records for step in record["steps"] for check in step["equation_checks"]],
             "process_segment_audits": records,
             "credits_by_step": {
                 int(record["turn"]): record for record in graded
@@ -165,7 +166,7 @@ def compute_tool_trajectory_reward(
     should_verify = reward_mode == "uniform_equation_process" and schedule.process_weight > 0.0
     verification = VerificationResult(credits=(), audit={"verifier": "disabled"})
     if should_verify:
-        verification = verify_process(reasoning_segments)
+        verification = process_verification if process_verification is not None else verify_process(reasoning_segments)
     elif reward_mode == "llm_judge" and schedule.process_weight > 0.0:
         if process_verification is None:
             raise ValueError("llm_judge requires process verification after warmup")
@@ -174,7 +175,7 @@ def compute_tool_trajectory_reward(
         terminal_reward=terminal_em,
         verification=verification,
         schedule=schedule,
-        terminal_gate_passed=has_final_answer or reward_mode == "llm_judge",
+        terminal_gate_passed=has_final_answer,
     )
     process_segment_audits = list(verification.audit.get("process_segment_audits", []))
     return _as_trajectory_reward(

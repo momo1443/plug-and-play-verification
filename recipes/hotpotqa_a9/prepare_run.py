@@ -32,7 +32,7 @@ from recipes.hotpotqa_a9.reward_contract import (
 )
 from recipes.hotpotqa_a9.verifier import VERIFIER_VERSION
 
-MANIFEST_VERSION = "hotpotqa-a9-certificate-run-v2"
+MANIFEST_VERSION = "hotpotqa-paper-matched-run-v3"
 
 
 def _parse_bool(value: str) -> bool:
@@ -98,6 +98,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-dir", required=True)
     parser.add_argument("--arm", required=True)
+    parser.add_argument("--run-mode", choices=("main", "pilot64", "pilot2048"), default="main")
     parser.add_argument("--train-path", required=True)
     parser.add_argument("--validation-path", required=True)
     parser.add_argument("--corpus-dir", required=True)
@@ -153,12 +154,16 @@ def main() -> None:
             raise FileNotFoundError(path)
     train_rows = pq.ParquetFile(train_path).metadata.num_rows
     validation_rows = pq.ParquetFile(validation_path).metadata.num_rows
-    if args.train_max_samples != 30_000 or train_rows < args.train_max_samples:
-        raise ValueError("A9 main run requires the first 30,000 training rows")
+    expected_rows = {"main": 10_000, "pilot64": 64, "pilot2048": 2048}[args.run_mode]
+    scale = os.environ.get("AGENT_R1_MODEL_SCALE", "9b" if model_path.name == "Qwen3.5-9B" else "4b")
+    expected_batch = (8 if scale == "9b" else 20) if args.run_mode == "main" else 16
+    expected_steps = 500 if args.run_mode == "main" else expected_rows // expected_batch
+    if args.train_max_samples != expected_rows or train_rows < args.train_max_samples:
+        raise ValueError(f"{args.run_mode} requires the first {expected_rows} available training rows")
     if args.val_max_samples != 7_405 or validation_rows != 7_405:
-        raise ValueError("A9 requires all 7,405 validation rows")
-    if args.train_batch_size != 20 or args.total_training_steps != 1_500:
-        raise ValueError("A9 requires batch 20 and exactly 1,500 steps")
+        raise ValueError("Paper HotpotQA requires all 7,405 validation rows")
+    if args.train_batch_size != expected_batch or args.total_training_steps != expected_steps:
+        raise ValueError(f"{args.run_mode} requires batch {expected_batch} and {expected_steps} steps")
     if args.rollout_n != 4 or args.grpo_micro_batch_size not in (1, 2):
         raise ValueError("A9 requires rollout n=4 and micro-batch/GPU=1 or 2")
     if args.em_warmup_steps < 0:
@@ -171,6 +176,9 @@ def main() -> None:
     code_paths = [
         "agent_r1/agent_flow/agent_flow.py",
         "agent_r1/verifier/reward.py",
+        "agent_r1/evaluation/consistency.py",
+        "recipes/hotpotqa_a9/reward_sources.py",
+        "recipes/llm_judge/scoring.py",
         "agent_r1/trainer/main_agent_grpo.py",
         "agent_r1/trainer/ppo/core_algos.py",
         "agent_r1/trainer/ppo/ray_trainer.py",
@@ -210,12 +218,22 @@ def main() -> None:
         "search_or_finish": _canonical_sha256(SEARCH_OR_FINISH_TOOL_SCHEMAS),
         "finish": _canonical_sha256(FINISH_TOOL_SCHEMAS),
     }
+    process_enabled = coerce_bool(os.environ.get("HOTPOTQA_A9_PROCESS_REWARD_ENABLED", "true"), name="HOTPOTQA_A9_PROCESS_REWARD_ENABLED")
+    mode = {"A0": "terminal_only", "A1": "terminal_only", "A2": "gold_process_only",
+            "A3": "gold_fixed_mix", "A6": "llm_process_uniform", "A7": "weak_fixed_mix"}.get(args.arm, "certificate_uniform")
+    if not process_enabled:
+        mode = "terminal_only"
+    expected_terminal = 1.0 if mode == "terminal_only" else 0.0 if mode == "gold_process_only" else 0.5
+    formula = {"terminal_only": "terminal_em", "gold_process_only": "gold_coverage",
+               "gold_fixed_mix": "0.5 * terminal_em + 0.5 * gold_coverage",
+               "weak_fixed_mix": "0.5 * terminal_em + 0.5 * observable_search_reward"}.get(
+                   mode, "w * terminal_em + (1-w) * process_reward; one w per prompt group")
     manifest = {
         "contract_version": MANIFEST_VERSION,
         "status": "prepared",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "arm": "A9",
-        "run_mode": "main",
+        "arm": args.arm,
+        "run_mode": args.run_mode,
         "output_dir": str(output_dir),
         "model": _model_identity(model_path),
         "design_lineage": {
@@ -235,7 +253,7 @@ def main() -> None:
             "train": {
                 "path": str(train_path),
                 "source_rows": train_rows,
-                "count": 30_000,
+                "count": args.train_max_samples,
                 "selection": "source_prefix",
             },
             "validation": {"path": str(validation_path), "source_rows": validation_rows, "count": 7_405},
@@ -250,8 +268,10 @@ def main() -> None:
             "vllm_max_num_seqs": args.vllm_max_num_seqs,
         },
         "training": {
-            "algorithm": "GRPO",
+            "algorithm": os.environ.get("HOTPOTQA_OPTIMIZER", "grpo").upper(),
             "credit_assignment": "step_causal",
+            "train_max_samples": args.train_max_samples,
+            "sampled_prompt_count": args.train_batch_size * args.total_training_steps,
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
             "grpo_micro_batch_size_per_gpu": args.grpo_micro_batch_size,
@@ -274,24 +294,23 @@ def main() -> None:
         },
         "reward_contract": {
             "contract_id": A9_CONTRACT_VERSION,
-            "formula": "w * terminal_em + (1-w) * local_reward, w ~ Uniform(0,1) per prompt group",
-            "terminal_weight": CONTRACT_CERT_MIX.terminal_weight,
-            "process_weight": CONTRACT_CERT_MIX.process_weight,
-            "weight_sampling": "uniform_0_1_per_prompt_group",
-            "format_gate": CONTRACT_FORMAT_STRICT.format_gate
-            if coerce_bool(os.environ.get("HOTPOTQA_A9_FORMAT_GATE", "0"), name="HOTPOTQA_A9_FORMAT_GATE")
-            else CONTRACT_CERT_MIX.format_gate,
+            "formula": formula,
+            "terminal_weight": expected_terminal,
+            "process_weight": 1.0 - expected_terminal,
+            "weight_sampling": "uniform_0_1_per_prompt_group" if mode.endswith("uniform") else "fixed",
+            "format_gate": True,
+            "reward_source": mode,
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
             "process_is_terminal_em_gated": False,
             "gold_answer_visible_to_verifier": False,
-            "gold_evidence_visible_to_verifier": False,
+            "gold_evidence_visible_to_verifier": args.arm in {"A2", "A3"},
             "verifier_version": VERIFIER_VERSION,
             "certificate_schema_version": CERTIFICATE_SCHEMA_VERSION,
             "schedule": {
-                "type": "em_warmup_then_certificate_uniform",
+                "type": mode,
                 "em_warmup_steps": args.em_warmup_steps,
-                "warmup_formula": "1.0 * terminal_em + 0.0 * local_reward",
-                "post_warmup_formula": "w * terminal_em + (1-w) * local_reward, w ~ Uniform(0,1) per prompt group",
+                "warmup_formula": "terminal_em" if mode.endswith("uniform") else formula,
+                "post_warmup_formula": formula,
             },
         },
         "actor_contract": {

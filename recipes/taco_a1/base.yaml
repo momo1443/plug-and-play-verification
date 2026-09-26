@@ -1,6 +1,6 @@
 - name: taco_a1_terminal_code_agent
   _target_: recipes.taco_a9.agent_flow.TacoA9CodeAgentFlow
-  max_steps: 4
+  max_steps: 5
   sidecar_path: ${oc.env:TACO_A1_SIDECAR}
   sidecar_index_path: ${oc.env:TACO_A1_SIDECAR_INDEX}
   timeout_seconds: ${oc.env:TACO_A1_TIMEOUT_SECONDS,2}

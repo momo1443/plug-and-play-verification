@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Standalone AIME 2025 evaluation with pure vLLM inference — no training framework needed.
 
-Improved A0 evaluation with robust answer extraction:
-  1. \\boxed{} extraction (primary)
-  2. "The answer is ..." / "Therefore, ..." patterns
-  3. Last standalone integer in [0, 999] (AIME answer range)
-  4. All candidate answers checked via math_reward.is_equiv
+Final-answer extraction is independent of the reference. Only the selected final
+answer is scored; intermediate numbers and superseded answers cannot earn credit.
 
 Usage:
     CUDA_VISIBLE_DEVICES=2 python eval_aime2025.py
@@ -15,161 +12,15 @@ Computes exact-match accuracy on AIME 2025 (I+II, 30 problems) using greedy deco
 
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
 
-from vllm import LLM, SamplingParams
-
-
-# ---------------------------------------------------------------------------
-# AIME answer extraction & verification
-# ---------------------------------------------------------------------------
-
-def extract_boxed_answer(text: str) -> list[str]:
-    """Extract all answers from \\boxed{} in the response."""
-    candidates = []
-    # Try \\boxed{...} pattern with nested braces
-    for m in re.finditer(r'\\boxed\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text):
-        candidates.append(m.group(1).strip())
-    # Try simple \boxed{...} without nested braces
-    for m in re.finditer(r'\\boxed\s*\{([^}]+)\}', text):
-        ans = m.group(1).strip()
-        if ans not in candidates:
-            candidates.append(ans)
-    return candidates
-
-
-def extract_verbal_answer(text: str) -> list[str]:
-    """Extract answers from verbal patterns like 'The answer is ...'."""
-    candidates = []
-    patterns = [
-        r'(?:[Tt]he )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)',
-        r'[Ss]o\s+(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)',
-        r'[Tt]herefore(?:,\s*)?(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)',
-        r'[Hh]ence(?:,\s*)?(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)',
-        r'[Aa]nswer:\s*(.+?)(?:\.|$)',
-    ]
-    for pat in patterns:
-        for m in re.finditer(pat, text):
-            ans = m.group(1).strip()
-            if ans and ans not in candidates:
-                candidates.append(ans)
-    return candidates
-
-
-def extract_aime_integers(text: str) -> list[str]:
-    """Extract candidate AIME answers — integers in [0, 999] found in the text.
-
-    AIME answers are always integers from 0 to 999 inclusive.
-    We scan from the end of the text backwards to prioritize later (more final) answers.
-    """
-    candidates = []
-    # Find all standalone integers (not part of larger numbers)
-    # Look for numbers that appear at the end of a line or after a colon/equals
-    for m in re.finditer(r'(?:^|=|:|\s)(\d{1,3})(?:\s*$|\s*\.|\s*\n|\s*\\)', text, re.MULTILINE):
-        num_str = m.group(1).strip()
-        if num_str and num_str not in candidates:
-            candidates.append(num_str)
-
-    # Fallback: any integer in the text near the end
-    all_ints = re.findall(r'\b(\d{1,3})\b', text)
-    # Reverse to prioritize later appearances
-    for num_str in reversed(all_ints):
-        num = int(num_str)
-        if 0 <= num <= 999 and num_str not in candidates:
-            candidates.append(num_str)
-
-    return candidates
-
-
-def extract_all_candidates(text: str) -> list[dict]:
-    """Extract all candidate answers with their extraction method."""
-    seen = set()
-    candidates = []
-
-    # Priority 1: \boxed{}
-    for ans in extract_boxed_answer(text):
-        if ans not in seen:
-            candidates.append({"answer": ans, "method": "boxed"})
-            seen.add(ans)
-
-    # Priority 2: Verbal patterns
-    for ans in extract_verbal_answer(text):
-        if ans not in seen:
-            candidates.append({"answer": ans, "method": "verbal"})
-            seen.add(ans)
-
-    # Priority 3: AIME integer patterns
-    for ans in extract_aime_integers(text):
-        if ans not in seen:
-            candidates.append({"answer": ans, "method": "aime_int"})
-            seen.add(ans)
-
-    return candidates
-
-
-def normalize_answer(ans: str) -> str:
-    """Normalize answer for comparison — AIME answers are integers."""
-    ans = ans.replace(",", "").replace(" ", "").replace("{", "").replace("}", "").strip()
-    # Remove trailing .0 for integer answers
-    if ans.endswith(".0"):
-        ans = ans[:-2]
-    # Remove LaTeX formatting
-    ans = ans.replace("\\text{", "").replace("\\mathrm{", "").replace("\\,", "")
-    ans = ans.replace("\\;", "").replace("\\!", "").replace("\\ ", "")
-    # Remove degree symbol
-    ans = ans.replace("^\\circ", "").replace("°", "").strip()
-    # Remove trailing period
-    ans = ans.rstrip(".")
-    return ans
-
-
-def check_equivalence(predicted: str, gold: str) -> bool:
-    """Check if predicted answer matches gold using multiple methods."""
-    pred_norm = normalize_answer(predicted)
-    gold_norm = normalize_answer(gold)
-
-    # Direct string comparison
-    if pred_norm == gold_norm and gold_norm != "":
-        return True
-
-    # Numeric comparison
-    try:
-        pred_num = int(float(pred_norm))
-        gold_num = int(float(gold_norm))
-        if pred_num == gold_num:
-            return True
-    except (ValueError, OverflowError):
-        pass
-
-    # math_reward for more robust comparison (LaTeX normalization)
-    try:
-        from verl.utils.reward_score import math_reward
-        if math_reward.is_equiv(predicted, gold):
-            return True
-        # Also try normalized versions
-        if math_reward.is_equiv(pred_norm, gold_norm):
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
-def find_best_match(text: str, gold: str) -> dict | None:
-    """Extract all candidate answers from text and find the best match against gold.
-
-    Returns the matching candidate info, or None if no match found.
-    """
-    candidates = extract_all_candidates(text)
-
-    for cand in candidates:
-        if check_equivalence(cand["answer"], gold):
-            return cand
-
-    return None
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from agent_r1.evaluation.answers import AIME_EXTRACTION_VERSION, final_answer_record, score_aime
+from agent_r1.evaluation.consistency import consistency_record
+from agent_r1.evaluation.summarize import summarize
+from recipes.deepscaler.trajectory_reward import verify_process
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +28,8 @@ def find_best_match(text: str, gold: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def main():
+    from vllm import LLM, SamplingParams
+
     model_path = os.environ.get(
         "MODEL_PATH",
         "/nas/deepresearch/zsb/corhort/project/agenticrl/models/Qwen3.5-4B",
@@ -187,10 +40,12 @@ def main():
     )
     output_dir = os.environ.get(
         "OUTPUT_DIR",
-        f"/nas/deepresearch/zsb/corhort/project/agenticrl/logs/{Path(model_path).name}_a0_aime2025_v2",
+        f"/nas/deepresearch/zsb/corhort/project/agenticrl/logs/{Path(model_path).name}_a0_aime2025_v3",
     )
     max_samples = int(os.environ.get("MAX_SAMPLES", "-1"))  # -1 = all
     tensor_parallel_size = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
+    scale = os.environ.get("AGENT_R1_MODEL_SCALE", "9b" if Path(model_path).name == "Qwen3.5-9B" else "4b")
+    max_tokens = int(os.environ.get("MAX_RESPONSE_LENGTH", "5120" if scale == "9b" else "4096"))
 
     # Load dataset from processed parquet
     import pandas as pd
@@ -207,7 +62,7 @@ def main():
         sources = sources[:max_samples]
 
     model_name = Path(model_path).name
-    print(f"=== AIME 2025 A0 Baseline Evaluation (v2 — robust extraction) ===")
+    print(f"=== AIME 2025 A0 Baseline Evaluation (v3 — final answer only) ===")
     print(f"Model:    {model_name}")
     print(f"Samples:  {len(questions)}")
     print(f"Output:   {output_dir}")
@@ -244,7 +99,7 @@ def main():
     sampling_params = SamplingParams(
         temperature=0,
         top_p=1.0,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         stop=["<|im_end|>"],
     )
 
@@ -252,6 +107,8 @@ def main():
     print("Generating responses...")
     t0 = time.time()
     outputs = llm.generate(prompts, sampling_params)
+    if len(outputs) != len(questions):
+        raise RuntimeError("Generation count differs from the evaluation denominator")
     elapsed = time.time() - t0
     print(f"Generation done in {elapsed:.1f}s ({len(questions)/elapsed:.1f} samples/s)")
 
@@ -262,27 +119,23 @@ def main():
 
     for i, (output, gold, source) in enumerate(zip(outputs, gold_answers, sources)):
         response = output.outputs[0].text.strip()
-        gold_norm = normalize_answer(gold)
+        gold_norm = str(gold).strip()
 
-        # Find best match among all extracted candidates
-        best_match = find_best_match(response, gold)
-        is_correct = best_match is not None
+        scored = score_aime(response, gold)
+        is_correct = scored["is_correct"]
+        correct += int(is_correct)
 
-        if is_correct:
-            correct += 1
-
-        # Also collect all candidates for analysis
-        all_candidates = extract_all_candidates(response)
-
+        final = final_answer_record(response)
+        verification = verify_process([(1, str(final["reasoning"]) if final else response)])
         results.append({
+            **consistency_record(verification, float(is_correct), eligible=final is not None),
             "index": i,
             "source": source,
             "gold_answer_raw": gold,
             "gold_answer_normalized": gold_norm,
-            "predicted_answer": best_match["answer"] if best_match else None,
-            "match_method": best_match["method"] if best_match else None,
+            "predicted_answer": scored["predicted_answer"],
+            "match_method": scored["match_method"],
             "is_correct": is_correct,
-            "all_candidates": all_candidates,
             "response": response,
         })
 
@@ -302,11 +155,13 @@ def main():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     summary = {
+        "verification_metrics": summarize(results),
+        "max_response_length": max_tokens,
         "model": model_name,
         "model_path": model_path,
         "dataset": "AIME2025",
         "arm": "A0",
-        "extraction_version": "v2_robust",
+        "extraction_version": AIME_EXTRACTION_VERSION,
         "total": total,
         "correct": correct,
         "accuracy": accuracy,
@@ -345,7 +200,6 @@ def main():
             print(f"  Predicted:   {r['predicted_answer']} (method: {r['match_method']})")
         else:
             print(f"  Predicted:   NO MATCH FOUND")
-        print(f"  Candidates:  {r['all_candidates']}")
         # Print last ~400 chars of response to see what the model actually said
         resp = r["response"]
         if len(resp) > 400:

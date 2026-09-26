@@ -34,12 +34,14 @@ done
 MODEL_PATH="${VISION_R1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 source "$PROJECT_DIR/examples/common/model_training.sh"
 agent_r1_model_overrides "$MODEL_PATH"
+agent_r1_optimizer_overrides "$MODEL_PATH"
+agent_r1_paper_profile vision_r1 "$MODEL_PATH"
 [[ -f "$MODEL_PATH/config.json" ]] || { echo "Missing model config: $MODEL_PATH/config.json" >&2; exit 2; }
 TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-8}"
 ROLLOUT_N="${VISION_R1_ROLLOUT_N:-4}"
-TOTAL_STEPS="${VISION_R1_TOTAL_TRAINING_STEPS:-300}"
+TOTAL_STEPS="${VISION_R1_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
 TOTAL_EPOCHS="${VISION_R1_TOTAL_EPOCHS:-1}"
-TRAIN_MAX_SAMPLES="${VISION_R1_TRAIN_MAX_SAMPLES:-$((TOTAL_STEPS * TRAIN_BATCH_SIZE))}"
+TRAIN_MAX_SAMPLES="${VISION_R1_TRAIN_MAX_SAMPLES:-$PAPER_TRAIN_SAMPLES}"
 WARMUP_STEPS="${VISION_R1_TERMINAL_WARMUP_STEPS:-50}"
 export VISION_R1_TERMINAL_WARMUP_STEPS="$WARMUP_STEPS"
 SAVE_FREQ="${VISION_R1_SAVE_FREQ:-50}"
@@ -66,9 +68,16 @@ OUTPUT_DIR="${VISION_R1_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 mkdir -p "$OUTPUT_DIR"
 
 cd "$PROJECT_DIR"
-"$PYTHON_BIN" -m agent_r1.trainer.main_agent_grpo \
-    algorithm.adv_estimator=grpo ++algorithm.grpo.credit_assignment=step_causal \
-    algorithm.norm_adv_by_std_in_grpo=True algorithm.gamma=1.0 algorithm.use_kl_in_reward=false \
+"$PYTHON_BIN" -m recipes.vision_r1.prepare_run \
+    --project-dir "$PROJECT_DIR" --output-dir "$OUTPUT_DIR" --model-path "$MODEL_PATH" \
+    --train-path "$TRAIN_PATH" --validation-path "$VAL_PATH" --arm "$ARM" \
+    --train-max-samples "$TRAIN_MAX_SAMPLES" --train-batch-size "$TRAIN_BATCH_SIZE" \
+    --total-training-steps "$TOTAL_STEPS" --rollout-n "$ROLLOUT_N" \
+    --max-prompt-length "$MAX_PROMPT_LENGTH" --max-response-length "$MAX_RESPONSE_LENGTH" \
+    --terminal-warmup-steps "$WARMUP_STEPS" --seed "$SEED"
+"$PYTHON_BIN" -m "$AGENT_R1_TRAINER_MODULE" \
+    "${AGENT_R1_ALGORITHM_ARGS[@]}" \
+    algorithm.gamma=1.0 algorithm.use_kl_in_reward=false \
     data.train_files="$TRAIN_PATH" data.val_files="$VAL_PATH" \
     data.train_batch_size="$TRAIN_BATCH_SIZE" data.train_max_samples="$TRAIN_MAX_SAMPLES" \
     data.val_batch_size=8 data.val_max_samples=500 data.shuffle=false data.seed="$SEED" \
@@ -100,7 +109,7 @@ cd "$PROJECT_DIR"
     actor_rollout_ref.rollout.agent.default_agent_flow="$AGENT_FLOW" \
     actor_rollout_ref.rollout.agent.num_workers="$NUM_GPUS" \
     actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=false \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0 critic.enable=false reward_model.enable=false \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0 "${AGENT_R1_CRITIC_ARGS[@]}" reward_model.enable=false \
     +reward_model.launch_reward_fn_async=false \
     custom_reward_function.path="$PROJECT_DIR/recipes/vision_r1/reward_fn.py" \
     custom_reward_function.name=compute_score reward.custom_reward_function.path="$PROJECT_DIR/recipes/vision_r1/reward_fn.py" \

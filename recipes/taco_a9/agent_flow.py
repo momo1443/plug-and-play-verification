@@ -20,6 +20,7 @@ from agent_r1.verifier import (
     apply_composed_reward,
     compose_verification_reward,
 )
+from agent_r1.evaluation.consistency import consistency_record
 from recipes.llm_judge.scoring import ProcessStep, judge_reward_info, verify_process_steps
 from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord
 from recipes.taco_a9.protocol import parse_tool_call
@@ -203,6 +204,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
         weight_sampling = schedule.weight_sampling
 
         artifacts: dict[str, CodeArtifact] = {}
+        artifact_step_indices: dict[str, int] = {}
         records: dict[str, ExecutionRecord] = {}
         record_payloads: dict[str, dict[str, Any]] = {}
         current_artifact: CodeArtifact | None = None
@@ -211,6 +213,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
         feedback: list[str] = []
         steps: list[AgentFlowStep] = []
         judge_steps: list[ProcessStep] = []
+        action_checks: list[bool] = []
         terminal_info: dict[str, Any] = {}
         outcome_reward = 0.0
         run_step_indices: dict[str, int] = {}
@@ -243,6 +246,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             if action_name == "write_code" and isinstance(action_args.get("code"), str) and action_args["code"].strip():
                 current_artifact = CodeArtifact.create(len(artifacts) + 1, action_args["code"])
                 artifacts[current_artifact.artifact_id] = current_artifact
+                artifact_step_indices[current_artifact.artifact_id] = turn
                 feedback.append(f"Created {current_artifact.artifact_id} with sha256={current_artifact.sha256}.")
                 reward_score = 0.0
             elif action_name == "run_developer_tests" and isinstance(action_args.get("code_artifact_id"), str):
@@ -276,9 +280,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                 verification = VerificationResult(
                     credits=(), audit={"verifier": "disabled", "credits_by_step": {}}
                 )
-                should_audit_process = self.reward_mode == "uniform_certificate" and (
-                    process_weight > 0.0 or is_validation
-                )
+                should_audit_process = True  # Fixed deterministic evaluation for every reward arm.
                 if should_audit_process:
                     verification = await self.loop.run_in_executor(
                         None,
@@ -301,10 +303,12 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     terminal_reward=outcome_reward,
                     verification=verification,
                     schedule=schedule,
+                    terminal_gate_passed=submitted_artifact is not None,
                 )
                 reward_score = 0.0
                 step_kind = "submit"
                 terminal_info = {
+                    **consistency_record(verification, outcome_reward, eligible=submitted_artifact is not None, extra_checks=action_checks),
                     "acc": outcome_reward,
                     "terminal_private_all_pass": outcome_reward,
                     "terminal_private_pass_rate": private_case_pass_rate,
@@ -334,6 +338,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     valid=step_kind in {"write_code", "run_developer_tests"},
                 ))
 
+            action_checks.append(step_kind in {"write_code", "run_developer_tests", "submit"})
             step = AgentFlowStep(
                 prompt_ids=prompt_ids,
                 response_ids=response_ids,
@@ -383,6 +388,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             )
             composed = compose_verification_reward(
                 terminal_reward=outcome_reward, verification=verification, schedule=schedule,
+                terminal_gate_passed=submitted_artifact is not None,
             )
             terminal_info.update({"acc": outcome_reward, "terminal_private_all_pass": outcome_reward,
                                   "reward_mode": "llm_judge",
@@ -390,4 +396,22 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                                   "verifier_timing": "causal_prefix_backfill",
                                   **judge_reward_info(verification)})
             apply_composed_reward(steps, composed, extra_final_info=terminal_info)
+        # Failed/no-submit traces remain in the Eq. (9) denominator.
+        final_info = steps[-1].extra_fields.setdefault("reward_extra_info", {})
+        if "verification_protocol" not in final_info:
+            final_info.update(consistency_record(
+                VerificationResult(credits=(), audit={"applicable_checks": [0]}),
+                0.0, eligible=False,
+            ))
+        final_info.update({
+            "revision_count": max(0, len(artifacts) - 1),
+            "developer_test_count": len(records),
+            "retest_count": sum(max(0, sum(r.code_artifact_id == aid for r in records.values()) - 1) for aid in artifacts),
+            "revision_after_failed_test": any(
+                not record.all_passed and any(
+                    artifact_step_indices[aid] > run_step_indices[record.run_id]
+                    and artifacts[aid].sha256 != record.code_sha256 for aid in artifacts
+                ) for record in records.values()
+            ),
+        })
         return AgentFlowOutput(steps=steps, metrics=metrics)

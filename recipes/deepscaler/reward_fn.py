@@ -21,14 +21,13 @@ Process reward:
 
 from __future__ import annotations
 
-import json
 import math
 import os
 import re
 from typing import Any
 
-from recipes.reward_mixing import prompt_group_key_from_extra_info, prompt_group_uniform_weight
-from verl.utils.reward_score import math_reward
+from recipes.reward_mixing import prompt_group_key_from_extra_info
+from agent_r1.evaluation.answers import final_answer_record
 
 _DEEPMATH_DATA_SOURCES = {"deepmath"}
 
@@ -392,6 +391,8 @@ def _process_reward_audit(solution_str: str) -> dict[str, Any]:
                 "equation_count": step_total,
                 "verified_equation_count": step_verified,
                 "step_reward": step_reward,
+                "equation_checks": [{"lhs": lhs, "rhs": rhs, "valid": bool(valid)}
+                                    for (lhs, rhs), valid in zip(equations, equation_results)],
             }
         )
 
@@ -430,32 +431,22 @@ def compute_process_reward(solution_str: str) -> tuple[float, int, int]:
 # ── Terminal EM ───────────────────────────────────────────────────
 
 
-def _fallback_extract_last_answer(text: str) -> str | None:
-    if not text:
-        return None
-    m = re.search(r"(?:[Tt]he )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)", text)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"[Ss]o\s+(?:the )?[Aa]nswer\s*(?:is|:)\s*(.+?)(?:\.|$)", text)
-    if m:
-        return m.group(1).strip()
-    return None
-
-
 def compute_terminal_em(solution_str: str, ground_truth: str) -> float:
-    score = math_reward.compute_score(solution_str, ground_truth)
-    if score > 0:
+    final = final_answer_record(solution_str)
+    if final is None or ground_truth is None:
+        return 0.0
+    answer = str(final["answer"]).strip()
+    if answer == str(ground_truth).strip():
         return 1.0
-    fallback = _fallback_extract_last_answer(solution_str)
-    if fallback is not None:
-        try:
-            if math_reward.is_equiv(fallback, ground_truth):
-                return 1.0
-        except Exception:
-            pass
-        if fallback.strip() == ground_truth.strip():
-            return 1.0
-    return 0.0
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", answer) and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", str(ground_truth).strip()):
+        from decimal import Decimal
+        return float(Decimal(answer) == Decimal(str(ground_truth).strip()))
+    from verl.utils.reward_score import math_reward
+    try:
+        return float(math_reward.is_equiv(answer, str(ground_truth)))
+    except (ValueError, TypeError):
+        return 0.0
+
 
 
 # ── Main reward function ─────────────────────────────────────────
@@ -481,85 +472,31 @@ def compute_score(
 
         return default_compute_score(data_source, solution_str, ground_truth, extra_info, **kwargs)
 
-    if not ground_truth or not solution_str:
+    if ground_truth is None or not solution_str:
         return 0.0
 
-    gt_str = str(ground_truth)
-    terminal_em = compute_terminal_em(solution_str, gt_str)
+    from agent_r1.evaluation.consistency import consistency_record
+    from recipes.deepscaler.trajectory_reward import compute_tool_trajectory_reward, verify_process
 
-    # ── Determine reward phase ────────────────────────────────────
     extra_info = extra_info or {}
-    is_validation = bool(extra_info.get("_agent_r1_is_validation", False))
-    global_step = int(extra_info.get("_agent_r1_global_step", -1))
-    if global_step < 0:
-        try:
-            global_step = int(os.environ.get(_ENV_GLOBAL_STEP, "0"))
-        except (ValueError, TypeError):
-            global_step = 0
-
-    if is_validation:
-        reward_phase = "validation_terminal_em"
-        terminal_weight = 1.0
-        process_weight = 0.0
-    elif global_step <= EM_WARMUP_STEPS:
-        reward_phase = "em_warmup"
-        terminal_weight = 1.0
-        process_weight = 0.0
-    else:
-        reward_phase = "uniform"
-        prompt_group_key = prompt_group_key_from_extra_info(extra_info, data_source=data_source)
-        w = prompt_group_uniform_weight(
-            global_step=global_step,
-            prompt_group_key=prompt_group_key,
-            namespace=_GROUP_WEIGHT_NAMESPACE,
-        )
-        terminal_weight = w
-        process_weight = 1.0 - w
-
-    # ── Compute final reward ──────────────────────────────────────
-    if reward_phase == "em_warmup":
-        reward = float(terminal_em)
-        process_reward_val = 0.0
-        num_verified = 0
-        num_graded = 0
-        process_component = 0.0
-        process_component_valid = False
-    elif reward_phase == "validation_terminal_em":
-        reward = float(terminal_em)
-        process_reward_val = 0.0
-        num_verified = 0
-        num_graded = 0
-        process_component = 0.0
-        process_component_valid = False
-    else:
-        process_audit = _process_reward_audit(solution_str)
-        process_reward_val = float(process_audit["process_reward"])
-        num_verified = int(process_audit["fully_verified_step_count"])
-        num_graded = int(process_audit["graded_step_count"])
-        process_component = process_weight * process_reward_val
-        reward = terminal_weight * terminal_em + process_component
-        # A non-empty response with no verifiable equation is valid negative
-        # process evidence and must remain in the GRPO comparison group.
-        process_component_valid = num_graded > 0
-
+    final = final_answer_record(solution_str)
+    reasoning = str(final["reasoning"]) if final else solution_str
+    verification = verify_process([(1, reasoning)])
+    global_step = int(extra_info.get("_agent_r1_global_step", os.environ.get(_ENV_GLOBAL_STEP, "0")))
+    result = compute_tool_trajectory_reward(
+        reward_mode="uniform_equation_process",
+        final_response=solution_str if final else None, ground_truth=ground_truth,
+        reasoning_segments=[(1, reasoning)], global_step=global_step,
+        is_validation=bool(extra_info.get("_agent_r1_is_validation", False)),
+        em_warmup_steps=EM_WARMUP_STEPS,
+        prompt_group_key=prompt_group_key_from_extra_info(extra_info, data_source=data_source),
+        process_verification=verification,
+    )
     return {
-        "score": float(reward),
-        "terminal_em": float(terminal_em),
-        "process_reward": float(process_reward_val),
-        "num_verified_steps": num_verified,
-        "num_graded_steps": num_graded,
-        "num_verified_equations": (int(process_audit["verified_equation_count"]) if reward_phase == "uniform" else 0),
-        "num_extracted_equations": (int(process_audit["equation_count"]) if reward_phase == "uniform" else 0),
-        "process_step_rewards_json": (
-            json.dumps(process_audit["steps"], separators=(",", ":")) if reward_phase == "uniform" else "[]"
-        ),
-        "optimizer_reward_phase": reward_phase,
-        "optimizer_terminal_weight": float(terminal_weight),
-        "optimizer_process_weight": float(process_weight),
-        "weight_sampling": "uniform_0_1_per_prompt_group" if reward_phase == "uniform" else "fixed",
-        "optimizer_weight_group_key": prompt_group_key if reward_phase == "uniform" else None,
-        "a9_process_component_valid": process_component_valid,
-        "optimizer_process_component": float(process_component),
-        "a9_em_warmup_steps": EM_WARMUP_STEPS,
+        **result.record(),
+        **consistency_record(verification, result.terminal_em, eligible=final is not None),
+        "acc": result.terminal_em,
+        "deterministic_verification": verification.audit,
+        "num_extracted_equations": sum(a["equation_count"] for a in verification.audit["process_segment_audits"]),
         "training_global_step": global_step,
     }

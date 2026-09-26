@@ -31,6 +31,11 @@ SYSTEM_PROMPT = (
 )
 
 _RUBRICS = {
+    "hotpotqa": (
+        "Evaluate this search and its certificate against retrieved text visible at this step. "
+        "Reward relevant retrieval and grounded links between evidence and the next action. "
+        "No reference answer or gold supporting-fact annotations are available."
+    ),
     "deepmath": (
         "Evaluate the current intermediate mathematical reasoning and tool use. Check local "
         "deductions, calculations and whether the action advances the solution. A tool reporting "

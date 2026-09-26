@@ -23,6 +23,11 @@ CODE_PATHS = (
     "examples/deepmath/run_deepscaler_a9_uniform.sh",
     "recipes/deepscaler/prepare_run.py",
     "recipes/deepscaler/reward_fn.py",
+    "recipes/deepscaler/agent_flow.py",
+    "recipes/deepscaler/trajectory_reward.py",
+    "recipes/deepscaler/paper.yaml",
+    "agent_r1/evaluation/answers.py",
+    "agent_r1/evaluation/consistency.py",
 )
 
 
@@ -86,9 +91,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     return {
-        "arm": "DeepScaleR-A9-uniform-process",
-        "runtime_profile": "deepscaler_legacy",
-        "contract_version": "deepscaler-a9-group-uniform-step-equations-v4-strict-em-warmup",
+        "arm": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
+        "runtime_profile": "deepscaler_paper",
+        "contract_version": "deepscaler-paper-shared-contract-v5",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": args.status,
         "output_dir": str(output_dir),
@@ -116,9 +121,10 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "vllm_max_num_seqs": args.vllm_max_num_seqs,
         },
         "training": {
-            "algorithm": "GRPO",
+            "algorithm": os.environ.get("AGENT_R1_OPTIMIZER", "grpo").upper(),
             "credit_assignment": "step_causal",
             "train_max_samples": args.train_max_samples,
+            "sampled_prompt_count": args.train_batch_size * args.total_training_steps,
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
             "max_prompt_length": args.max_prompt_length,
@@ -134,18 +140,20 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
         "reward_contract": {
+            "terminal_gate": "valid_final_answer_submission",
+            "reward_mode": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
             "schedule": {
                 "warmup_steps": args.em_warmup_steps,
                 "warmup": "strict_terminal_em",
-                "post_warmup": "per_prompt_group_w_uniform_0_1",
-                "formula": "w * terminal_em + (1 - w) * process_reward",
+                "post_warmup": "terminal_only" if os.environ.get("DEEPSCALER_REWARD_MODE") == "terminal_only" else "per_prompt_group_w_uniform_0_1",
+                "formula": "terminal_em" if os.environ.get("DEEPSCALER_REWARD_MODE") == "terminal_only" else "w * terminal_em + (1 - w) * process_reward",
             },
             "process_reward": {
                 "equation_score": "1 if nontrivial numeric equality verifies, else 0",
                 "step_score": "verified_equations / extracted_equations; 0 when none extracted",
                 "trajectory_score": "mean(step_score over equation-bearing reasoning steps); 0 when none",
                 "unsupported_expressions": "fail_closed",
-                "optimizer_placement": "completion_level_scalar_after_step_aggregation",
+                "optimizer_placement": "shared_composer_single_agent_step",
                 "token_span_credit": False,
             },
         },

@@ -119,7 +119,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         )
         if args.max_tasks and len(tasks) >= args.max_tasks:
             break
-    tasks.sort(key=lambda item: item["task_id"])
+    # Preserve eligible rows in source shard/row order for the paper prefix.
     dev_ids = {
         task["task_id"]
         for task in tasks
@@ -158,6 +158,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"No rows for {split}")
         pq.write_table(pa.Table.from_pylist(rows), output_dir / f"{split}.parquet")
     manifest = {
+        "training_row_order": "source_shard_then_row_after_filtering_and_validation_holdout",
         "contract_version": SPLIT_VERSION,
         "raw_taco_train_files": [str(Path(path).resolve()) for path in source_paths],
         "raw_row_count": sum(pq.ParquetFile(path).metadata.num_rows for path in source_paths),

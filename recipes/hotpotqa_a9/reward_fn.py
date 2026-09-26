@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from recipes.hotpotqa.reward_fn import _extract_answer_from_solution
 from recipes.hotpotqa_a9.protocol import parse_finish_call
 from recipes.hotpotqa_lr.reward_fn import normalize_answer
 
@@ -49,16 +48,6 @@ def compute_score(
         return 0.0
     finish = parse_finish_call(solution_str or "")
     if finish.answer is None:
-        # Validation-time lenient fallback: if the finish tool call is
-        # missing but the model produced an <answer> tag or other
-        # recognisable answer text, score that instead so that validation
-        # EM is not penalised by protocol formatting failures.
-        is_validation = bool((extra_info or {}).get("_agent_r1_is_validation", False))
-        if is_validation:
-            answer = _extract_answer_from_solution(solution_str or "")
-            if answer:
-                prediction = normalize_answer(answer)
-                return float(prediction in {normalize_answer(candidate) for candidate in candidates})
         return 0.0
     prediction = normalize_answer(finish.answer)
     return float(prediction in {normalize_answer(candidate) for candidate in candidates})

@@ -1,17 +1,17 @@
 - name: vision_r1_a1_visual_agent
   _target_: recipes.vision_r1.VisionR1VisualAgentFlow
   reward_mode: terminal_only
-  terminal_warmup_steps: 50
+  terminal_warmup_steps: ${oc.env:VISION_R1_TERMINAL_WARMUP_STEPS,50}
   max_steps: 3
 
 - name: vision_r1_a9_visual_agent
   _target_: recipes.vision_r1.VisionR1VisualAgentFlow
   reward_mode: uniform_visual_certificate
-  terminal_warmup_steps: 50
+  terminal_warmup_steps: ${oc.env:VISION_R1_TERMINAL_WARMUP_STEPS,50}
   max_steps: 3
 
 - name: vision_r1_llm_judge_visual_agent
   _target_: recipes.vision_r1.VisionR1VisualAgentFlow
   reward_mode: llm_judge
-  terminal_warmup_steps: 50
+  terminal_warmup_steps: ${oc.env:VISION_R1_TERMINAL_WARMUP_STEPS,50}
   max_steps: 3

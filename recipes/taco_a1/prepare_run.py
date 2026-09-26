@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,6 +55,7 @@ def main() -> None:
     parser.add_argument("--validation-path", required=True)
     parser.add_argument("--sidecar-path", required=True)
     parser.add_argument("--num-gpus", type=int, required=True)
+    parser.add_argument("--train-max-samples", type=int, required=True)
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--rollout-n", type=int, required=True)
     parser.add_argument("--total-training-steps", type=int, required=True)
@@ -92,7 +94,9 @@ def main() -> None:
             "reference_solutions_model_visible": False,
         },
         "training": {
-            "algorithm": "GRPO", "credit_assignment": "step_causal", "num_gpus": args.num_gpus,
+            "algorithm": os.environ.get("AGENT_R1_OPTIMIZER", "grpo").upper(), "credit_assignment": "step_causal", "num_gpus": args.num_gpus,
+            "train_max_samples": args.train_max_samples,
+            "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "data_selection": "source_prefix",
             "train_batch_size": args.train_batch_size, "rollout_n": args.rollout_n,
             "total_training_steps": args.total_training_steps, "total_epochs": args.total_epochs,
             "save_freq": args.save_freq, "seed": args.seed,

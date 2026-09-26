@@ -42,7 +42,7 @@ elif [[ "$ARM" == A8_LR30* ]]; then
         exit 2
     }
 fi
-if [[ "$ARM" == A9* ]]; then
+if [[ "$ARM" != A8_LR* ]]; then
     # A9 uses its own warmup env var; pipe it to the shared LR_EM_WARMUP_STEPS
     # so preflight/manifest records the correct value.
     LR_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-50}"
@@ -52,7 +52,7 @@ if [[ "$ARM" == A8_LR* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_lr/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
-elif [[ "$ARM" == A9* ]]; then
+elif [[ "$ARM" != A8_LR* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_certificate_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
@@ -62,11 +62,16 @@ else
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa/reward_fn.py"
 fi
 
+agent_r1_paper_profile hotpotqa "${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
 case "$RUN_MODE" in
     main)
-        DEFAULT_TRAIN_MAX_SAMPLES=30000
-        DEFAULT_TRAIN_BATCH_SIZE=20
+        DEFAULT_TRAIN_MAX_SAMPLES=$PAPER_TRAIN_SAMPLES
+        DEFAULT_TRAIN_BATCH_SIZE=$PAPER_BATCH_SIZE
+        if [[ "$ARM" == A8_LR* ]]; then
+            DEFAULT_TRAIN_MAX_SAMPLES=30000
+            DEFAULT_TRAIN_BATCH_SIZE=20
+        fi
         ;;
     pilot64)
         DEFAULT_TRAIN_MAX_SAMPLES=64
@@ -89,6 +94,8 @@ ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
 GRPO_MICRO_BATCH_SIZE="${HOTPOTQA_GRPO_MICRO_BATCH_SIZE:-2}"
 if [[ -n "${HOTPOTQA_TOTAL_TRAINING_STEPS:-}" ]]; then
     TOTAL_TRAINING_STEPS="$HOTPOTQA_TOTAL_TRAINING_STEPS"
+elif [[ "$RUN_MODE" == main && "$ARM" != A8_LR* ]]; then
+    TOTAL_TRAINING_STEPS=$PAPER_TRAIN_STEPS
 elif (( TRAIN_MAX_SAMPLES % TRAIN_BATCH_SIZE == 0 )); then
     TOTAL_TRAINING_STEPS="$((TRAIN_MAX_SAMPLES / TRAIN_BATCH_SIZE))"
 else
@@ -106,7 +113,7 @@ export HOTPOTQA_FORMAL_EXPERIMENT=1
 export HOTPOTQA_REWARD_ARM="$ARM"
 export HOTPOTQA_ENABLE_THINKING=false
 export HOTPOTQA_FORCE_FIRST_SEARCH=false
-# Raw-final-only is enforced by the shared AgentFlow; no runtime switch exists.
+# All paper arms share the certificate interaction interface.
 export HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE=true
 export HOTPOTQA_EMBEDDING_PER_WORKER_GPU=0
 export HOTPOTQA_EMBEDDING_DEVICE=cpu
@@ -350,8 +357,9 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --calibration-report "$CALIBRATION_REPORT" \
         --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
         --seed "$EXPERIMENT_SEED"
-    elif [[ "$ARM" == A9* ]]; then
+    elif [[ "$ARM" != A8_LR* ]]; then
         "$PYTHON_BIN" -m recipes.hotpotqa_a9.prepare_run \
+        --run-mode "$RUN_MODE" \
         --project-dir "$PROJECT_DIR" \
         --arm "$ARM" \
         --train-path "$TRAIN_PATH" \

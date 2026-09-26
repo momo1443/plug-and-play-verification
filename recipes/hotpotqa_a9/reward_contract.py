@@ -6,8 +6,8 @@ A9 uses one prompt-group-shared uniform mixture after outcome-only warmup:
 
 All rollouts for the same prompt in an optimizer update use the same w.
 
-The strict format-gate launcher keeps the same uniform mixture, but adds a
-separate protocol-compliance ablation that zeros rewards for missing finishes.
+Every paper arm zeros composed rewards for missing final submissions.
+The historical strict launcher is an alias of this shared eligibility rule.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class CertificateRewardContract:
     process_weight: float
     reward_horizon: int = 3
     final_response_mask: int = 1
-    format_gate: bool = False
+    format_gate: bool = True
 
 
 CONTRACT_CERT_MIX = CertificateRewardContract(terminal_weight=0.5, process_weight=0.5)
@@ -31,7 +31,7 @@ CONTRACT_FORMAT_STRICT = CertificateRewardContract(
     terminal_weight=0.5, process_weight=0.5, format_gate=True,
 )
 
-A9_CONTRACT_VERSION = "hotpotqa-a9-certificate-group-uniform-v3"
+A9_CONTRACT_VERSION = "hotpotqa-paper-matched-interface-v4"
 
 # Import-time invariant check
 if abs(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight - 1.0) > 1e-12:

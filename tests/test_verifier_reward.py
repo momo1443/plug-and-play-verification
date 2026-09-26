@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from agent_r1.agent_flow.agent_flow import AgentFlowStep
+from types import SimpleNamespace as AgentFlowStep
 from agent_r1.verifier import (
     VerificationCredit,
     VerificationResult,
@@ -64,8 +64,8 @@ class VerifierRewardTest(unittest.TestCase):
             schedule=schedule,
         )
         steps = [
-            AgentFlowStep(prompt_ids=[1], response_ids=[1], reward_score=0.0),
-            AgentFlowStep(prompt_ids=[2], response_ids=[2], reward_score=0.0),
+            AgentFlowStep(prompt_ids=[1], response_ids=[1], reward_score=0.0, extra_fields={}),
+            AgentFlowStep(prompt_ids=[2], response_ids=[2], reward_score=0.0, extra_fields={}),
         ]
         apply_composed_reward(steps, composed)
 

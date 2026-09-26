@@ -1,6 +1,16 @@
 # HotpotQA Recipe
 
-## Overview
+The paper launchers now use `recipes/hotpotqa_a9/agent_flow.py` for A0/A1/A2/A3/A6/A9,
+with matched certificate prompts, four turns, 10,000 selected training rows and
+500 updates. A6 judges causal prefixes without gold answers. A2/A3 change only
+the reward source; their final tokens remain in the shared policy mask. A7 is a
+retained weak-execution extension. See [the paper contract](../../docs/paper-contract.md).
+
+The raw-answer loop and contracts in this directory remain for legacy runs and
+retrieval utilities. The protocol notes below describe that legacy interface,
+not the current paper launchers.
+
+## Legacy Overview
 
 This recipe runs the retained raw-answer HotpotQA arms with local FAISS/BGE retrieval. The standalone local-reasoning experiment lives under `recipes/hotpotqa_lr/`, and the certificate-grounded A9 experiment lives under `recipes/hotpotqa_a9/`.
 

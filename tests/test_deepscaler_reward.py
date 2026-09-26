@@ -7,7 +7,7 @@ from recipes.deepscaler import reward_fn
 
 class DeepScalerRewardTest(unittest.TestCase):
     def test_every_step_contributes_to_process_reward(self) -> None:
-        solution = """Step 1: Check 2 + 3 = 5 and 4 + 4 = 9.
+        solution = r"""Step 1: Check 2 + 3 = 5 and 4 + 4 = 9.
 Step 2: Continue with 6 / 2 = 3."""
 
         score, fully_verified_steps, step_count = reward_fn.compute_process_reward(solution)
@@ -17,7 +17,7 @@ Step 2: Continue with 6 / 2 = 3."""
         self.assertEqual(step_count, 2)
 
     def test_step_without_numeric_equation_is_excluded_from_average(self) -> None:
-        solution = """Step 1: This paragraph gives an unsupported verbal conclusion.
+        solution = r"""Step 1: This paragraph gives an unsupported verbal conclusion.
 Step 2: Check the arithmetic $8 - 3 = 5$."""
 
         score, fully_verified_steps, step_count = reward_fn.compute_process_reward(solution)
@@ -37,7 +37,7 @@ Step 2: Check the arithmetic $8 - 3 = 5$."""
         self.assertFalse(reward_fn._verify_equation_pair(r"0.\overline{6}", r"\frac{2}{3}"))
 
     def test_post_warmup_reward_uses_uniform_weight(self) -> None:
-        solution = """Step 1: Check the arithmetic $2 + 3 = 5$.
+        solution = r"""Step 1: Check the arithmetic $2 + 3 = 5$.
 Step 2: Therefore the final answer is $\boxed{0}$."""
 
         extra_info = {
@@ -55,7 +55,7 @@ Step 2: Therefore the final answer is $\boxed{0}$."""
         )
 
         self.assertIsInstance(result, dict)
-        self.assertEqual(result["optimizer_reward_phase"], "uniform")
+        self.assertEqual(result["optimizer_reward_phase"], "uniform_equation_process")
         self.assertEqual(result["weight_sampling"], "uniform_0_1_per_prompt_group")
         self.assertEqual(result["optimizer_weight_group_key"], "deepmath:train:index:17")
         self.assertEqual(result["optimizer_terminal_weight"], same_group["optimizer_terminal_weight"])

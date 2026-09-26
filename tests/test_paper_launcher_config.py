@@ -32,7 +32,7 @@ class PaperLauncherConfigTest(unittest.TestCase):
             "import json, os, sys\n"
             "with open(os.environ['LAUNCHER_TEST_CALLS'], 'a') as f:\n"
             "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            "if sys.argv[1] == '-': print(6000)\n"
+            "if sys.argv[1] == '-': print(12000)\n"
         )
         fake_python.chmod(0o755)
         bwrap = self.root / "bwrap"
@@ -64,7 +64,7 @@ class PaperLauncherConfigTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        trainer = [args for args in calls if len(args) > 1 and args[1] == "agent_r1.trainer.main_agent_grpo"][-1]
+        trainer = [args for args in calls if len(args) > 1 and args[1] in {"agent_r1.trainer.main_agent_grpo", "agent_r1.trainer.main_agent_ppo"}][-1]
         options = {}
         for arg in trainer[2:]:
             if "=" in arg:
@@ -149,6 +149,48 @@ class PaperLauncherConfigTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("AGENT_R1_LORA_RANK", result.stderr)
         self.assertFalse(self.calls.exists())
+
+class PaperBudgetIntegrationTest(unittest.TestCase):
+    setUp = PaperLauncherConfigTest.setUp
+    launch = PaperLauncherConfigTest.launch
+    assert_adaptation = PaperLauncherConfigTest.assert_adaptation
+    def test_canonical_training_profiles_have_paper_budget(self):
+        for launcher, batch in (("deepmath/run_deepscaler_a9_uniform.sh", "20"),
+                                ("deepmath/run_deepscaler_a1.sh", "20"),
+                                ("hotpotqa/run_a1.sh", "20"),
+                                ("hotpotqa/run_a9_uniform.sh", "20"),
+                                ("hotpotqa/run_a9_uniform_9b.sh", "8"),
+                                ("taco/run_a1_terminal.sh", "20"),
+                                ("taco/run_a9_uniform.sh", "20"),
+                                ("vision_r1/run_a1_terminal.sh", "8"),
+                                ("vision_r1/run_a9_uniform.sh", "8")):
+            with self.subTest(launcher=launcher):
+                options = self.launch("examples/" + launcher)
+                self.assertEqual(options["data.train_max_samples"], "10000")
+                self.assertEqual(options["trainer.total_training_steps"], "500")
+                self.assertEqual(options["data.train_batch_size"], batch)
+                self.assertEqual(options["actor_rollout_ref.rollout.n"], "4")
+
+    def test_matched_hotpot_interfaces_for_all_reward_sources(self):
+        for arm in ("A1", "A2", "A3", "A6", "A7", "A9"):
+            options = self.launch("examples/hotpotqa/run_rlvr.sh", HOTPOTQA_REWARD_ARM=arm)
+            self.assertEqual(options["actor_rollout_ref.rollout.agent.default_agent_flow"], "hotpotqa_certificate_agent")
+            self.assertTrue(options["custom_reward_function.path"].endswith("hotpotqa_a9/reward_fn.py"))
+
+    def test_9b_math_uses_paper_completion_length_and_shared_flow(self):
+        options = self.launch("examples/deepmath/run_deepscaler_a9_uniform.sh", AGENT_R1_MODEL_SCALE="9b")
+        self.assertEqual(options["data.max_response_length"], "5120")
+        self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "5120")
+        self.assertEqual(options["actor_rollout_ref.rollout.agent.default_agent_flow"], "deepscaler_paper_agent")
+        self.assert_adaptation(options, 64)
+
+    def test_ppo_baselines_enable_existing_critic_with_same_budget(self):
+        for launcher in ("deepmath/run_deepscaler_a1.sh", "taco/run_a1_terminal.sh", "vision_r1/run_a1_terminal.sh"):
+            options = self.launch("examples/" + launcher, AGENT_R1_OPTIMIZER="ppo")
+            self.assertEqual(options["algorithm.adv_estimator"], "gae")
+            self.assertEqual(options["critic.enable"], "True")
+            self.assertEqual(options["trainer.total_training_steps"], "500")
+            self.assertEqual(options["data.train_max_samples"], "10000")
 
 
 if __name__ == "__main__":

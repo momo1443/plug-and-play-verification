@@ -223,6 +223,7 @@ def build_verification_result(
         audit={
             "verifier": VERIFIER_VERSION,
             "certificate_audit": summary,
+            "applicable_checks": [audit.own_valid for audit in audits],
             "credits_by_step": credits_by_step,
         },
     )

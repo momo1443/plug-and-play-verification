@@ -12,7 +12,7 @@ export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 export HOTPOTQA_NUM_GPUS=8
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 export HOTPOTQA_A9_EM_WARMUP_STEPS="${HOTPOTQA_A9_EM_WARMUP_STEPS:-50}"
-export HOTPOTQA_A9_FORMAT_GATE=0
+export HOTPOTQA_A9_FORMAT_GATE=1
 export HOTPOTQA_VLLM_ENABLE_SLEEP_MODE=false
 export HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false
 export HOTPOTQA_SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
@@ -30,6 +30,6 @@ export RAY_TMPDIR="/tmp/rwa9uniform$$"
 mkdir -p "$RAY_TMPDIR"
 export RAY_TMPDIR
 
-export RUN_ID="${RUN_ID:-qwen35-4b_a9_uniform_emwarm50_main30k_n4_1500step_8gpu_vllm025_refkl001_$(date +%Y%m%d-%H%M%S)}"
+export RUN_ID="${RUN_ID:-qwen35-4b_a9_uniform_emwarm50_main10k_n4_500step_8gpu_vllm025_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
 exec bash "$HERE/run_rlvr.sh"

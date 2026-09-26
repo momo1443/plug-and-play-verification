@@ -1,9 +1,11 @@
-"""DeepScaleR recipes, including the multi-turn answer-checking agent."""
-
-from agent_r1.agent_flow.agent_env_loop import AgentEnvLoop
-
-# Importing this module registers the recipe-local tool before ToolEnv creates
-# an instance from ``recipes/deepscaler/base.yaml``.
-from . import tool as _tool  # noqa: F401
+"""DeepScaleR recipes; numerical verification can be imported without the GPU runtime."""
 
 __all__ = ["AgentEnvLoop"]
+
+
+def __getattr__(name):
+    if name == "AgentEnvLoop":
+        from agent_r1.agent_flow.agent_env_loop import AgentEnvLoop
+        from . import tool  # Register the ToolEnv extension's answer checker.
+        return AgentEnvLoop
+    raise AttributeError(name)

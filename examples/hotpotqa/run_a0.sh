@@ -2,7 +2,7 @@
 set -euo pipefail
 set -x
 
-# Frozen A0 raw-answer validation launcher.
+# Frozen A0 matched-certificate validation launcher.
 
 if (( $# != 0 )); then
     echo "This launcher takes no arguments; configure via the exported variables below" >&2
@@ -13,7 +13,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
-VALIDATION_INTERFACE=raw
+VALIDATION_INTERFACE=certificate
 VALIDATION_ARM=A0
 export HOTPOTQA_FORMAL_A0=1
 export HOTPOTQA_FORMAL_EXPERIMENT=1
@@ -37,13 +37,13 @@ export HOTPOTQA_DATA_ROOT="${HOTPOTQA_DATA_ROOT:-$PROJECT_DIR/data/corpus/hotpot
 export HOTPOTQA_CORPUS_DATA_ROOT="${HOTPOTQA_CORPUS_DATA_ROOT:-$PROJECT_DIR/data/corpus/hotpotqa_corpus}"
 export HOTPOTQA_EVIDENCE_SIDECAR="${HOTPOTQA_EVIDENCE_SIDECAR:-$HOTPOTQA_CORPUS_DATA_ROOT/hotpotqa_evidence_v1.sqlite3}"
 export HOTPOTQA_EMBEDDING_MODEL="${HOTPOTQA_EMBEDDING_MODEL:-$WORKSPACE_DIR/models/bge-large-en-v1.5}"
-export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3-4B}"
+export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 
 MODEL_PATH="$HOTPOTQA_MODEL_PATH"
 TRAIN_PATH="${HOTPOTQA_TRAIN_PATH:-$HOTPOTQA_DATA_ROOT/train.parquet}"
 VAL_PATH="${HOTPOTQA_VAL_PATH:-$HOTPOTQA_DATA_ROOT/validation.parquet}"
-AGENT_CONFIG="$PROJECT_DIR/recipes/hotpotqa/base.yaml"
-REWARD_PATH="$PROJECT_DIR/recipes/hotpotqa/reward_fn.py"
+AGENT_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/base.yaml"
+REWARD_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
 
 VAL_MAX_SAMPLES="${HOTPOTQA_VAL_MAX_SAMPLES:--1}"
 VAL_BATCH_SIZE="${HOTPOTQA_VAL_BATCH_SIZE:-8}"
@@ -129,7 +129,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from recipes.hotpotqa.evidence import EVIDENCE_SCHEMA_VERSION
-from recipes.hotpotqa.final_answer_protocol import resolve_final_answer_protocol
+from recipes.hotpotqa_a9.protocol import A9_FINISH_PROTOCOL
 from recipes.hotpotqa.prepare_formal_rlvr_run import (
     _model_identity,
     _package_versions,
@@ -137,9 +137,9 @@ from recipes.hotpotqa.prepare_formal_rlvr_run import (
 
 validation_arm = os.environ["VALIDATION_ARM"]
 validation_interface = os.environ["VALIDATION_INTERFACE"]
-if validation_arm != "A0" or validation_interface != "raw":
-    raise ValueError("Only the frozen A0 raw validation interface is supported")
-final_answer_protocol = resolve_final_answer_protocol()
+if validation_arm != "A0" or validation_interface != "certificate":
+    raise ValueError("A0 must use the paper certificate interface")
+final_answer_protocol = A9_FINISH_PROTOCOL
 project_dir = Path(os.environ["PROJECT_DIR"])
 out_dir = Path(os.environ["VALIDATION_DATA_DIR"])
 corpus_dir = Path(os.environ["HOTPOTQA_CORPUS_DATA_ROOT"])
@@ -196,11 +196,11 @@ else:
     selected_val_rows = min(val_max_samples, val_rows)
 
 code_rel = [
-    "recipes/hotpotqa/hotpotqa_agent_flow.py",
+    "recipes/hotpotqa_a9/agent_flow.py",
     "recipes/hotpotqa/final_answer_protocol.py",
-    "recipes/hotpotqa/reward_fn.py",
-    "recipes/hotpotqa/prompts.py",
-    "recipes/hotpotqa/base.yaml",
+    "recipes/hotpotqa_a9/reward_fn.py",
+    "recipes/hotpotqa_a9/prompts.py",
+    "recipes/hotpotqa_a9/base.yaml",
     "recipes/hotpotqa/evidence.py",
     "recipes/hotpotqa/env/search_tool.py",
     "agent_r1/trainer/streaming_agent_validation.py",
@@ -215,7 +215,7 @@ cuda_devices = [
 ]
 
 manifest = {
-    "contract_version": "hotpotqa-formal-a0-raw-final-v3",
+    "contract_version": "hotpotqa-paper-a0-certificate-v4",
     "run_id": os.environ["RUN_ID"],
     "status": "prepared",
     "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -352,7 +352,7 @@ PY
     actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.multi_turn.max_parallel_calls=1 \
     actor_rollout_ref.rollout.agent.agent_flow_config_path="$AGENT_CONFIG" \
-    actor_rollout_ref.rollout.agent.default_agent_flow=hotpotqa_agent \
+    actor_rollout_ref.rollout.agent.default_agent_flow=hotpotqa_certificate_agent \
     actor_rollout_ref.rollout.agent.num_workers="$AGENT_WORKERS" \
     actor_rollout_ref.rollout.val_kwargs.n="$VAL_N" \
     actor_rollout_ref.rollout.val_kwargs.do_sample="$VAL_DO_SAMPLE" \
