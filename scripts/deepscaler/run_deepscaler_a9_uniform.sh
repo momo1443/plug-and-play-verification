@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Paper single-turn DeepScaleR GRPO with pluggable process verification.
-# For the multi-turn 4096/2048 ToolEnv profile use run_deepscaler_tool_a9.sh.
-# Paper allocation: 2048/4096 (4B), 2048/5120 (9B).
+# DeepScaleR GRPO with bounded reasoning turns and retrospective verification.
+# DEEPSCALER_MAX_STEPS defaults to 5; set 1 for the previous single-turn protocol.
+# Initial input: 2048 tokens; total generated tokens: 4096 (4B) / 5120 (9B).
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
 #   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
@@ -12,7 +12,7 @@ set -euo pipefail
 # Process reward: average verified-equation fractions over equation-bearing
 # reasoning steps; the process reward is zero when no equations are extracted.
 #
-# 6-GPU configuration with Qwen3.5-4B:
+# 8-GPU configuration with Qwen3.5-4B:
 #   - vllm_gpu_memory_utilization=0.25
 #   - max_model_len=8192
 #   - max_num_seqs=20
@@ -27,7 +27,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,4,5,6,7}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
 export VLLM_USE_V1=1
 export TOKENIZERS_PARALLELISM=false
@@ -39,6 +39,11 @@ agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
 agent_r1_optimizer_overrides "$HOTPOTQA_MODEL_PATH"
 agent_r1_paper_profile deepscaler "$HOTPOTQA_MODEL_PATH"
 export DEEPSCALER_REWARD_MODE="${DEEPSCALER_REWARD_MODE:-uniform_equation_process}"
+export DEEPSCALER_MAX_STEPS="${DEEPSCALER_MAX_STEPS:-$PAPER_MAX_STEPS}"
+if ! [[ "$DEEPSCALER_MAX_STEPS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "DEEPSCALER_MAX_STEPS must be a positive integer" >&2
+    exit 2
+fi
 
 # ── A9 Schedule Config ───────────────────────────────────────────
 export DEEPSCALER_EM_WARMUP_STEPS="${DEEPSCALER_EM_WARMUP_STEPS:-50}"
@@ -49,7 +54,7 @@ VAL_PATH="$PROJECT_DIR/data/corpus/deepscaler/validation.parquet"
 
 # Training config
 TRAIN_MAX_SAMPLES="${DEEPSCALER_TRAIN_MAX_SAMPLES:-${HOTPOTQA_TRAIN_MAX_SAMPLES:-$PAPER_TRAIN_SAMPLES}}"
-TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-20}"
+TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
 ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
 
 TOTAL_TRAINING_STEPS="${DEEPSCALER_TOTAL_TRAINING_STEPS:-${HOTPOTQA_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}}"
@@ -75,9 +80,25 @@ KL_IN_REWARD=false
 
 # Sequence length config — aligned with DeepMath experiment
 MAX_PROMPT_LENGTH=2048
-MAX_RESPONSE_LENGTH=$PAPER_RESPONSE_LENGTH
-MAX_MODEL_LENGTH=8192
-MAX_NUM_BATCHED_TOKENS=8192
+MAX_RESPONSE_LENGTH="${DEEPSCALER_MAX_RESPONSE_LENGTH:-$PAPER_RESPONSE_LENGTH}"
+if ! [[ "$MAX_RESPONSE_LENGTH" =~ ^[1-9][0-9]*$ ]]; then
+    echo "DEEPSCALER_MAX_RESPONSE_LENGTH must be a positive integer" >&2
+    exit 2
+fi
+DEFAULT_MODEL_LENGTH=$((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH + 1024))
+(( DEFAULT_MODEL_LENGTH >= 8192 )) || DEFAULT_MODEL_LENGTH=8192
+MAX_MODEL_LENGTH="${DEEPSCALER_MAX_MODEL_LENGTH:-$DEFAULT_MODEL_LENGTH}"
+if ! [[ "$MAX_MODEL_LENGTH" =~ ^[1-9][0-9]*$ ]] || (( MAX_MODEL_LENGTH <= MAX_PROMPT_LENGTH )); then
+    echo "DEEPSCALER_MAX_MODEL_LENGTH must exceed the initial prompt limit" >&2
+    exit 2
+fi
+ROLLOUT_PROMPT_LENGTH=$MAX_PROMPT_LENGTH
+MULTI_TURN_ENABLED=False
+if (( DEEPSCALER_MAX_STEPS > 1 )); then
+    ROLLOUT_PROMPT_LENGTH=$MAX_MODEL_LENGTH
+    MULTI_TURN_ENABLED=True
+fi
+MAX_NUM_BATCHED_TOKENS=$MAX_MODEL_LENGTH
 MAX_NUM_SEQS=20
 VLLM_GPU_MEMORY_UTILIZATION=0.25
 VLLM_ENABLE_SLEEP_MODE=false
@@ -132,7 +153,7 @@ if [[ -z "${RAY_TMPDIR:-}" ]]; then
 fi
 
 # Run ID and output
-RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_a9uniform_grpo_stepcausal_main30k_n4_300step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_${DEEPSCALER_REWARD_MODE}_${AGENT_R1_OPTIMIZER:-grpo}_turns${DEEPSCALER_MAX_STEPS}_main10k_n${ROLLOUT_N}_${TOTAL_TRAINING_STEPS}step_$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 
 mkdir -p "$OUTPUT_DIR"
@@ -156,6 +177,8 @@ cd "$PROJECT_DIR"
     --rollout-n "$ROLLOUT_N" \
     --max-prompt-length "$MAX_PROMPT_LENGTH" \
     --max-response-length "$MAX_RESPONSE_LENGTH" \
+    --max-agent-steps "$DEEPSCALER_MAX_STEPS" \
+    --rollout-prompt-length "$ROLLOUT_PROMPT_LENGTH" \
     --total-training-steps "$TOTAL_TRAINING_STEPS" \
     --em-warmup-steps "$DEEPSCALER_EM_WARMUP_STEPS" \
     --save-freq "$SAVE_FREQ" \
@@ -168,7 +191,7 @@ echo "Val:   $VAL_PATH ($VAL_MAX_SAMPLES samples)"
 echo "GPUs:  $CUDA_VISIBLE_DEVICES ($NUM_GPUS)"
 echo "Steps: $TOTAL_TRAINING_STEPS"
 echo "Warmup: $DEEPSCALER_EM_WARMUP_STEPS (EM-only steps)"
-echo "Runtime profile: deepscaler_paper; prompt=$MAX_PROMPT_LENGTH; completion=$MAX_RESPONSE_LENGTH"
+echo "Runtime profile: deepscaler_paper; initial_prompt=$MAX_PROMPT_LENGTH; history=$ROLLOUT_PROMPT_LENGTH; total_completion=$MAX_RESPONSE_LENGTH; max_turns=$DEEPSCALER_MAX_STEPS"
 echo "Output: $OUTPUT_DIR"
 echo "=================================="
 
@@ -203,7 +226,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     actor_rollout_ref.actor.ppo_mini_batch_size="$TRAIN_BATCH_SIZE" \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$GRPO_MICRO_BATCH_SIZE" \
     actor_rollout_ref.actor.use_dynamic_bsz=true \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu="$((ROLLOUT_PROMPT_LENGTH + MAX_RESPONSE_LENGTH))" \
     actor_rollout_ref.actor.use_torch_compile=False \
     actor_rollout_ref.actor.use_kl_loss="$REFERENCE_KL_ENABLED" \
     actor_rollout_ref.actor.kl_loss_coef="$REFERENCE_KL_LOSS_COEF" \
@@ -217,7 +240,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     actor_rollout_ref.actor.checkpoint.load_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.rollout.prompt_length="$MAX_PROMPT_LENGTH" \
+    actor_rollout_ref.rollout.prompt_length="$ROLLOUT_PROMPT_LENGTH" \
     actor_rollout_ref.rollout.response_length="$MAX_RESPONSE_LENGTH" \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.n="$ROLLOUT_N" \
@@ -236,7 +259,8 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     +actor_rollout_ref.rollout.engine_kwargs.vllm.language_model_only=True \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.seed="$EXPERIMENT_SEED" \
-    actor_rollout_ref.rollout.multi_turn.enable=False \
+    actor_rollout_ref.rollout.multi_turn.enable="$MULTI_TURN_ENABLED" \
+    actor_rollout_ref.rollout.agent.max_steps="$DEEPSCALER_MAX_STEPS" \
     actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/deepscaler/paper.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow=deepscaler_paper_agent \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
