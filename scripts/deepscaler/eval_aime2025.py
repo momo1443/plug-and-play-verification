@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Standalone AIME 2025 evaluation with pure vLLM inference — no training framework needed.
 
-Final-answer extraction is independent of the reference. Only the selected final
-answer is scored; intermediate numbers and superseded answers cannot earn credit.
+Runs the same bounded reasoning-continuation protocol as math training. Only
+the submitted final response is scored; the reference is never model feedback.
 
 Usage:
     CUDA_VISIBLE_DEVICES=2 python eval_aime2025.py
@@ -21,11 +21,75 @@ from agent_r1.evaluation.answers import AIME_EXTRACTION_VERSION, final_answer_re
 from agent_r1.evaluation.consistency import consistency_record
 from agent_r1.evaluation.summarize import summarize
 from recipes.deepscaler.trajectory_reward import verify_process
+from recipes.deepscaler.prompts import build_math_messages, math_continuation_message
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *,
+                           max_steps=5, max_tokens=4096, max_model_length=8192,
+                           max_prompt_length=2048):
+    """Batch active trajectories; share the training prompt and total token budget."""
+    if max_steps < 1 or max_tokens < 1:
+        raise ValueError("Math turn count and total token budget must be positive")
+    turn_token_limit = (max_tokens + max_steps - 1) // max_steps
+    states = []
+    for question in questions:
+        initial_ids = tokenizer.apply_chat_template(question, tokenize=True,
+            add_generation_prompt=True, enable_thinking=False)
+        if len(initial_ids) > max_prompt_length:
+            raise ValueError("Math evaluation prompt exceeds the configured input limit")
+        states.append({"messages": build_math_messages(question, max_steps), "responses": [],
+                       "reasoning_segments": [], "final_response": None, "response_tokens": 0,
+                       "termination_reason": "max_steps"})
+    active = list(range(len(states)))
+    for turn in range(1, max_steps + 1):
+        groups = {}
+        for index in active:
+            state = states[index]
+            prompt = tokenizer.apply_chat_template(state["messages"], tokenize=False,
+                add_generation_prompt=True, enable_thinking=False)
+            prompt_ids = tokenizer.apply_chat_template(state["messages"], tokenize=True,
+                add_generation_prompt=True, enable_thinking=False)
+            remaining = max_tokens - state["response_tokens"]
+            limit = min(remaining, turn_token_limit, max_model_length - len(prompt_ids))
+            if limit <= 0:
+                state["termination_reason"] = "token_budget" if remaining <= 0 else "context_limit"
+                continue
+            groups.setdefault(limit, []).append((index, prompt))
+        next_active = []
+        for limit, requests in groups.items():
+            params = sampling_params_factory(temperature=0, top_p=1.0, max_tokens=limit,
+                                            stop=["<|im_end|>"])
+            outputs = llm.generate([prompt for _, prompt in requests], params)
+            if len(outputs) != len(requests):
+                raise RuntimeError("Generation count differs from the evaluation denominator")
+            for (index, _), output in zip(requests, outputs):
+                state = states[index]
+                candidate = output.outputs[0]
+                ids = list(candidate.token_ids[:limit])
+                if not ids:
+                    state["termination_reason"] = "empty_generation"
+                    continue
+                state["response_tokens"] += len(ids)
+                response = tokenizer.decode(ids, skip_special_tokens=True)
+                final = final_answer_record(response)
+                state["responses"].append(response)
+                state["reasoning_segments"].append((turn, str(final["reasoning"]) if final else response))
+                if final is not None:
+                    state["final_response"] = response
+                    state["termination_reason"] = "final_answer"
+                    continue
+                state["messages"].append({"role": "assistant", "content": response})
+                state["messages"].append(math_continuation_message(final_turn=turn + 1 == max_steps))
+                next_active.append(index)
+        active = next_active
+        if not active:
+            break
+    return states
+
 
 def main():
     from vllm import LLM, SamplingParams
@@ -44,7 +108,11 @@ def main():
     max_samples = int(os.environ.get("MAX_SAMPLES", "-1"))  # -1 = all
     tensor_parallel_size = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
     scale = os.environ.get("AGENT_R1_MODEL_SCALE", "9b" if Path(model_path).name == "Qwen3.5-9B" else "4b")
-    max_tokens = int(os.environ.get("MAX_RESPONSE_LENGTH", "5120" if scale == "9b" else "4096"))
+    max_tokens = int(os.environ.get("DEEPSCALER_MAX_RESPONSE_LENGTH",
+        os.environ.get("MAX_RESPONSE_LENGTH", "5120" if scale == "9b" else "4096")))
+    max_steps = int(os.environ.get("DEEPSCALER_MAX_STEPS", "5"))
+    max_model_length = int(os.environ.get("DEEPSCALER_MAX_MODEL_LENGTH",
+        str(max(8192, 2048 + max_tokens + 1024))))
 
     # Load dataset from processed parquet
     import pandas as pd
@@ -72,52 +140,31 @@ def main():
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    prompts = []
-    for chat_msgs in questions:
-        text = tokenizer.apply_chat_template(
-            chat_msgs,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        prompts.append(text)
-
-    # Initialize vLLM
     print("Loading model with vLLM...")
     llm = LLM(
         model=model_path,
         tensor_parallel_size=tensor_parallel_size,
-        max_model_len=8192,
+        max_model_len=max_model_length,
         gpu_memory_utilization=0.5,
         enforce_eager=True,
         dtype="bfloat16",
         trust_remote_code=True,
     )
 
-    # Greedy decoding for deterministic A0 evaluation
-    sampling_params = SamplingParams(
-        temperature=0,
-        top_p=1.0,
-        max_tokens=max_tokens,
-        stop=["<|im_end|>"],
-    )
-
-    # Generate
-    print("Generating responses...")
+    print(f"Generating up to {max_steps} turns with {max_tokens} total response tokens...")
     t0 = time.time()
-    outputs = llm.generate(prompts, sampling_params)
-    if len(outputs) != len(questions):
-        raise RuntimeError("Generation count differs from the evaluation denominator")
+    trajectories = generate_math_rollouts(llm, tokenizer, SamplingParams, questions,
+        max_steps=max_steps, max_tokens=max_tokens, max_model_length=max_model_length)
     elapsed = time.time() - t0
-    print(f"Generation done in {elapsed:.1f}s ({len(questions)/elapsed:.1f} samples/s)")
+    print(f"Generation done in {elapsed:.1f}s")
 
     # Evaluate
     correct = 0
     total = len(questions)
     results = []
 
-    for i, (output, gold, source) in enumerate(zip(outputs, gold_answers, sources)):
-        response = output.outputs[0].text.strip()
+    for i, (trajectory, gold, source) in enumerate(zip(trajectories, gold_answers, sources)):
+        response = trajectory["final_response"] or ""
         gold_norm = str(gold).strip()
 
         scored = score_aime(response, gold)
@@ -125,7 +172,7 @@ def main():
         correct += int(is_correct)
 
         final = final_answer_record(response)
-        verification = verify_process([(1, str(final["reasoning"]) if final else response)])
+        verification = verify_process(trajectory["reasoning_segments"])
         results.append({
             **consistency_record(verification, float(is_correct), eligible=final is not None),
             "index": i,
@@ -135,7 +182,11 @@ def main():
             "predicted_answer": scored["predicted_answer"],
             "match_method": scored["match_method"],
             "is_correct": is_correct,
-            "response": response,
+            "response": "\n\n".join(trajectory["responses"]),
+            "final_response": trajectory["final_response"],
+            "policy_step_count": len(trajectory["responses"]),
+            "generated_response_tokens": trajectory["response_tokens"],
+            "termination_reason": trajectory["termination_reason"],
         })
 
     accuracy = correct / total * 100 if total > 0 else 0
@@ -156,6 +207,11 @@ def main():
     summary = {
         "verification_metrics": summarize(results),
         "max_response_length": max_tokens,
+        "response_budget_scope": "whole_trajectory",
+        "max_agent_steps": max_steps,
+        "max_model_length": max_model_length,
+        "interaction": "reasoning_continuation_without_correctness_feedback",
+        "verification_timing": "after_rollout",
         "model": model_name,
         "model_path": model_path,
         "dataset": "AIME2025",

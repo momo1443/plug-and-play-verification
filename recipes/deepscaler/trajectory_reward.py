@@ -1,4 +1,4 @@
-"""Trajectory-level reward contracts for paired DeepScaleR ToolEnv arms."""
+"""Trajectory-level reward contracts shared by DeepScaleR math flows."""
 
 from __future__ import annotations
 
@@ -56,9 +56,20 @@ class TrajectoryReward:
 
 
 def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> VerificationResult:
-    """DeepScaleR plugin: turn equation audits into normalized step credits."""
+    """Verify the full history and normalize across equation-bearing policy turns.
+
+    Failed checks participate in the denominator. Turns without extractable
+    equations receive zero credit and are excluded. Every check retains its
+    source policy step; a later correction never replaces an earlier failure.
+    """
     records: list[dict[str, Any]] = []
+    previous_turn = 0
     for turn, text in reasoning_segments:
+        if isinstance(turn, bool) or not isinstance(turn, int) or turn <= previous_turn:
+            raise ValueError("Math source steps must be positive, unique and increasing")
+        if not isinstance(text, str):
+            raise ValueError("Math reasoning text must be recorded for every supplied step")
+        previous_turn = turn
         audit = _process_reward_audit(text)
         record = {
             "turn": turn,
@@ -67,27 +78,43 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
             "equation_count": int(audit["equation_count"]),
             "verified_equation_count": int(audit["verified_equation_count"]),
             "process_reward": float(audit["process_reward"]),
-            "steps": audit["steps"],
+            "steps": [
+                {**segment, "source_step": turn, "equation_checks": [
+                    {**check, "source_step": turn} for check in segment["equation_checks"]
+                ]}
+                for segment in audit["steps"]
+            ],
         }
         records.append(record)
-    graded = [record for record in records if record["graded_step_count"] > 0]
-    denominator = len(graded)
+    participating = [record for record in records if record["equation_count"] > 0]
+    denominator = len(participating)
+    for record in records:
+        participates = record["equation_count"] > 0
+        record.update({
+            "participates_in_process_reward": participates,
+            "normalizer": denominator,
+            "normalized_credit": float(record["process_reward"]) / denominator if participates else 0.0,
+        })
     credits = tuple(
         VerificationCredit(
             step_index=int(record["turn"]),
-            score=float(record["process_reward"]) / denominator,
+            score=record["normalized_credit"],
             audit=record,
         )
-        for record in graded
+        for record in participating
     )
     return VerificationResult(
         credits=credits,
         audit={
             "verifier": "deepscaler_numeric_equations",
+            "normalization": "mean_over_equation_bearing_policy_steps_including_failures",
+            "normalizer": denominator,
+            "participating_step_indices": [int(record["turn"]) for record in participating],
+            "empty_step_policy": "zero_credit_excluded_from_denominator",
             "applicable_checks": [int(check["valid"]) for record in records for step in record["steps"] for check in step["equation_checks"]],
             "process_segment_audits": records,
             "credits_by_step": {
-                int(record["turn"]): record for record in graded
+                int(record["turn"]): record for record in participating
             },
         },
     )
@@ -134,7 +161,7 @@ def compute_tool_trajectory_reward(
     prompt_group_key: str | None = None,
     process_verification: VerificationResult | None = None,
 ) -> TrajectoryReward:
-    """Score one complete DeepScaleR ToolEnv trajectory.
+    """Score one complete DeepScaleR trajectory.
 
     A1 always uses strict terminal EM. A9 and the process-judge arm share an
     outcome-only warmup and prompt-group mixture weights. For A9, exclude tool

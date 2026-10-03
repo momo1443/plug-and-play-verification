@@ -37,7 +37,7 @@ agent_r1_model_overrides "$MODEL_PATH"
 agent_r1_optimizer_overrides "$MODEL_PATH"
 agent_r1_paper_profile vision_r1 "$MODEL_PATH"
 [[ -f "$MODEL_PATH/config.json" ]] || { echo "Missing model config: $MODEL_PATH/config.json" >&2; exit 2; }
-TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-8}"
+TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
 ROLLOUT_N="${VISION_R1_ROLLOUT_N:-4}"
 TOTAL_STEPS="${VISION_R1_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
 TOTAL_EPOCHS="${VISION_R1_TOTAL_EPOCHS:-1}"

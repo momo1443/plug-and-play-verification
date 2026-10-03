@@ -1,22 +1,22 @@
 # Paper implementation contract
 
-Target: `37799_Plug_and_Play_Verifier_f.pdf`, Sections 3–4 and Appendices B–C.
+Target: `2027_PnP_Verifier__arXiv_ (1).pdf`, Sections 3–4 and Appendices B–C. The user-requested multi-turn math protocol below extends the manuscript's single-turn setting; it does not establish new benchmark scores.
 
 - Verifiers return nonnegative, bounded, source-step credits. Reward composition and policy optimization do not interpret domain artifacts.
 - Outcome reward is placed at the last policy step. Process credits remain at their source steps. For the proposed verifier and judge arms, the first 50 updates use outcome only; subsequent updates share one reproducible uniform weight per prompt group. Validation uses outcome only.
 - Terminal eligibility requires a final submission in the domain protocol, regardless of whether that answer is correct or its certificate passes. An incomplete trajectory receives zero composed training reward.
 - GRPO uses undiscounted returns, prompt/step grouping, sample standard deviation, and the Appendix B singleton convention. Policy and KL losses use policy tokens only.
 - Within each domain, outcome-only, verifier, and frozen-judge arms share prompts, tools, final-answer extraction, generation limits, and model adaptation.
-- Formal runs select the first 10,000 rows of the prepared training split and use 500 updates, 4 rollouts/prompt, seed 42, learning rate 1e-6, and actor-loss KL coefficient 0.001. Selection size and actual sampled prompt count are recorded separately.
+- Formal runs select the first 10,000 rows of the prepared training split and use 500 updates, 4 rollouts/prompt, seed 42, learning rate 1e-6, and actor-loss KL coefficient 0.001. Per the updated hardware configuration, 4B uses prompt batch 20 and 9B uses batch 8. At 500 updates these sample 10,000 and 4,000 prompts respectively, with four rollouts each; the selected training prefix remains 10,000 rows. Manifests record selection size and actual sampled prompt count separately. Appendix C must reflect the 9B batch revision.
 
 | Domain | 4B batch | 9B batch | Prompt tokens | Completion tokens | Policy steps |
 |---|---:|---:|---:|---:|---:|
-| DeepScaleR | 20 | 20 | 2048 | 4096 (4B), 5120 (9B) | 1 |
+| DeepScaleR | 20 | 8 | 2048 initial; 8192 history | 4096 (4B), 5120 (9B), total per trajectory | 5 |
 | HotpotQA | 20 | 8 | 8192 | 1024 | 4 |
-| TACO | 20 | 20 | 8192 | 2048 | 5 |
-| Vision-R1 | 8 | 8 | 8192 | 2048 | 3 |
+| TACO | 20 | 8 | 8192 | 2048 | 5 |
+| Vision-R1 | 20 | 8 | 8192 | 2048 | 3 |
 
-9B uses LoRA rank/alpha 64 and the seven projection modules listed in Appendix C; 4B uses full fine-tuning. DeepScaleR's single policy generation is the T=1 instance of the same interface. Its answer-checking ToolEnv is an optional extension, not the formal paper protocol.
+9B uses LoRA rank/alpha 64 and the seven projection modules listed in Appendix C; 4B uses full fine-tuning. DeepScaleR now permits up to five reasoning generations by default (`DEEPSCALER_MAX_STEPS`), with a shared total token budget and per-turn cap `ceil(total / max_steps)`. A reference-independent extracted final answer ends the trajectory; incomplete trajectories retain their steps/masks but receive zero composed reward. Equation/judge verification occurs retrospectively and credits remain on their source turns. No correctness or verification feedback enters model context. Set `DEEPSCALER_MAX_STEPS=1` for the original single-turn setting. The mathematics paragraph in Appendix B and the corresponding Appendix C protocol must reflect this extension before associating results with it. The answer-checking ToolEnv remains a separate optional protocol.
 
 Evaluation extracts one final answer independently of the reference, then scores it. Equation (9) uses all applicable checks, including failures and missing required evidence, under a fixed protocol across policies. Audit metrics do not affect optimizer rewards. Revision and retesting are recorded separately from strict consistency.
 

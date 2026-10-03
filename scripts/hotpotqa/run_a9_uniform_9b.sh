@@ -21,7 +21,7 @@ export HOTPOTQA_VLLM_ENABLE_SLEEP_MODE=false
 export HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false
 export HOTPOTQA_SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
 
-# 9B memory window: 4 rollouts per prompt, smaller train/validation batches,
+# 9B memory window: batch of 8, 4 rollouts per prompt, smaller validation batches,
 # bounded vLLM concurrency, and actor/optimizer offload.
 export HOTPOTQA_RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
 export HOTPOTQA_TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-8}"

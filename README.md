@@ -26,16 +26,16 @@ The proposed process verifiers use deterministic checks rather than an LLM judge
 
 ## Method
 
-![Figure 2: Overview of plug-and-play process verification.](assets/images/method-overview.png)
+![Figure 2: The plug-and-play process verification.](assets/images/method-overview.png)
 
-**Figure 2: Overview of plug-and-play process verification.** (a) Identical outcome rewards can mask differences in intermediate verification results. (b) Local checks are decoupled from policy reasoning and provide step-attributed credits through a common interface. These credits are combined with outcome rewards for GRPO or PPO training. Differences in process returns can provide a last-mile signal within outcome-tied GRPO groups.
+**Figure 2: The plug-and-play process verification.** (a) Identical outcome rewards can mask differences in intermediate verification results. (b) Local checks are decoupled from policy reasoning and provide step-attributed credits through a common interface. These credits are combined with outcome rewards for GRPO or PPO training. Differences in process returns can provide a last-mile signal within outcome-tied GRPO groups.
 
 ### Unified verification contract
 
-A domain adapter returns source-step indices and nonnegative credits:
+Local checks evaluate explicit artifacts against specified task conditions and recorded evidence. A domain adapter extracts these inputs and returns source-step indices and normalized, nonnegative credits:
 
 ```math
-\Phi_d(x,\tau)=\{(s_\ell,q_\ell)\}_{\ell=1}^{n},
+\Phi_d(x,\tau)=\bigl[(s_\ell,q_\ell)\bigr]_{\ell=1}^{n},
 \qquad q_\ell\geq 0,\quad \sum_{\ell=1}^{n}q_\ell\leq 1.
 ```
 
@@ -58,7 +58,7 @@ result = VerificationResult(
 
 ### Decoupled reward composition
 
-Let `E` be the final outcome reward, and let `p_t` sum the process credits assigned to interaction step `t`. For a trajectory with a valid final submission:
+Let `E` be the final outcome reward, and let `p_t` sum the process credits assigned to interaction step `t`. For a terminal-eligible trajectory:
 
 ```math
 r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
@@ -68,12 +68,18 @@ r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
 - **Updates 1-50:** use outcome-only reward, `w = 1`.
 - **After warmup:** sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by that group's rollouts.
 - **Credit placement:** outcome reward goes to the final policy step; process credits remain at their source steps, even when checked after rollout.
-- **Final-submission eligibility:** missing final submissions receive zero composed reward. A submitted answer can be incorrect and still receive valid process credit.
+- **Terminal eligibility:** trajectories that fail the domain submission conditions receive zero composed task reward. Eligibility is separate from final-answer correctness and certificate validity; an eligible but incorrect answer can still receive process credit.
 - **Validation:** uses outcome-only rewards, with verification audits recorded separately.
 
 GRPO computes undiscounted reward-to-go and normalizes returns within the same prompt and step index. Each step's advantage applies to its generated policy tokens; prompt and environment-observation tokens are masked. PPO can consume the same composed rewards through its critic and GAE path.
 
 The interface and composer live in [`agent_r1/verifier/reward.py`](agent_r1/verifier/reward.py). See the [implementation contract](docs/paper-contract.md) for normalization, eligibility, and evaluation details.
+
+### Last-mile refinement
+
+In terminal-eligible GRPO groups with at least two rollouts and identical outcome rewards, outcome-derived relative advantages vanish. With a shared mixing coefficient `w < 1`, differences in remaining process returns produce mixed-reward advantages that do not all vanish. This **last-mile signal** distinguishes both failed trajectories with different verified intermediate work and successful trajectories whose checked artifacts differ in validity.
+
+**Verification-based self-consistency** requires every applicable check within one trajectory to pass. Verification conditions also create incentives for checking, retesting, and revision. Retrospective credits provide training supervision; evidence of self-reflection must come from observed checking and revision behavior. The tied-outcome argument concerns GRPO normalization, while PPO can reuse the same credit interface.
 
 ### Domain verifiers
 
@@ -84,7 +90,7 @@ The interface and composer live in [`agent_r1/verifier/reward.py`](agent_r1/veri
 | Code | TACO | LiveCodeBench | Code-version lineage, developer-test evidence, and execution replay |
 | Vision | Vision-R1-RL | MATH-Vision | Image-crop replay and string-level answer/claim coupling |
 
-Training is separate for each domain. Domain-specific parsers and checks remain inside the recipes; downstream training uses the shared credit contract.
+Training is separate for each domain. Domain-specific parsers and checks remain inside the recipes; downstream training uses the shared credit contract. Mathematical checks are averaged within internal segments and across equation-bearing policy steps, including steps whose checks all fail; each normalized credit retains its source step. See the [multi-turn math protocol](recipes/deepscaler/README.md) for continuation, termination, and retrospective verification.
 
 ### A concrete verification example
 
@@ -225,18 +231,18 @@ bash scripts/hotpotqa/run_a3.sh  # fixed 0.5 outcome/process mixture
 
 The [launcher index](scripts/README.md) lists evaluation entrypoints, 9B wrappers, and optional extensions. DeepScaleR ToolEnv and HotpotQA A8 have separate protocols under `scripts/extensions/`.
 
-### Paper training profiles
+### Current training profiles
 
-All paper profiles select a 10,000-row training prefix and use 500 updates, four rollouts per prompt, actor learning rate `1e-6`, actor-loss KL coefficient `0.001`, and seed `42`. Qwen3.5-4B uses full fine-tuning; Qwen3.5-9B uses LoRA with rank and alpha `64`.
+The launchers select a 10,000-row training prefix and use 500 updates, four rollouts per prompt, actor learning rate `1e-6`, actor-loss KL coefficient `0.001`, and seed `42`. Prompt batch defaults to 20 for 4B and 8 for 9B to fit the intended eight-A40 setup. Qwen3.5-4B uses full fine-tuning; Qwen3.5-9B uses LoRA with rank and alpha `64`.
 
 | Domain | Prompt batch (4B / 9B) | Max prompt tokens | Max completion tokens (4B / 9B) | Max policy steps |
 | --- | ---: | ---: | ---: | ---: |
-| DeepScaleR | 20 / 20 | 2048 | 4096 / 5120 | 1 |
+| DeepScaleR | 20 / 8 | 2048 initial; 8192 history | 4096 / 5120 total per trajectory | 5 |
 | HotpotQA | 20 / 8 | 8192 | 1024 / 1024 | 4 |
-| TACO | 20 / 20 | 8192 | 2048 / 2048 | 5 |
-| Vision-R1 | 8 / 8 | 8192 | 2048 / 2048 | 3 |
+| TACO | 20 / 8 | 8192 | 2048 / 2048 | 5 |
+| Vision-R1 | 20 / 8 | 8192 | 2048 / 2048 | 3 |
 
-Completion limits apply per policy generation. A selected prefix is not the same as the number of sampled prompts: for example, batch 8 over 500 updates samples 4,000 prompts. Run manifests record both quantities. Model adaptation and overrides are documented in [`scripts/common/README.md`](scripts/common/README.md).
+DeepScaleR defaults to at most five reasoning turns with one total completion budget, split into per-turn caps of 820 (4B) or 1024 (9B), clipped to the remaining total budget. Set `DEEPSCALER_MAX_STEPS=8` for more turns or `DEEPSCALER_MAX_STEPS=1` for the manuscript's original single-turn setting. Other domains retain per-generation completion limits. Math continuation provides no answer-check feedback; submission ends the trajectory regardless of correctness. The supplied manuscript reports single-turn math results, which require reevaluation for the new protocol. A selected prefix and the sampled prompt count are recorded separately in run manifests. Model adaptation and overrides are documented in [`scripts/common/README.md`](scripts/common/README.md).
 
 ## Evaluation
 
@@ -254,7 +260,9 @@ python scripts/deepscaler/eval_aime2025.py
 
 For a renamed 9B checkpoint, also set `AGENT_R1_MODEL_SCALE=9b` to select the 9B completion budget. The [evaluation index](scripts/README.md#evaluation) points to the other benchmark utilities.
 
-Verification audits provide two additional quantities from manuscript Eq. (9): `C_d` indicates that a nonempty set of applicable checks all pass; `M_d` averages `E_d * C_d`. Missing required evidence and earlier failed checks remain part of the audit. These quantities are separate from the graded process reward and from revision/retesting statistics.
+Manuscript Eq. (8) defines `C_d`: a nonempty set of applicable checks must all pass within one trajectory. Missing required evidence and earlier failed checks remain part of the audit, including when a later revision succeeds.
+
+The current summarizer applies an additional terminal-eligibility gate to its consistency statistics and also reports `M_d = mean(E_d * C_d)` as an implementation diagnostic. `M_d` is not a metric defined in the updated Method. These diagnostics are separate from graded process rewards and observed revision/retesting statistics.
 
 ```bash
 python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json
@@ -298,7 +306,8 @@ The focused CPU suite checks reward contracts, answer extraction, launcher argum
 ```bash
 python -m pytest -q \
   tests/test_paper_alignment.py tests/test_paper_launcher_config.py \
-  tests/test_deepscaler_reward.py tests/test_verifier_reward.py \
+  tests/test_deepscaler_reward.py tests/test_math_continuation.py \
+  tests/test_verifier_reward.py \
   tests/test_hotpotqa_a9.py tests/test_taco_a9.py \
   tests/test_cross_domain_llm_judge.py tests/test_process_judge_flows.py
 ```

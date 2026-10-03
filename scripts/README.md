@@ -24,6 +24,11 @@ bash scripts/hotpotqa/run_a2.sh
 bash scripts/hotpotqa/run_a3.sh
 ```
 
+Math defaults to at most five reasoning turns, shared by A1, A9, Judge, PPO
+and AIME evaluation. Use `DEEPSCALER_MAX_STEPS=8` for more turns or `=1` for
+the manuscript's original single-turn setting. The total generated-token budget
+remains 4096 (4B) or 5120 (9B); no correctness feedback enters this flow.
+
 HotpotQA and TACO also provide `run_a9_uniform_9b.sh` wrappers. Domain launchers
 share model adaptation from `common/model_training.sh`. `run_a7.sh` is the
 retained weak-execution control; `run_a9.sh` is an alternative hardware wrapper

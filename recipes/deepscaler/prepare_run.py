@@ -26,6 +26,8 @@ CODE_PATHS = (
     "recipes/deepscaler/agent_flow.py",
     "recipes/deepscaler/trajectory_reward.py",
     "recipes/deepscaler/paper.yaml",
+    "recipes/deepscaler/prompts.py",
+    "recipes/llm_judge/scoring.py",
     "agent_r1/evaluation/answers.py",
     "agent_r1/evaluation/consistency.py",
 )
@@ -60,6 +62,11 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    if args.max_agent_steps < 1 or args.max_response_length < 1:
+        raise ValueError("Math turn count and total token budget must be positive")
+    rollout_prompt_length = args.rollout_prompt_length or (
+        args.vllm_max_model_len if args.max_agent_steps > 1 else args.max_prompt_length
+    )
     project_dir = Path(args.project_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     model_path = Path(args.model_path).resolve()
@@ -84,6 +91,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         resume_global_step = int(resume_path.name[len(prefix) :])
 
     code_hashes = {relative: _sha256(project_dir / relative) for relative in CODE_PATHS}
+    reward_mode = os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process")
     model_identity_paths = (
         model_path / "config.json",
         model_path / "model.safetensors.index.json",
@@ -93,7 +101,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "arm": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
         "runtime_profile": "deepscaler_paper",
-        "contract_version": "deepscaler-paper-shared-contract-v5",
+        "contract_version": "deepscaler-paper-shared-contract-v6",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": args.status,
         "output_dir": str(output_dir),
@@ -129,6 +137,12 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "rollout_n": args.rollout_n,
             "max_prompt_length": args.max_prompt_length,
             "max_response_length": args.max_response_length,
+            "max_agent_steps": args.max_agent_steps,
+            "rollout_prompt_length": rollout_prompt_length,
+            "response_budget_scope": "whole_trajectory",
+            "max_tokens_per_turn": (args.max_response_length + args.max_agent_steps - 1) // args.max_agent_steps,
+            "interaction": "reasoning_continuation_without_correctness_feedback",
+            "verification_timing": "after_rollout",
             "total_training_steps": args.total_training_steps,
             "resume_global_step": resume_global_step,
             "save_freq": args.save_freq,
@@ -149,11 +163,21 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "formula": "terminal_em" if os.environ.get("DEEPSCALER_REWARD_MODE") == "terminal_only" else "w * terminal_em + (1 - w) * process_reward",
             },
             "process_reward": {
+                "source": "frozen_causal_process_judge",
+                "step_score": "raw intermediate-step judge score / configured max_agent_steps",
+                "trajectory_score": "sum of normalized source-step judge credits",
+                "normalizer": args.max_agent_steps,
+                "optimizer_placement": "source_policy_step_backfill",
+                "token_span_credit": False,
+            } if reward_mode == "llm_judge" else {
+                "source": "numeric_equation_verifier" if reward_mode != "terminal_only" else "disabled_for_training",
                 "equation_score": "1 if nontrivial numeric equality verifies, else 0",
-                "step_score": "verified_equations / extracted_equations; 0 when none extracted",
-                "trajectory_score": "mean(step_score over equation-bearing reasoning steps); 0 when none",
+                "step_score": "mean(verified_equations / extracted_equations over equation-bearing internal segments)",
+                "trajectory_score": "mean(local turn score over equation-bearing policy steps, including failures); 0 when none",
+                "empty_step_policy": "zero_credit_excluded_from_denominator",
+                "correction_policy": "new checks get source-step credits; historical failures remain",
                 "unsupported_expressions": "fail_closed",
-                "optimizer_placement": "shared_composer_single_agent_step",
+                "optimizer_placement": "source_policy_step_backfill",
                 "token_span_credit": False,
             },
         },
@@ -179,6 +203,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-n", type=int, required=True)
     parser.add_argument("--max-prompt-length", type=int, default=2048)
     parser.add_argument("--max-response-length", type=int, default=4096)
+    parser.add_argument("--max-agent-steps", type=int, default=5)
+    parser.add_argument("--rollout-prompt-length", type=int)
     parser.add_argument("--total-training-steps", type=int, required=True)
     parser.add_argument("--em-warmup-steps", type=int, required=True)
     parser.add_argument("--save-freq", type=int, required=True)

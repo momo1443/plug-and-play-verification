@@ -5,8 +5,20 @@ experiment protocols. Keep their token allocations separate:
 
 | Entry point | Profile | Prompt tokens | Response tokens |
 | --- | --- | ---: | ---: |
-| `scripts/deepscaler/run_deepscaler_a9_uniform.sh` | `deepscaler_paper` | 2048 | 4096 (4B) / 5120 (9B) per completion |
+| `scripts/deepscaler/run_deepscaler_a9_uniform.sh` | `deepscaler_paper` | 2048 initial; 8192 history | 4096 (4B) / 5120 (9B) total per trajectory |
 | `scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` | `deepscaler_toolenv` | 4096 | 2048 per interaction step |
+
+The main math flow defaults to `DEEPSCALER_MAX_STEPS=5`; `1` restores the
+manuscript's original single-generation prompt, and larger positive integers
+allow more reasoning turns. It uses a per-turn cap of `ceil(total / max_steps)`
+and no answer-check feedback. Its total budget and context overrides are
+`DEEPSCALER_MAX_RESPONSE_LENGTH` and `DEEPSCALER_MAX_MODEL_LENGTH`; apply the
+same settings to training arms and AIME evaluation. Other domain profiles
+retain their original turn counts and per-generation budgets. All main profiles
+now default to prompt batch 20 for 4B and 8 for 9B, following the updated
+eight-A40 hardware configuration. The manuscript's 9B hyperparameter tables
+need this batch revision; 500 updates sample 4,000 prompts for 9B, while the
+selected training prefix remains 10,000 rows.
 
 ToolEnv A1 and A9 use the same shared launcher. Its length overrides are
 `DEEPSCALER_TOOL_MAX_PROMPT_LENGTH`, `DEEPSCALER_TOOL_MAX_RESPONSE_LENGTH`, and

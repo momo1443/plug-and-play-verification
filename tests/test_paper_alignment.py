@@ -159,12 +159,15 @@ def test_hotpot_missing_finish_zero_for_every_arm_and_validation_is_outcome_only
 
 def test_paper_math_actual_flow_shares_single_generation_and_excludes_final_from_judge():
     from recipes.llm_judge.scoring import question_from_raw_prompt
+    from recipes.deepscaler.prompts import build_math_messages, math_continuation_message
     module = load_source("recipes/deepscaler/agent_flow.py", final_answer_record=final_answer_record,
         verify_process=verify_math, compute_tool_trajectory_reward=compute_tool_trajectory_reward,
-        question_from_raw_prompt=question_from_raw_prompt)
+        question_from_raw_prompt=question_from_raw_prompt, build_math_messages=build_math_messages,
+        math_continuation_message=math_continuation_message)
     async def run(mode):
         flow = object.__new__(module.DeepScaleRPaperAgentFlow)
         flow.reward_mode = mode; flow.em_warmup_steps = 50; flow.response_length = 4096
+        flow.max_steps = 1; flow.prompt_length = flow.initial_prompt_length = 2048; flow.context_length = 8192
         flow.judge_server = FakeJudge()
         flow.tokenizer = flow.server_manager = FakeGeneration([r"2 + 3 = 5. Final answer is \boxed{5}."])
         result = await flow.run({}, raw_prompt=[{"role": "user", "content": "2+3?"}],
