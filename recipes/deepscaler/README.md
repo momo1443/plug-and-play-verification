@@ -6,8 +6,8 @@ prompt batch 20 (4B) or 8 (9B), four rollouts, and the common `VerificationResul
 The frozen-judge and PPO launchers use the same flow and generation limits.
 See [the implementation contract](../../docs/paper-contract.md).
 
-Math now defaults to at most five policy generations. The model receives a
-fixed instruction to continue or recheck its reasoning; it receives no hidden
+The mathematics results reported in the manuscript use at most five policy
+generations. The model receives a fixed instruction to continue or recheck its reasoning; it receives no hidden
 answer, correctness signal, or process-verifier feedback. A parseable final
 answer ends the trajectory even when incorrect. Process checks run after the
 trajectory ends, with credits backfilled to their reasoning turns and the
@@ -57,7 +57,7 @@ its recorded history.
 DEEPSCALER_MAX_STEPS=5 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
 # More turns, retaining the same total token budget.
 DEEPSCALER_MAX_STEPS=8 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
-# Original single-generation prompt and completion limit.
+# Optional single-generation setting.
 DEEPSCALER_MAX_STEPS=1 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
 ```
 
@@ -65,8 +65,8 @@ Optional budget/context overrides are `DEEPSCALER_MAX_RESPONSE_LENGTH` and
 `DEEPSCALER_MAX_MODEL_LENGTH`; use identical values in all comparison arms and
 in `scripts/deepscaler/eval_aime2025.py`. Run manifests record the effective
 turn cap, total/per-turn budgets, context length, and prompt code hashes.
-The supplied manuscript describes single-turn math; its description and
-reported math scores must be updated after evaluating this new protocol.
+The single-generation and eight-generation settings are optional alternatives
+to the five-generation protocol used for the reported mathematics results.
 
 ## Optional ToolEnv extension
 
