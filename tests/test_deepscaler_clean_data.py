@@ -20,3 +20,11 @@ def test_all_missing_or_invalid_rows_are_accounted_for():
     report = quality_decisions([None, {"problem": "", "answer": "3"}, {"problem": "Q", "answer": None}])
     assert report['source_rows'] == 3
     assert len(report['excluded']) == 3
+
+
+def test_unavailable_symbolic_parse_is_reported_without_aborting_data_audit():
+    from unittest.mock import patch
+    from recipes.deepscaler.clean_data import answer_parse_status
+    with patch('recipes.deepscaler.math_expressions._parsed_answer',
+               side_effect=RuntimeError('symbolic parsing failed')):
+        assert answer_parse_status('unreadable label')[1] == 'unsupported_answer_format'

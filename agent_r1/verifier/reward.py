@@ -144,6 +144,7 @@ class ComposedVerificationReward:
     schedule: UniformRewardSchedule
     terminal_gate_passed: bool
     verifier_audit: Mapping[str, Any]
+    process_requires_terminal_submission: bool = False
 
     def record(self) -> dict[str, Any]:
         return {
@@ -160,6 +161,7 @@ class ComposedVerificationReward:
             "weight_sampling": self.schedule.weight_sampling,
             "optimizer_weight_group_key": self.schedule.prompt_group_key,
             "terminal_gate_passed": self.terminal_gate_passed,
+            "process_requires_terminal_submission": self.process_requires_terminal_submission,
             "verification_audit": dict(self.verifier_audit),
         }
 
@@ -170,14 +172,20 @@ def compose_verification_reward(
     verification: VerificationResult,
     schedule: UniformRewardSchedule,
     terminal_gate_passed: bool = True,
+    process_requires_terminal_submission: bool = False,
 ) -> ComposedVerificationReward:
-    """Combine a bounded verifier result with the shared schedule."""
+    """Combine bounded credits, with separately configurable process gating.
+
+    Tasks may retain useful intermediate evidence without a final submission.
+    The terminal component still requires the terminal gate in either mode.
+    """
 
     if not 0.0 <= float(terminal_reward) <= 1.0:
         raise ValueError("Terminal reward must be in [0, 1]")
     gate = bool(terminal_gate_passed)
+    process_gate = gate or not process_requires_terminal_submission
     process_step_components = {
-        step_index: (schedule.process_weight * score if gate else 0.0)
+        step_index: (schedule.process_weight * score if process_gate else 0.0)
         for step_index, score in verification.components_by_step().items()
     }
     terminal_component = schedule.terminal_weight * float(terminal_reward) if gate else 0.0
@@ -192,6 +200,7 @@ def compose_verification_reward(
         process_step_components=process_step_components,
         schedule=schedule,
         terminal_gate_passed=gate,
+        process_requires_terminal_submission=bool(process_requires_terminal_submission),
         verifier_audit={
             **verification.audit,
             "credits_by_step": verification.audits_by_step(),

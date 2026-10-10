@@ -164,6 +164,16 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(output.steps[-1].extra_fields['reward_extra_info']['has_final_answer'])
         self.assertTrue(all('enable_thinking' not in c for c in tokenizer.template_options))
 
+    async def test_restarted_submission_uses_same_selected_answer_as_replay(self):
+        completion = r'I have settled on the result. \boxed{5}'
+        output, gen, _, _ = await self.run_flow([REASONING] * 4 + [completion])
+        info = output.steps[-1].extra_fields['reward_extra_info']
+        self.assertEqual(len(gen.calls), 5)
+        self.assertEqual(info['terminal_em'], 1)
+        self.assertTrue(info['has_final_answer'])
+        self.assertEqual(prefilled_final_record(completion)['answer'], '5')
+        self.assertEqual(info['deterministic_verification']['participating_step_indices'], [1, 2, 3, 4])
+
     async def test_final_prefill_is_shared_by_all_arms_and_does_not_grade_the_answer_as_process(self):
         prompts = None
         for mode in ('terminal_only', 'uniform_equation_process', 'llm_judge'):
@@ -200,17 +210,46 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(r"\boxed{7}", judge.calls[0][0])
                 self.assertNotIn("ground_truth", judge.calls[0][0])
 
-    async def test_incomplete_keeps_steps_with_zero_reward_and_independent_audits(self):
+    async def test_incomplete_retains_process_credits_with_zero_terminal_reward(self):
         for mode in ("terminal_only", "uniform_equation_process", "llm_judge"):
             output, gen, _, _ = await self.run_flow([REASONING] * 5, mode=mode)
             self.assertEqual(len(output.steps), 5)
             self.assertEqual(len(output.steps), 5)
             self.assertTrue(all(step.response_ids for step in output.steps))
-            self.assertTrue(all(step.reward_score == 0 for step in output.steps))
             info = output.steps[-1].extra_fields["reward_extra_info"]
             self.assertFalse(info["terminal_eligible"])
+            self.assertFalse(info["terminal_gate_passed"])
+            self.assertFalse(info["process_requires_terminal_submission"])
+            self.assertEqual(info["terminal_em"], 0)
+            self.assertEqual(info["optimizer_terminal_component"], 0)
+            self.assertEqual(info["verified_success"], 0)
+            self.assertEqual(output.steps[-1].reward_score, 0)
+            if mode == "terminal_only":
+                self.assertTrue(all(step.reward_score == 0 for step in output.steps))
+            else:
+                self.assertTrue(all(step.reward_score > 0 for step in output.steps[:4]))
+                self.assertAlmostEqual(sum(step.reward_score for step in output.steps),
+                                       info["optimizer_process_total"])
+                if mode == "uniform_equation_process":
+                    self.assertAlmostEqual(info["optimizer_process_total"], info["optimizer_process_weight"])
             self.assertEqual(info["termination_reason"], "max_steps")
             self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
+
+    async def test_incomplete_without_verified_progress_earns_no_reward(self):
+        output, _, _, _ = await self.run_flow(["Check $2+3=6$."] * 5)
+        self.assertTrue(all(step.reward_score == 0 for step in output.steps))
+        info = output.steps[-1].extra_fields["reward_extra_info"]
+        self.assertEqual(info["terminal_em"], 0)
+        self.assertEqual(info["deterministic_process_reward"], 0)
+
+    async def test_unsubmitted_progress_keeps_outcome_only_warmup_and_evaluation(self):
+        for settings in ({"update":50}, {"validation":True}):
+            output, _, _, judge = await self.run_flow([REASONING] * 5, **settings)
+            self.assertTrue(all(step.reward_score == 0 for step in output.steps))
+            info = output.steps[-1].extra_fields["reward_extra_info"]
+            self.assertEqual(info["optimizer_process_weight"], 0)
+            self.assertEqual(info["terminal_em"], 0)
+            self.assertEqual(judge.calls, [])
 
     async def test_corrected_equation_gets_new_credit_without_erasing_failed_history(self):
         output, _, _, _ = await self.run_flow([
@@ -238,7 +277,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         info = output.steps[-1].extra_fields['reward_extra_info']
         self.assertEqual(info['truncated_policy_steps'], [1])
         self.assertEqual(info['verification_checks'], [0])
-        self.assertEqual(info['deterministic_verification']['evidence_parser_version'], 2)
+        self.assertEqual(info['deterministic_verification']['evidence_parser_version'], 3)
 
     async def test_five_full_turns_do_not_multiply_the_total_token_budget(self):
         for budget, cap, last_cap in ((4096, 820, 816), (5120, 1024, 1024)):
@@ -275,14 +314,16 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         output, gen, _, _ = await self.run_flow([REASONING] * 4, turns=4, budget=10, sizes=[3] * 4)
         self.assertEqual([c["sampling_params"]["max_tokens"] for c in gen.calls], [3, 3, 3, 1])
         self.assertEqual(sum(len(s.response_ids) for s in output.steps), 10)
-        self.assertTrue(all(s.reward_score == 0 for s in output.steps))
+        self.assertGreater(sum(s.reward_score for s in output.steps), 0)
+        self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["optimizer_terminal_component"], 0)
 
     async def test_context_exhaustion_retains_failed_trajectory(self):
         output, gen, _, _ = await self.run_flow([REASONING], context=30)
         self.assertEqual(len(gen.calls), 1)
         self.assertEqual(gen.calls[0]["sampling_params"]["max_tokens"], 10)
         self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["termination_reason"], "context_limit")
-        self.assertEqual(output.steps[0].reward_score, 0)
+        self.assertGreater(output.steps[0].reward_score, 0)
+        self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["optimizer_terminal_component"], 0)
 
     async def test_changing_gold_never_changes_policy_context(self):
         histories = []

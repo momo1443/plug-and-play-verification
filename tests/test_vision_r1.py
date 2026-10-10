@@ -56,14 +56,62 @@ class VisionR1ArtifactTest(unittest.TestCase):
         self.assertEqual(result.process_reward, 0.0)
         self.assertIn("replay_hash_mismatch", result.audit["artifact_audits"][0]["errors"])
 
-    def test_certificate_must_couple_claim_to_answer(self) -> None:
+    def test_answer_coupling_does_not_erase_replayed_crop_reward(self) -> None:
         result = verify_process(
             artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
             raw_certificate=self.certificate,
             submitted_answer="12",
         )
-        self.assertEqual(result.process_reward, 0.0)
+        self.assertEqual(result.process_reward, 1.0)
         self.assertFalse(result.audit["answer_coupled"])
+
+    def test_missing_or_malformed_certificate_retains_verified_crops(self) -> None:
+        for certificate in (None, {"bad": "field"}):
+            with self.subTest(certificate=certificate):
+                result = verify_process(
+                    artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
+                    raw_certificate=certificate, submitted_answer="",
+                )
+                self.assertEqual(result.process_reward, 0.5)
+                self.assertEqual(result.audit["process_denominator"], 2)
+                self.assertFalse(result.audit["schema_valid"])
+
+    def test_missing_required_crop_stays_in_denominator_without_submission(self) -> None:
+        certificate = {**self.certificate,
+                       "evidence_artifact_ids": [self.crop.artifact_id, "image:crop:missing"]}
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
+            raw_certificate=certificate, submitted_answer="",
+        )
+        self.assertEqual(result.process_reward, 0.5)
+        self.assertEqual(result.audit["process_denominator"], 2)
+
+    def test_without_valid_crop_missing_submission_remains_zero(self) -> None:
+        tampered = replace(self.crop, sha256="0" * 64)
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root, tampered.artifact_id: tampered},
+            raw_certificate=None, submitted_answer="",
+        )
+        self.assertEqual(result.process_reward, 0)
+
+    def test_malformed_certificate_keeps_missing_required_evidence_slots(self) -> None:
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
+            raw_certificate={"evidence_artifact_ids": [self.crop.artifact_id, "image:crop:missing", None]},
+            submitted_answer="",
+        )
+        self.assertEqual(result.audit["process_denominator"], 4)
+        self.assertEqual(result.process_reward, 0.25)
+
+    def test_unextractable_evidence_does_not_crash_or_discard_required_slot(self) -> None:
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
+            raw_certificate={**self.certificate, "evidence_artifact_ids": [self.crop.artifact_id, {}]},
+            submitted_answer="",
+        )
+        self.assertFalse(result.audit["schema_valid"])
+        self.assertEqual(result.audit["process_denominator"], 3)
+        self.assertAlmostEqual(result.process_reward, 1 / 3)
 
     def test_rejects_tiny_and_full_image_crops(self) -> None:
         with self.assertRaises(ValueError):

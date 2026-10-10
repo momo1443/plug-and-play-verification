@@ -14,8 +14,11 @@ from functools import lru_cache
 
 
 def normalize_thousands(text: str) -> str:
+    # TeX spacing inside a thousands group does not terminate the number.
+    text = re.sub(r",\s*\\[,!;]\s*(?=\d{3}(?:\D|$))", ",", text)
     # Parenthesized comma lists and function arguments are not integer groups.
-    protected = [(m.start(), m.end()) for m in re.finditer(r"\([^()]*,[^()]*\)|\[[^\[\]]*,[^\[\]]*\]", text)]
+    protected = [(m.start(), m.end()) for m in re.finditer(r"\([^()]*,[^()]*\)|\[[^\[\]]*,[^\[\]]*\]", text)
+                 if "=" not in m.group()]
     def replace(m):
         return m.group() if any(a <= m.start() < b for a, b in protected) else m.group().replace(",", "")
     return re.sub(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\w|\.\d)", replace, text)
@@ -60,11 +63,19 @@ def latex_to_python(expression: str) -> str | None:
     s = normalize_thousands(expression.strip())
     if "..." in s or "…" in s or re.search(r"\\(?:ldots|dots|cdots|approx|equiv|pmod|bmod)\b", s):
         return None
-    s = s.replace("−", "-").replace("×", "*").replace("÷", "/")
+    s = s.replace("−", "-").replace("×", "*").replace("÷", r"\div")
+    # An explicit division sign separates fractional operands. A bare slash
+    # retains its usual precedence; we do not guess missing parentheses.
+    s = re.sub(r"\\div\s*([+-]?\d+)\s*/\s*([+-]?\d+)\b(?!\s*/)",
+               r"/((\1)/(\2))", s)
     s = re.sub(r"\\text\{\s*of\s*\}", " of ", s, flags=re.I)
     s = re.sub(r"\bof\b", "*", s, flags=re.I)
     s = re.sub(r"\bhalf\s*\*", "(1/2)*", s, flags=re.I)
     s = re.sub(r"\bsquare\s*\*\s*(\d+(?:\.\d+)?)", r"(\1)^2", s, flags=re.I)
+    # Mixed-number prose is one value, not an equality followed by a new item.
+    s = re.sub(r"\b(\d+)\s+and\s+(\d+)\s*/\s*(\d+)\b",
+               lambda m: f"({m[1]}+{m[2]}/{m[3]})"
+               if 0 < int(m[2]) < int(m[3]) else m.group(), s, flags=re.I)
     if re.search(r"/\s*\d+(?:\.\d+)?\s*(?:\\(?:pi|sqrt)|pi\b|sqrt\b)|\\pi\s*\(", s):
         return None  # Ambiguous implicit denominator or a named pi function.
     s = s.replace(r"\left", "").replace(r"\right", "")
@@ -133,10 +144,14 @@ def latex_to_python(expression: str) -> str | None:
         s = re.sub(r"\\" + name + r"\b", name, s)
     s = re.sub(r"\\mathrm\{e\}", "exp(1)", s)
     s = s.replace(r"\%", "%")
+    if re.search(r"%\s*\d", s):
+        return None  # Binary remainder notation is not a postfix percent.
     s = re.sub(r"(\d+(?:\.\d+)?|\([^()]+\))\s*%", r"(\1/100)", s)
     if "\\" in s or "_" in s or "%" in s or "|" in s:
         return None
-    s = s.replace("{", "(").replace("}", ")").replace("[", "(").replace("]", ")")
+    if '[' in s or ']' in s:
+        return None  # Could mean floor, grouping, interval or an annotation.
+    s = s.replace("{", "(").replace("}", ")")
     s = s.replace("^", "**")
     # Postfix factorial of a literal or group. Other forms stay unsupported.
     for _ in range(8):
@@ -219,6 +234,11 @@ def evaluation(expression: str) -> tuple[Fraction | float | None, str]:
                     if isinstance(a, Fraction) and abs(b) * max(a.numerator.bit_length(), a.denominator.bit_length()) > 65536:
                         raise ArithmeticLimit("power size limit")
                     value = a ** int(b)
+                elif a < 0 and isinstance(b, Fraction) and b.denominator % 2:
+                    # Elementary real arithmetic: (-125)^(1/3) is -5.
+                    # Python's fractional power instead chooses a complex
+                    # branch. Even roots and irrational powers stay nonreal.
+                    value = (-1 if b.numerator % 2 else 1) * abs(float(a)) ** float(b)
                 else: value = float(a) ** float(b)
             return bounded(value)
         if isinstance(node, ast.Call):
@@ -383,17 +403,27 @@ def _monomial_answer(answer: str):
 @lru_cache(maxsize=16384)
 def _parsed_answer(answer: str):
     from math_verify import LatexExtractionConfig, parse
-    return parse("$" + answer + "$", extraction_config=[LatexExtractionConfig()],
-                 fallback_mode="no_fallback", extraction_mode="first_match", parsing_timeout=2)
+    from math_verify.errors import TimeoutException
+    try:
+        parsed = parse("$" + answer + "$", extraction_config=[LatexExtractionConfig()],
+                       fallback_mode="no_fallback", extraction_mode="first_match",
+                       parsing_timeout=2, raise_on_error=True)
+    except (TimeoutException, TimeoutError, ValueError, TypeError, RecursionError) as exc:
+        raise RuntimeError("symbolic parsing failed") from exc
+    if not parsed:
+        # An empty parse is not evidence of inequality and must not be cached.
+        raise RuntimeError("symbolic answer was not extractable")
+    return parsed
 
 
 def _symbolic_equal(a: str, b: str) -> bool:
     from math_verify import verify
+    from math_verify.errors import TimeoutException
     try:
         ga, gb = _parsed_answer(a), _parsed_answer(b)
-        return bool(ga and gb and verify(gb, ga, strict=True, float_rounding=12, timeout_seconds=2))
-    except (ValueError, TypeError, TimeoutError, RecursionError):
-        return False
+        return bool(verify(gb, ga, strict=True, float_rounding=12, timeout_seconds=2, raise_on_error=True))
+    except (TimeoutException, ValueError, TypeError, TimeoutError, RecursionError) as exc:
+        raise RuntimeError("symbolic comparison failed") from exc
 
 
 @lru_cache(maxsize=16384)
@@ -422,10 +452,64 @@ def _isolated_symbolic_equal(a: str, b: str) -> bool:
         raise RuntimeError("symbolic worker unavailable or timed out") from exc
 
 
+def _simple_polynomial(answer: str):
+    """Exact bounded sums of products, including distinct primed variables.
+
+    This small fast path avoids starting a symbolic worker for R + R'D.
+    Functions, powers, divisions and general polynomial expressions fall back.
+    """
+    s = re.sub(r"\s+", "", re.sub(r"\\(?:cdot|times)\b", "*", answer))
+    if not s or len(s) > 256 or re.search(r"[^A-Za-z0-9'⋅*+\-]", s):
+        return None
+    # Multi-letter words are outside this single-letter-variable grammar.
+    if re.search(r"[a-z]{3,}|[A-Za-z]'?\d", s):
+        return None
+    terms = re.findall(r"[+-]?[^+-]+", s)
+    if "".join(terms) != s or len(terms) > 32:
+        return None
+    result = {}
+    for term in terms:
+        sign = -1 if term.startswith('-') else 1
+        term = term.lstrip('+-')
+        if term.startswith(('*', '⋅')) or term.endswith(('*', '⋅')) or re.search(r"[*⋅]{2}", term):
+            return None
+        tokens = re.findall(r"\d+|[A-Za-z]'?|[*⋅]", term)
+        if ''.join(tokens) != term:
+            return None
+        coefficient, variables = sign, []
+        for token in tokens:
+            if token.isdigit():
+                coefficient *= int(token)
+            elif token not in ('*', '⋅'):
+                variables.append(token)
+        key = tuple(sorted(variables))
+        result[key] = result.get(key, 0) + coefficient
+    return tuple(sorted((key, value) for key, value in result.items() if value))
+
+
+def _numeric_answer_value(text: str):
+    expression = latex_to_python(text)
+    return evaluate(expression) if expression else None
+
+
 def answers_equal(prediction: str, target: str) -> bool:
     a, b = canonical_answer(prediction), canonical_answer(target)
     if not a or not b or any(x in a or x in b for x in ("...", "…")):
         return False
+    def scalar_assignment(text):
+        match = re.fullmatch(r"\s*[A-Za-z]\s*=\s*([^=]+)", text)
+        return match[1].strip() if match and _numeric_answer_value(match[1]) is not None else text
+    a, b = scalar_assignment(a), scalar_assignment(b)
+    # Compare whole ratios and whole alternative sets, never one convenient
+    # number extracted from a longer reference or from the reasoning text.
+    if re.search(r"\bor\b", a + ' ' + b):
+        def alternatives(text):
+            parts = re.split(r"\s+or\s+|,\s*", text)
+            values = [_numeric_answer_value(p) for p in parts]
+            return frozenset(values) if all(v is not None for v in values) else None
+        aa, ab = alternatives(a), alternatives(b)
+        if aa is not None and ab is not None:
+            return aa == ab
     def constraint_form(text):
         parts = re.split(r"(?<![<>!=])=(?!=)", text)
         # A value assignment (x=5) may label a scalar answer. A polynomial
@@ -443,20 +527,33 @@ def answers_equal(prediction: str, target: str) -> bool:
         return not (pa and evaluation(pa)[1] == 'invalid_domain')
     if va is not None and vb is not None:
         return numerically_equal(va, vb)
+    if ':' in a or ':' in b:
+        def ratio(text):
+            if ':' not in text:
+                return _numeric_answer_value(text)
+            parts = text.split(':')
+            values = [_numeric_answer_value(p) for p in parts]
+            return values[0] / values[1] if len(values) == 2 and all(v is not None for v in values) and values[1] else None
+        ra, rb = ratio(a), ratio(b)
+        if ra is not None and rb is not None:
+            return numerically_equal(ra, rb)
     ma, mb = _monomial_answer(a), _monomial_answer(b)
     if ma is not None and mb is not None:
         return ma == mb
+    sa, sb = _simple_polynomial(a), _simple_polynomial(b)
+    if sa is not None and sb is not None:
+        return sa == sb
     # Compare only the already-selected answer, never search the derivation.
     if max(len(a), len(b)) > 4096:
         return False
-    if threading.current_thread() is not threading.main_thread():
-        try:
-            return _isolated_symbolic_equal(a, b)
-        except RuntimeError as exc:
-            import logging
-            logging.getLogger(__name__).warning("Terminal symbolic comparison failed: %s", exc)
-            return False
-    return _symbolic_equal(a, b)
+    compare = (_isolated_symbolic_equal if threading.current_thread() is not threading.main_thread()
+               else _symbolic_equal)
+    try:
+        return compare(a, b)
+    except RuntimeError as exc:
+        import logging
+        logging.getLogger(__name__).warning("Terminal symbolic comparison unavailable (not cached): %s", exc)
+        return False
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ def math_continuation_message(*, final_turn: bool, submission_only: bool = False
         budget = (f" You have at most {max_output_tokens} output tokens and no further turns."
                   if max_output_tokens is not None else " No further turns are available.")
         return {"role": "user", "content": (
-            "This is the last available reasoning turn. Use your previous work and submit now. "
+            "This is the last available turn, reserved for final submission. Use your previous work and submit now. "
             "Respond ONLY with your final answer in \\boxed{...}; do not explain or restart the derivation."
             + budget + " If uncertain, submit your best candidate answer. "
             "The assistant response already starts with \\boxed{; continue with the answer "

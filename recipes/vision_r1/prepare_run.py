@@ -30,13 +30,13 @@ def main():
     if not 0 < args.train_max_samples <= rows:
         raise ValueError("Training prefix must be positive and available in the prepared split")
     root = Path(args.project_dir)
-    code_paths = ["recipes/vision_r1/agent_flow.py", "recipes/vision_r1/verifier.py", "recipes/vision_r1/base.yaml",
+    code_paths = ["recipes/vision_r1/agent_flow.py", "recipes/vision_r1/verifier.py", "recipes/vision_r1/artifacts.py", "recipes/vision_r1/base.yaml",
                   "recipes/vision_r1/prepare_data.py", "recipes/vision_r1/prepare_run.py",
                   "agent_r1/verifier/reward.py", "agent_r1/evaluation/consistency.py",
                   "agent_r1/trainer/ppo/core_algos.py", "scripts/common/model_training.sh",
                   "scripts/vision_r1/run_visual_agent.sh"]
     manifest = {
-        "contract_version": "vision-r1-paper-v1", "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "contract_version": "vision-r1-independent-process-outcome-v2", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "arm": args.arm, "model": file_identity(Path(args.model_path) / "config.json"),
         "selection": {"train": file_identity(args.train_path), "validation": file_identity(args.validation_path),
                       "source_rows": rows, "count": args.train_max_samples, "selection": "source_prefix"},
@@ -47,7 +47,10 @@ def main():
     }
     manifest["training"].update({"algorithm": os.environ.get("AGENT_R1_OPTIMIZER", "grpo").upper(),
         "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "max_agent_steps": 3,
-        "actor_lr": 1e-6, "reference_kl_coefficient": 0.001, "terminal_gate": "valid_final_submission"})
+        "actor_lr": 1e-6, "reference_kl_coefficient": 0.001, "terminal_gate": "valid_final_submission",
+        "process_requires_terminal_submission": False,
+        "process_denominator": "cited required crops; without a readable certificate, recorded crops plus missing declared evidence slots plus one zero certificate slot",
+        "answer_coupling_scope": "audit_only"})
     output = Path(args.output_dir) / "run_manifest.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2) + "\n")

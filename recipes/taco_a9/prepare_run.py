@@ -147,6 +147,7 @@ def main() -> None:
             "certificate_verifier": "taco-a9-execution-replay-v1",
         },
         "reward_contract": ({
+            "process_requires_terminal_submission": False,
             "judge_version": "qwen35-9b-causal-process-v2",
             "terminal_warmup_steps": args.terminal_warmup_steps,
             "warmup_formula": "private_test_all_pass",
@@ -159,6 +160,7 @@ def main() -> None:
             "score_support": [0.0, 0.25, 0.5, 0.75, 1.0],
             "failure_policy": "abort_optimizer_update",
         } if args.reward_mode == "llm_judge" else {
+            "process_requires_terminal_submission": False,
             "weight_sampling": "uniform_0_1_per_prompt_group_after_terminal_warmup",
             "formula": "w * private_test_all_pass + (1-w) * verified_process_reward",
             "process_formula": "mean(replay_gated_developer_pass_rate_per_unique_artifact, certificate_score)",

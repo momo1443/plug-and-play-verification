@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from uuid import uuid4
+import re
 
 from agent_r1.evaluation.answers import final_answer_record
 
@@ -27,23 +28,48 @@ def prefilled_box_end(completion: str) -> int | None:
 
 
 def prefilled_final_record(completion: str) -> dict | None:
-    end = prefilled_box_end(completion)
-    if end is None:
-        return None
-    content = completion[:end - 1].strip()
-    if final_answer_record(FINAL_ANSWER_PREFIX + completion[:end]) is None:
-        return None
-    return {"answer": content, "method": "prefilled_boxed", "reasoning": ""}
+    """Select the first completed submission, independently of the reference.
+
+    Some policies restart with their own box instead of closing the prompt's
+    box. That explicit submission is sufficient. Quoted examples and hidden
+    thinking are not submissions. Use the same selection online and in replay.
+    """
+    candidates = []
+    outer_end = prefilled_box_end(completion)
+    if outer_end is not None:
+        candidates.append((outer_end, True))
+    visible = re.sub(r"```[\s\S]*?(?:```|\Z)|`[^`\n]*(?:`|\Z)",
+                     lambda m: " " * len(m.group()), completion)
+    for match in re.finditer(r"\\boxed\s*\{", visible):
+        end = prefilled_box_end(completion[match.end():])
+        if end is not None:
+            candidates.append((match.end() + end, False))
+    for end, outer in sorted(candidates):
+        text = completion[:end]
+        final = final_answer_record((FINAL_ANSWER_PREFIX if outer else "") + text)
+        if final is None or final["method"] != "boxed":
+            continue
+        # A restarted box may follow reasoning; a bare prefill continuation
+        # must itself be an answer, not a paragraph accidentally ending in }.
+        answer = final["answer"]
+        if re.search(r"\b(?:therefore|let us|we need|thinking|the answer)\b", answer, re.I):
+            continue
+        return {"answer": answer, "method": "prefilled_boxed" if outer else "explicit_boxed",
+                "reasoning": "", "completion_end": end}
+    return None
 
 
 def completed_prefix_tokens(tokenizer, token_ids: list[int]) -> int | None:
     """Retain whole sampled tokens through the box, never re-encode a response."""
-    if not token_ids or prefilled_box_end(tokenizer.decode(token_ids, skip_special_tokens=True)) is None:
+    text = tokenizer.decode(token_ids, skip_special_tokens=True) if token_ids else ""
+    final = prefilled_final_record(text)
+    if final is None:
         return None
+    completed_text = text[:final["completion_end"]]
     low, high = 1, len(token_ids)
     while low < high:
         middle = (low + high) // 2
-        if prefilled_box_end(tokenizer.decode(token_ids[:middle], skip_special_tokens=True)) is None:
+        if not tokenizer.decode(token_ids[:middle], skip_special_tokens=True).startswith(completed_text):
             low = middle + 1
         else:
             high = middle

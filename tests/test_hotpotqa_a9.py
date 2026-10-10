@@ -383,16 +383,17 @@ class RewardScheduleTest(unittest.TestCase):
 
 
 class FormatGateTest(unittest.TestCase):
-    """Tests for the format_gate mechanism that zeros all trajectory reward
-    when the model fails to produce a valid finish tool call."""
+    """Final-submission format gates apply only to terminal rewards."""
 
     def test_format_gate_default_on(self):
-        """Every paper arm requires a valid final submission."""
+        """Outcome rewards require a valid final submission."""
         self.assertTrue(CONTRACT_CERT_MIX.format_gate)
+        self.assertFalse(CONTRACT_CERT_MIX.process_requires_terminal_submission)
 
     def test_format_gate_strict_on(self):
         """CONTRACT_FORMAT_STRICT has format_gate enabled."""
         self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
+        self.assertFalse(CONTRACT_FORMAT_STRICT.process_requires_terminal_submission)
 
     def test_warmup_schedule_remains_outcome_only(self):
         """Eligibility is separate from the warmup mixture weights."""

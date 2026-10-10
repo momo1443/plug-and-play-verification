@@ -145,7 +145,7 @@ class DeepScalerToolTest(unittest.TestCase):
         self.assertEqual(mixed.process_step_components, {1: mixed.process_weight})
         self.assertEqual(len(mixed.process_segment_audits), 1)
 
-    def test_a9_requires_a_final_answer_and_validation_is_terminal_only(self) -> None:
+    def test_a9_retains_unsubmitted_process_reward_and_validation_is_terminal_only(self) -> None:
         no_final = compute_tool_trajectory_reward(
             reward_mode="uniform_equation_process",
             final_response=None,
@@ -156,9 +156,13 @@ class DeepScalerToolTest(unittest.TestCase):
             em_warmup_steps=50,
             prompt_group_key="deepmath:train:index:6",
         )
-        self.assertEqual(no_final.score, 0.0)
+        self.assertEqual(no_final.score, no_final.process_weight)
+        self.assertEqual(no_final.terminal_em, 0.0)
+        self.assertEqual(no_final.terminal_component, 0.0)
+        self.assertFalse(no_final.has_final_answer)
+        self.assertFalse(no_final.composed.terminal_gate_passed)
         self.assertEqual(no_final.process_reward, 1.0)
-        self.assertEqual(no_final.process_step_components, {1: 0.0})
+        self.assertEqual(no_final.process_step_components, {1: no_final.process_weight})
 
         validation = compute_tool_trajectory_reward(
             reward_mode="uniform_equation_process",
