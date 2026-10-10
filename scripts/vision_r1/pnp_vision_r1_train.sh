@@ -32,10 +32,10 @@ for split in train test; do
 done
 
 MODEL_PATH="${VISION_R1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
-source "$PROJECT_DIR/scripts/common/model_training.sh"
-agent_r1_model_overrides "$MODEL_PATH"
-agent_r1_optimizer_overrides "$MODEL_PATH"
-agent_r1_paper_profile vision_r1 "$MODEL_PATH"
+source "$PROJECT_DIR/scripts/common/pnp.sh"
+pnp_model_overrides "$MODEL_PATH"
+pnp_optimizer_overrides "$MODEL_PATH"
+pnp_paper_profile vision_r1 "$MODEL_PATH"
 [[ -f "$MODEL_PATH/config.json" ]] || { echo "Missing model config: $MODEL_PATH/config.json" >&2; exit 2; }
 TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
 ROLLOUT_N="${VISION_R1_ROLLOUT_N:-4}"
@@ -105,7 +105,7 @@ cd "$PROJECT_DIR"
     +actor_rollout_ref.rollout.engine_kwargs.vllm.limit_mm_per_prompt.image=3 \
     actor_rollout_ref.rollout.multi_turn.enable=true actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.multi_turn.max_parallel_calls=1 \
-    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/vision_r1/base.yaml" \
+    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/vision_r1/pnp_vision_r1.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow="$AGENT_FLOW" \
     actor_rollout_ref.rollout.agent.num_workers="$NUM_GPUS" \
     actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=false \

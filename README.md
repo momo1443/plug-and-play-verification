@@ -188,13 +188,22 @@ Default model paths are `../models/Qwen3.5-4B` and `../models/Qwen3.5-9B`. Set t
 
 ### Train with the verifier
 
-Choose the command for the prepared domain:
+Use `run_pnp.sh` to select a dataset and model profile. For the local four-GPU mathematics configuration:
 
 ```bash
-bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
-bash scripts/hotpotqa/run_a9_uniform.sh
-bash scripts/taco/run_a9_uniform.sh
-bash scripts/vision_r1/run_a9_uniform.sh
+conda activate pnp
+bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
+```
+
+The common entry uses Python from the active environment. `--model-path` selects a local model or exported checkpoint; resuming training additionally requires the dataset's resume variables. Model profiles live in [`scripts/models/`](scripts/models/), with filenames `Qwen3.5-4B.sh` and `Qwen3.5-9B.sh`. HotpotQA uses documented environment variables for training overrides; it rejects trailing Hydra arguments.
+
+Dataset-specific PNP entrypoints are:
+
+```bash
+bash scripts/deepscaler/pnp_deepscaler.sh
+bash scripts/hotpotqa/pnp_hotpotqa.sh
+bash scripts/taco/pnp_taco.sh
+bash scripts/vision_r1/pnp_vision_r1.sh
 ```
 
 Example with an explicit model path and run name:
@@ -202,7 +211,7 @@ Example with an explicit model path and run name:
 ```bash
 DEEPSCALER_MODEL_PATH=/path/to/Qwen3.5-4B \
 RUN_ID=deepscaler_4b_verifier \
-bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
 ### Baselines and comparisons
@@ -222,7 +231,7 @@ bash scripts/llm_judge/run_grpo_4b_judge_9b.sh hotpotqa
 bash scripts/ppo/run_terminal.sh hotpotqa
 
 # HotpotQA verifier with PPO.
-HOTPOTQA_OPTIMIZER=ppo bash scripts/hotpotqa/run_a9_uniform.sh
+HOTPOTQA_OPTIMIZER=ppo bash scripts/hotpotqa/pnp_hotpotqa.sh
 
 # Privileged gold-evidence ablations on HotpotQA.
 bash scripts/hotpotqa/run_a2.sh  # process only
@@ -274,6 +283,7 @@ python -m agent_r1.evaluation.summarize rollouts.jsonl --global-step 500
 
 ```text
 plug-and-play-verification/
+├── run_pnp.sh             # PNP dataset/model/GPU selection
 ├── agent_r1/
 │   ├── verifier/          # Shared credit contract and reward composition
 │   ├── agent_flow/        # Policy generation and environment interaction
@@ -282,13 +292,14 @@ plug-and-play-verification/
 │   └── config/            # Shared Hydra configuration
 ├── recipes/               # Domain flows, verifiers, data preparation, and YAML configs
 ├── scripts/
+│   ├── models/            # Qwen3.5-4B.sh and Qwen3.5-9B.sh profiles
 │   ├── deepscaler/        # Paper math training and AIME evaluation
 │   ├── hotpotqa/          # QA training, ablations, and validation
 │   ├── taco/              # Code training
 │   ├── vision_r1/         # Visual-agent training
 │   ├── llm_judge/          # Frozen process-judge baseline
 │   ├── ppo/               # Outcome-only PPO entrypoint
-│   ├── common/            # Shared model adaptation and paper budgets
+│   ├── common/            # pnp.sh: shared adaptation, budgets and dispatch
 │   ├── extensions/        # Optional and historical experiment profiles
 │   └── patches/           # Runtime compatibility patches
 ├── tests/                 # Verifier, reward, launcher, and trainer checks

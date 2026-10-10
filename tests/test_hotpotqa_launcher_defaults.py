@@ -21,7 +21,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIs(parameters["actor_optimizer_offload"].default, False)
 
     def test_shell_and_cli_defaults_use_optimized_actor_settings(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_ACTOR_USE_DYNAMIC_BSZ:-true", launcher)
@@ -34,7 +34,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"--actor_optimizer_offload", type=_parse_bool, default=False', preflight)
 
     def test_all_training_arms_share_actor_loss_reference_kl(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
         parameters = inspect.signature(prepare_formal_rlvr_run).parameters
 
@@ -54,7 +54,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"coefficient": reference_kl_loss_coef', preflight)
 
     def test_formal_surface_uses_grpo_names(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
         parameters = inspect.signature(prepare_formal_rlvr_run).parameters
 
@@ -67,7 +67,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('"grpo_micro_batch_size_per_gpu": grpo_micro_batch_size', preflight)
 
     def test_launcher_supports_validated_resume(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_RESUME_MODE:-disable", launcher)
         self.assertIn("HOTPOTQA_RESUME_FROM_PATH", launcher)
@@ -75,7 +75,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertIn('trainer.resume_from_path="$RESUME_FROM_CONFIG"', launcher)
 
     def test_ray_sessions_use_project_storage_through_a_short_link(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
 
         self.assertIn("HOTPOTQA_RAY_STORAGE_ROOT:-$WORKSPACE_DIR/.ray_tmp", launcher)
         self.assertIn("/tmp/ar1r-${UID}", launcher)
@@ -89,7 +89,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         self.assertFalse((config_dir / "agent_ppo_trainer.yaml").exists())
 
     def test_formal_launcher_and_manifest_support_a3_combined(self):
-        launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         a3_launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_a3.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa/prepare_formal_rlvr_run.py").read_text(encoding="utf-8")
 
@@ -121,7 +121,7 @@ class HotpotQALauncherDefaultsTest(unittest.TestCase):
         em100_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_claim_source_em100.sh").read_text(
             encoding="utf-8"
         )
-        generic_launcher = (PROJECT_ROOT / "scripts/hotpotqa/run_rlvr.sh").read_text(encoding="utf-8")
+        generic_launcher = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         preflight = (PROJECT_ROOT / "recipes/hotpotqa_lr/prepare_run.py").read_text(encoding="utf-8")
         common = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/common_v2.sh").read_text(encoding="utf-8")
         base_launcher = (PROJECT_ROOT / "scripts/extensions/hotpotqa_lr/run_lr_base.sh").read_text(encoding="utf-8")

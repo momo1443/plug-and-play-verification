@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Main A9-Code pilot: terminal private-test reward for steps 1--50, then
-# per-prompt-group uniform A9 mixing for steps 51--300.
+# PNP code training: terminal private-test reward for steps 1--50, then
+# per-prompt-group uniform A9 mixing for steps 51--500.
 # Five turns let the model write, test, revise, retest, and submit a final code
 # artifact with a replayable execution certificate. This launcher only starts
 # after model-safe TACO parquet files and their runner-only sidecar exist.
@@ -36,10 +36,10 @@ done
 command -v bwrap >/dev/null || { echo "bubblewrap is required for TACO A9" >&2; exit 2; }
 
 MODEL_PATH="${TACO_A9_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}}"
-source "$PROJECT_DIR/scripts/common/model_training.sh"
-agent_r1_model_overrides "$MODEL_PATH"
-agent_r1_optimizer_overrides "$MODEL_PATH"
-agent_r1_paper_profile taco "$MODEL_PATH"
+source "$PROJECT_DIR/scripts/common/pnp.sh"
+pnp_model_overrides "$MODEL_PATH"
+pnp_optimizer_overrides "$MODEL_PATH"
+pnp_paper_profile taco "$MODEL_PATH"
 TRAIN_BATCH_SIZE="${TACO_A9_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
 ROLLOUT_N="${TACO_A9_ROLLOUT_N:-4}"
 TOTAL_EPOCHS="${TACO_A9_TOTAL_EPOCHS:-1}"
@@ -128,7 +128,7 @@ cd "$PROJECT_DIR"
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_memory_bytes="$VLLM_KV_CACHE_BYTES" \
     actor_rollout_ref.rollout.multi_turn.enable=true actor_rollout_ref.rollout.multi_turn.format=hermes \
-    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/taco_a9/base.yaml" \
+    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/taco_a9/pnp_taco.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow="$AGENT_FLOW" actor_rollout_ref.rollout.agent.num_workers="$NUM_GPUS" \
     actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=false \
     actor_rollout_ref.rollout.val_kwargs.temperature=0 "${AGENT_R1_CRITIC_ARGS[@]}" reward_model.enable=false \

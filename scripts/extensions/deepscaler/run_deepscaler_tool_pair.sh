@@ -35,8 +35,8 @@ export TOKENIZERS_PARALLELISM=false
 export DEEPSCALER_TOOL_EM_WARMUP_STEPS="${DEEPSCALER_TOOL_EM_WARMUP_STEPS:-50}"
 
 MODEL_PATH="${DEEPSCALER_TOOL_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
-source "$PROJECT_DIR/scripts/common/model_training.sh"
-agent_r1_model_overrides "$MODEL_PATH"
+source "$PROJECT_DIR/scripts/common/pnp.sh"
+pnp_model_overrides "$MODEL_PATH"
 SOURCE_DATA_DIR="${DEEPSCALER_SOURCE_DATA_DIR:-$PROJECT_DIR/data/corpus/deepscaler}"
 TOOL_DATA_DIR="${DEEPSCALER_TOOL_PAIR_DATA_DIR:-$PROJECT_DIR/data/corpus/deepscaler_tool_pair}"
 TRAIN_PATH="$TOOL_DATA_DIR/train.parquet"

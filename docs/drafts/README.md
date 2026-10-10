@@ -302,7 +302,7 @@ bash scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh
 ```bash
 HOTPOTQA_TRAIN_MAX_SAMPLES=10000 \
 HOTPOTQA_TOTAL_TRAINING_STEPS=500 \
-bash scripts/hotpotqa/run_a9_uniform.sh
+bash scripts/hotpotqa/pnp_hotpotqa.sh
 ```
 
 ### TACO
@@ -310,7 +310,7 @@ bash scripts/hotpotqa/run_a9_uniform.sh
 ```bash
 TACO_A9_TRAIN_MAX_SAMPLES=10000 \
 TACO_A9_TOTAL_TRAINING_STEPS=500 \
-bash scripts/taco/run_a9_uniform.sh
+bash scripts/taco/pnp_taco.sh
 ```
 
 TACO requires prepared model-safe parquet files, a runner-only private-test sidecar and index, and `bubblewrap`. The launcher fails before training if any required artifact is missing.
@@ -320,7 +320,7 @@ TACO requires prepared model-safe parquet files, a runner-only private-test side
 ```bash
 VISION_R1_TRAIN_MAX_SAMPLES=10000 \
 VISION_R1_TOTAL_TRAINING_STEPS=1250 \
-bash scripts/vision_r1/run_a9_uniform.sh
+bash scripts/vision_r1/pnp_vision_r1.sh
 ```
 
 Vision-R1 uses a prompt batch of 8, so 10,000 examples correspond to 1,250 optimizer steps.

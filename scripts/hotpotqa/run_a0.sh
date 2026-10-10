@@ -42,7 +42,7 @@ export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5
 MODEL_PATH="$HOTPOTQA_MODEL_PATH"
 TRAIN_PATH="${HOTPOTQA_TRAIN_PATH:-$HOTPOTQA_DATA_ROOT/train.parquet}"
 VAL_PATH="${HOTPOTQA_VAL_PATH:-$HOTPOTQA_DATA_ROOT/validation.parquet}"
-AGENT_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/base.yaml"
+AGENT_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/pnp_hotpotqa.yaml"
 REWARD_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
 
 VAL_MAX_SAMPLES="${HOTPOTQA_VAL_MAX_SAMPLES:--1}"
@@ -200,7 +200,7 @@ code_rel = [
     "recipes/hotpotqa/final_answer_protocol.py",
     "recipes/hotpotqa_a9/reward_fn.py",
     "recipes/hotpotqa_a9/prompts.py",
-    "recipes/hotpotqa_a9/base.yaml",
+    "recipes/hotpotqa_a9/pnp_hotpotqa.yaml",
     "recipes/hotpotqa/evidence.py",
     "recipes/hotpotqa/env/search_tool.py",
     "agent_r1/trainer/streaming_agent_validation.py",

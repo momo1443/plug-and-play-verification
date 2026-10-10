@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 
 spec = importlib.util.spec_from_file_location(
-    "aime_agent_eval", Path(__file__).resolve().parents[1] / "scripts/deepscaler/eval_aime_agent.py")
+    "aime_agent_eval", Path(__file__).resolve().parents[1] / "scripts/deepscaler/pnp_aime.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 generate_trajectories, summarize_accuracy = module.generate_trajectories, module.summarize_accuracy

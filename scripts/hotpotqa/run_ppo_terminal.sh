@@ -26,4 +26,4 @@ export HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false
 
 export RUN_ID="${RUN_ID:-qwen35-4b_ppo_terminal_em_${HOTPOTQA_RUN_MODE}_8gpu_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/pnp_hotpotqa_train.sh"

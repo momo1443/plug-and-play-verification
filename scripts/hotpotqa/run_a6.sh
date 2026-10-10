@@ -7,7 +7,7 @@ set -euo pipefail
 # Final-answer tokens remain in the policy loss under raw completion.
 #
 # Self-contained entrypoint; shared scientific/runtime defaults are owned by
-# run_rlvr.sh and remain overridable through documented HOTPOTQA_* variables.
+# pnp_hotpotqa_train.sh and remain overridable through documented HOTPOTQA_* variables.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"

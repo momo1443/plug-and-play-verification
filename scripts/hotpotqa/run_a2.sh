@@ -21,4 +21,4 @@ export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a2_${HOTPOTQA_RUN_MODE}_grpo_stepcausal_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/pnp_hotpotqa_train.sh"

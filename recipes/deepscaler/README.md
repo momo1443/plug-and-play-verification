@@ -1,7 +1,7 @@
 # DeepScaleR paper profile and ToolEnv extension
 
 The main entrypoints are `scripts/deepscaler/run_deepscaler_a1.sh` and
-`run_deepscaler_a9_uniform.sh`. Both use 10,000 selected rows, 500 updates,
+`pnp_deepscaler.sh`. Both use 10,000 selected rows, 500 updates,
 prompt batch 20 (4B) or 8 (9B), four rollouts, and the common `VerificationResult` composer.
 The frozen-judge and PPO launchers use the same flow and generation limits.
 See [the implementation contract](../../docs/paper-contract.md).
@@ -17,18 +17,18 @@ uv pip install --python "$PYTHON_BIN" \
   --override recipes/deepscaler/requirements-qwen35-overrides.txt \
   -r recipes/deepscaler/requirements-qwen35.txt
 "$PYTHON_BIN" -m recipes.deepscaler.prepare_data
-bash scripts/deepscaler/run_verification_smoke.sh
-CUDA_VISIBLE_DEVICES=0,1,2 bash scripts/deepscaler/run_deepscaler_4b_3gpu.sh
+bash scripts/deepscaler/pnp_deepscaler_smoke.sh
+bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
 ```
 
 Use the recipe scripts from the activated Conda `pnp` environment:
 
 ```bash
-bash scripts/deepscaler/run_verification_smoke.sh
+bash scripts/deepscaler/pnp_deepscaler_smoke.sh
 CUDA_VISIBLE_DEVICES=0,1 DEEPSCALER_FILTER_OVERLONG_PROMPTS=True \
-  bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+  bash scripts/deepscaler/pnp_deepscaler.sh
 CUDA_VISIBLE_DEVICES=0,1 DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
-  bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+  bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
 Run artifacts, TensorBoard records, validation JSONL and Hydra metadata are
@@ -51,20 +51,20 @@ the default single epoch with batch size 20 completes 499 updates after filterin
 The 500-update setting remains the upper limit. Rich verifier audits are retained
 in validation JSONL; aggregate validation metrics use numeric scalar fields only.
 
-The `run_deepscaler_4b_3gpu.sh` entrypoint prepares exactly 10,000 eligible
+The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, prepares exactly 10,000 eligible
 training rows, replacing overlong entries with subsequent rows in source order.
-It uses GPUs 0, 1, 2, batch/mini-batch 20 prompts, four trajectories per prompt,
+It defaults to GPUs 0–3, batch/mini-batch 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
 are 2,048 initial tokens, 8,192 context tokens, 4,096 completion tokens across
-five turns, capped at 820 tokens per turn. Checkpoints run every 50 updates;
+five turns, capped at 820 tokens per turn. Checkpoints run every 10 updates;
 periodic held-out validation is disabled. The default A9 EM-only reward phase is separate from LR
 warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
 The prepared subset, its source-selection manifest and resolved configuration
 are saved in the run's `logs/` directory.
 
-Once all four GPUs are free, `run_deepscaler_4b_4gpu.sh` uses GPUs 0–3 with the
-same optimizer, batch and generation budgets. It uses a vLLM memory fraction
+The same model profile accepts `--gpus 0,1,2` for a three-GPU run, with
+the same optimizer, batch and generation budgets. It uses a vLLM memory fraction
 of 0.30 and maximum concurrent sequences of 32, with eight AgentFlow workers.
 Checkpoints are saved every 10 updates; periodic held-out validation is disabled.
 The previous 0.35 fraction exhausted memory during actor backward. Both vLLM
@@ -73,7 +73,7 @@ GPU utilization measures kernel activity; GPU memory usage is a separate metric.
 Size the vLLM budget from the complete training peak, including actor backward
 and optimizer states, rather than from generation-phase memory alone.
 
-The local three- and four-GPU profiles now clean the source data before selecting
+The local model profile cleans the source data before selecting
 10,000 prompts. Every source row and every distinct reference label is checked;
 non-equivalent labels for duplicate questions, missing referenced diagrams and
 unsupported answer formats are quarantined. The independently checked dress
@@ -82,6 +82,13 @@ held-out membership are preserved; the cleaned splits and full audit are saved
 under `_meta/data/`. Explicit `DEEPSCALER_TRAIN_PATH` / `DEEPSCALER_VAL_PATH`
 overrides select supplied data. `DEEPSCALER_CLEAN_DATA=False` selects the original
 corpus for comparisons. Data checks do not prove every single-label answer.
+
+The local profile disables Ray OpenTelemetry and sets
+`VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU=0` to avoid assembling large CPU copies
+during checkpoint saves. Apply the installed veRL checkpoint compatibility patch
+with `python scripts/patches/patch_verl_lora_fsdp_checkpoint.py` before using this
+setting. It changes checkpoint staging, while retaining model, optimizer and
+training-state contents. `VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU=1` restores CPU staging.
 
 The numeric verifier preserves thousands separators, nested/unbraced fractions,
 mixed numbers, indexed roots, explicit repeating decimals and numeric bases.
@@ -219,11 +226,11 @@ its recorded history.
 
 ```bash
 # Default: at most five turns; same option applies to A1, Judge, PPO and AIME.
-DEEPSCALER_MAX_STEPS=5 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+DEEPSCALER_MAX_STEPS=5 bash scripts/deepscaler/pnp_deepscaler.sh
 # More turns, retaining the same total token budget.
-DEEPSCALER_MAX_STEPS=8 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+DEEPSCALER_MAX_STEPS=8 bash scripts/deepscaler/pnp_deepscaler.sh
 # Optional single-generation setting.
-DEEPSCALER_MAX_STEPS=1 bash scripts/deepscaler/run_deepscaler_a9_uniform.sh
+DEEPSCALER_MAX_STEPS=1 bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
 Optional budget/context overrides are `DEEPSCALER_MAX_RESPONSE_LENGTH` and
