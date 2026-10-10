@@ -16,6 +16,7 @@ from agent_r1.trainer.ppo.ray_trainer import (
     process_validation_metrics,
 )
 from agent_r1.trainer.streaming_jsonl import StreamingJsonlWriter
+from agent_r1.trainer.validation_metrics import scalar_validation_metrics
 from verl import DataProto
 
 
@@ -302,7 +303,7 @@ class StreamingValidationRayAgentTrainer(RayAgentTrainer):
 
         data_sources = np.concatenate(data_source_lst, axis=0)
         grouped_metrics = process_validation_metrics(
-            data_sources, sample_uids, reward_extra_infos_dict
+            data_sources, sample_uids, scalar_validation_metrics(reward_extra_infos_dict)
         )
         metric_dict: dict[str, Any] = {}
         for data_source, variables in grouped_metrics.items():

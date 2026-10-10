@@ -2,7 +2,7 @@
 
 > Turn checks of intermediate artifacts into bounded, step-attributed process rewards through a shared interface, and reuse them across compatible agents and policy optimizers.
 
-Research code for the ICLR 2027 manuscript. Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
+Built on [Agent-R1](https://github.com/AgentR1/Agent-R1) and [veRL](https://github.com/volcengine/verl).
 
 ![Figure 1: Overview of the plug-and-play verifier.](assets/images/plug-and-play-verifier.png)
 
@@ -163,7 +163,7 @@ Our verifier does not require annotated gold evidence. The following reward-comp
 
 ### Environment
 
-Use a Linux GPU environment with **veRL 0.7.0**, PyTorch/FSDP, vLLM, Ray, and compatible Transformers dependencies. The launchers use Bash features available in Bash 4 or later. Follow the [veRL installation documentation](https://verl.readthedocs.io/en/latest/start/install.html) for the infrastructure overview, selecting a dependency stack compatible with this repository's veRL version; the latest upstream defaults target a newer stack.
+Use a Linux GPU environment with PyTorch/FSDP, vLLM, Ray, and compatible Transformers dependencies. The original Agent-R1 stack uses **veRL 0.7.0**; Qwen3.5 requires the **veRL 0.8.0** model adapter and an updated inference stack. See the [local Qwen3.5 mathematics setup](recipes/deepscaler/README.md#local-qwen35-setup) for explicit versions and dependency overrides. The launchers use Bash features available in Bash 4 or later. Follow the [veRL installation documentation](https://verl.readthedocs.io/en/latest/start/install.html) for the infrastructure overview.
 
 ```bash
 git clone https://github.com/momo1443/plug-and-play-verification.git
@@ -179,7 +179,7 @@ Run commands from the repository root. HotpotQA additionally needs the packages 
 
 | Domain | Inputs expected by the paper launcher | Setup entry point |
 | --- | --- | --- |
-| DeepScaleR | Prepared `train.parquet` and `validation.parquet` in `data/corpus/deepscaler/` | [Recipe notes](recipes/deepscaler/README.md); source-to-paper-parquet preprocessing is not bundled |
+| DeepScaleR | Prepared `train.parquet` and `validation.parquet` in `data/corpus/deepscaler/` | [Recipe notes](recipes/deepscaler/README.md); `python -m recipes.deepscaler.prepare_data` creates a local held-out split from the source JSON |
 | HotpotQA | Prepared splits, corpus, FAISS index, embedding model, and evidence sidecar | [Data and retrieval setup](recipes/hotpotqa/README.md) |
 | TACO | Prepared splits and developer/private-test sidecars | [`prepare_data.py`](recipes/taco_a9/prepare_data.py), [`build_sidecar_index.py`](recipes/taco_a9/build_sidecar_index.py) |
 | Vision-R1 | Official `train.parquet` and `test.parquet`, with resolvable image data | [`prepare_data.py`](recipes/vision_r1/prepare_data.py); invoked by the launcher |
@@ -254,7 +254,7 @@ For a checkpoint exported in a format accepted by vLLM, with prepared AIME data:
 CUDA_VISIBLE_DEVICES=0 \
 MODEL_PATH=/path/to/exported-checkpoint \
 AIME2025_DATA_DIR=/path/to/prepared/aime2025 \
-OUTPUT_DIR=outputs/aime2025 \
+OUTPUT_DIR=logs/aime2025 \
 python scripts/deepscaler/eval_aime2025.py
 ```
 

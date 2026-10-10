@@ -18,6 +18,10 @@ import socket
 from datetime import datetime, timezone
 from pathlib import Path
 
+from verl_patches.attention_padding import install_attention_padding
+
+install_attention_padding()
+
 import ray
 from omegaconf import OmegaConf
 

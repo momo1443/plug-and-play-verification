@@ -25,15 +25,20 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
-export VLLM_USE_V1=1
+unset VLLM_USE_V1
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export TOKENIZERS_PARALLELISM=false
+# The SDPA profile can pack/unpack tokens with veRL's native Torch helpers.
+export AGENT_R1_TORCH_PADDING="${AGENT_R1_TORCH_PADDING:-1}"
 
 # Model
-export HOTPOTQA_MODEL_PATH="${DEEPSCALER_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}}"
+DEFAULT_MODEL_PATH="$WORKSPACE_DIR/models/Qwen3.5-4B"
+[[ -f "$PROJECT_DIR/models/Qwen3.5-4B/config.json" ]] && DEFAULT_MODEL_PATH="$PROJECT_DIR/models/Qwen3.5-4B"
+export HOTPOTQA_MODEL_PATH="${DEEPSCALER_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
 source "$PROJECT_DIR/scripts/common/model_training.sh"
 agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
 agent_r1_optimizer_overrides "$HOTPOTQA_MODEL_PATH"
@@ -49,13 +54,13 @@ fi
 export DEEPSCALER_EM_WARMUP_STEPS="${DEEPSCALER_EM_WARMUP_STEPS:-50}"
 
 # Data paths — DeepScaleR
-TRAIN_PATH="$PROJECT_DIR/data/corpus/deepscaler/train.parquet"
-VAL_PATH="$PROJECT_DIR/data/corpus/deepscaler/validation.parquet"
+TRAIN_PATH="${DEEPSCALER_TRAIN_PATH:-$PROJECT_DIR/data/corpus/deepscaler/train.parquet}"
+VAL_PATH="${DEEPSCALER_VAL_PATH:-$PROJECT_DIR/data/corpus/deepscaler/validation.parquet}"
 
 # Training config
 TRAIN_MAX_SAMPLES="${DEEPSCALER_TRAIN_MAX_SAMPLES:-${HOTPOTQA_TRAIN_MAX_SAMPLES:-$PAPER_TRAIN_SAMPLES}}"
-TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
-ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
+TRAIN_BATCH_SIZE="${DEEPSCALER_TRAIN_BATCH_SIZE:-${HOTPOTQA_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}}"
+ROLLOUT_N="${DEEPSCALER_ROLLOUT_N:-${HOTPOTQA_ROLLOUT_N:-4}}"
 
 TOTAL_TRAINING_STEPS="${DEEPSCALER_TOTAL_TRAINING_STEPS:-${HOTPOTQA_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}}"
 if ! [[ "$TOTAL_TRAINING_STEPS" =~ ^[1-9][0-9]*$ ]]; then
@@ -63,8 +68,8 @@ if ! [[ "$TOTAL_TRAINING_STEPS" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 
-VAL_MAX_SAMPLES=2015
-VAL_BATCH_SIZE="${HOTPOTQA_VAL_BATCH_SIZE:-8}"
+VAL_MAX_SAMPLES="${DEEPSCALER_VAL_MAX_SAMPLES:-2015}"
+VAL_BATCH_SIZE="${DEEPSCALER_VAL_BATCH_SIZE:-${HOTPOTQA_VAL_BATCH_SIZE:-8}}"
 
 # GPU config
 IFS=',' read -r -a _VISIBLE_GPUS <<<"$CUDA_VISIBLE_DEVICES"
@@ -99,19 +104,19 @@ if (( DEEPSCALER_MAX_STEPS > 1 )); then
     MULTI_TURN_ENABLED=True
 fi
 MAX_NUM_BATCHED_TOKENS=$MAX_MODEL_LENGTH
-MAX_NUM_SEQS=20
-VLLM_GPU_MEMORY_UTILIZATION=0.25
+MAX_NUM_SEQS="${DEEPSCALER_VLLM_MAX_NUM_SEQS:-20}"
+VLLM_GPU_MEMORY_UTILIZATION="${DEEPSCALER_VLLM_GPU_MEMORY_UTILIZATION:-0.25}"
 VLLM_ENABLE_SLEEP_MODE=false
 VLLM_FREE_CACHE_ENGINE=false
 
 # Checkpoint config
-SAVE_FREQ="${HOTPOTQA_SAVE_FREQ:-50}"
+SAVE_FREQ="${DEEPSCALER_SAVE_FREQ:-${HOTPOTQA_SAVE_FREQ:-50}}"
 MAX_ACTOR_CKPT_TO_KEEP="${HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP:-2}"
 EXPERIMENT_SEED="${HOTPOTQA_SEED:-42}"
 
 # Resume config
-RESUME_MODE="${HOTPOTQA_RESUME_MODE:-disable}"
-RESUME_FROM_PATH="${HOTPOTQA_RESUME_FROM_PATH:-}"
+RESUME_MODE="${DEEPSCALER_RESUME_MODE:-${HOTPOTQA_RESUME_MODE:-disable}}"
+RESUME_FROM_PATH="${DEEPSCALER_RESUME_FROM_PATH:-${HOTPOTQA_RESUME_FROM_PATH:-}}"
 
 # Resolve resume
 case "$RESUME_MODE" in
@@ -153,8 +158,8 @@ if [[ -z "${RAY_TMPDIR:-}" ]]; then
 fi
 
 # Run ID and output
-RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_${DEEPSCALER_REWARD_MODE}_${AGENT_R1_OPTIMIZER:-grpo}_turns${DEEPSCALER_MAX_STEPS}_main10k_n${ROLLOUT_N}_${TOTAL_TRAINING_STEPS}step_$(date +%Y%m%d-%H%M%S)}"
-OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
+RUN_ID="${RUN_ID:-${AGENT_R1_MODEL_NAME}_deepscaler_${DEEPSCALER_REWARD_MODE}_${AGENT_R1_OPTIMIZER:-grpo}_turns${DEEPSCALER_MAX_STEPS}_train${TRAIN_MAX_SAMPLES}_n${ROLLOUT_N}_${TOTAL_TRAINING_STEPS}step_$(date +%Y%m%d-%H%M%S)}"
+OUTPUT_DIR="${DEEPSCALER_OUTPUT_DIR:-${HOTPOTQA_OUTPUT_DIR:-$PROJECT_DIR/logs/$RUN_ID}}"
 
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
@@ -211,7 +216,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     data.val_max_samples="$VAL_MAX_SAMPLES" \
     data.max_prompt_length="$MAX_PROMPT_LENGTH" \
     data.max_response_length="$MAX_RESPONSE_LENGTH" \
-    data.filter_overlong_prompts=False \
+    data.filter_overlong_prompts="${DEEPSCALER_FILTER_OVERLONG_PROMPTS:-False}" \
     data.truncation=error \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path="$HOTPOTQA_MODEL_PATH" \
@@ -223,6 +228,15 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.strategy=fsdp \
     actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.optimizer=AdamW \
+    actor_rollout_ref.actor.optim.optimizer_impl=torch.optim \
+    actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=0 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0 \
+    actor_rollout_ref.actor.optim.weight_decay=0.01 \
+    actor_rollout_ref.actor.optim.clip_grad=1.0 \
+    actor_rollout_ref.actor.ppo_epochs=1 \
+    actor_rollout_ref.actor.data_loader_seed="$EXPERIMENT_SEED" \
     actor_rollout_ref.actor.ppo_mini_batch_size="$TRAIN_BATCH_SIZE" \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$GRPO_MICRO_BATCH_SIZE" \
     actor_rollout_ref.actor.use_dynamic_bsz=true \
@@ -236,9 +250,11 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     actor_rollout_ref.actor.fsdp_config.seed="$EXPERIMENT_SEED" \
+    actor_rollout_ref.actor.fsdp_config.dtype=bfloat16 \
     actor_rollout_ref.actor.checkpoint.save_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.actor.checkpoint.load_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.prompt_length="$ROLLOUT_PROMPT_LENGTH" \
     actor_rollout_ref.rollout.response_length="$MAX_RESPONSE_LENGTH" \
@@ -281,16 +297,17 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     trainer.experiment_name="$RUN_ID" \
     trainer.n_gpus_per_node="$NUM_GPUS" \
     trainer.nnodes=1 \
-    trainer.val_before_train=False \
-    trainer.val_only=False \
+    trainer.val_before_train="${DEEPSCALER_VAL_BEFORE_TRAIN:-False}" \
+    trainer.val_only="${DEEPSCALER_VAL_ONLY:-False}" \
     trainer.resume_mode="$RESUME_MODE" \
     trainer.resume_from_path="$RESUME_FROM_CONFIG" \
     trainer.save_freq="$SAVE_FREQ" \
     trainer.max_actor_ckpt_to_keep="$MAX_ACTOR_CKPT_TO_KEEP" \
-    trainer.test_freq=-1 \
+    trainer.test_freq="${DEEPSCALER_TEST_FREQ:--1}" \
     trainer.total_epochs=1 \
     trainer.total_training_steps="$TOTAL_TRAINING_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" \
     trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \
     trainer.validation_data_dir="$OUTPUT_DIR/validation" \
-    trainer.log_val_generations=0 2>&1 | tee "$OUTPUT_DIR/train.log"
+    trainer.log_val_generations=0 \
+    hydra.run.dir="$OUTPUT_DIR/hydra" "$@" 2>&1 | tee "$OUTPUT_DIR/train.log"

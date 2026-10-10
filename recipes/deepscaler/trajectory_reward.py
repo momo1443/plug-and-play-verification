@@ -55,7 +55,8 @@ class TrajectoryReward:
         }
 
 
-def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> VerificationResult:
+def verify_process(reasoning_segments: Iterable[tuple[int, str]], *, question: str = "",
+                   truncated_steps: Iterable[int] = ()) -> VerificationResult:
     """Verify the full history and normalize across equation-bearing policy turns.
 
     Failed checks participate in the denominator. Turns without extractable
@@ -63,6 +64,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
     source policy step; a later correction never replaces an earlier failure.
     """
     records: list[dict[str, Any]] = []
+    truncated = set(truncated_steps)
     previous_turn = 0
     for turn, text in reasoning_segments:
         if isinstance(turn, bool) or not isinstance(turn, int) or turn <= previous_turn:
@@ -70,7 +72,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
         if not isinstance(text, str):
             raise ValueError("Math reasoning text must be recorded for every supplied step")
         previous_turn = turn
-        audit = _process_reward_audit(text)
+        audit = _process_reward_audit(text, question=question, truncated=turn in truncated)
         record = {
             "turn": turn,
             "step_count": int(audit["step_count"]),
@@ -78,6 +80,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
             "equation_count": int(audit["equation_count"]),
             "verified_equation_count": int(audit["verified_equation_count"]),
             "process_reward": float(audit["process_reward"]),
+            "generation_truncated": turn in truncated,
             "steps": [
                 {**segment, "source_step": turn, "equation_checks": [
                     {**check, "source_step": turn} for check in segment["equation_checks"]
@@ -107,6 +110,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]]) -> Verificatio
         credits=credits,
         audit={
             "verifier": "deepscaler_numeric_equations",
+            "evidence_parser_version": 2,
             "normalization": "mean_over_equation_bearing_policy_steps_including_failures",
             "normalizer": denominator,
             "participating_step_indices": [int(record["turn"]) for record in participating],

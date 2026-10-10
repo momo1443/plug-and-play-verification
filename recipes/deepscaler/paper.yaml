@@ -3,3 +3,4 @@
   reward_mode: ${oc.env:DEEPSCALER_REWARD_MODE,uniform_equation_process}
   em_warmup_steps: ${oc.env:DEEPSCALER_EM_WARMUP_STEPS,50}
   max_steps: ${oc.env:DEEPSCALER_MAX_STEPS,5}
+  final_turn_submission: ${oc.env:DEEPSCALER_FINAL_TURN_SUBMISSION,True}

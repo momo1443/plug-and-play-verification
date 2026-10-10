@@ -19,14 +19,26 @@ CODE_PATHS = (
     "agent_r1/trainer/ppo/core_algos.py",
     "agent_r1/trainer/ppo/ray_trainer.py",
     "agent_r1/trainer/rollout_jsonl.py",
+    "agent_r1/trainer/validation_metrics.py",
+    "agent_r1/trainer/main_agent_rl.py",
+    "agent_r1/workers/engine_workers.py",
+    "verl_patches/attention_padding.py",
     "recipes/reward_mixing.py",
     "scripts/deepscaler/run_deepscaler_a9_uniform.sh",
     "recipes/deepscaler/prepare_run.py",
+    "recipes/deepscaler/prepare_data.py",
+    "recipes/deepscaler/clean_data.py",
+    "recipes/deepscaler/math_expressions.py",
+    "recipes/deepscaler/prepare_training_subset.py",
+    "scripts/deepscaler/run_deepscaler_4b_3gpu.sh",
+    "scripts/deepscaler/run_deepscaler_4b_4gpu.sh",
+    "scripts/deepscaler/eval_aime2025.py",
     "recipes/deepscaler/reward_fn.py",
     "recipes/deepscaler/agent_flow.py",
     "recipes/deepscaler/trajectory_reward.py",
     "recipes/deepscaler/paper.yaml",
     "recipes/deepscaler/prompts.py",
+    "recipes/deepscaler/submission.py",
     "recipes/llm_judge/scoring.py",
     "agent_r1/evaluation/answers.py",
     "agent_r1/evaluation/consistency.py",
@@ -43,7 +55,7 @@ def _sha256(path: Path) -> str:
 
 def _package_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
-    for package in ("ray", "torch", "transformers", "verl", "vllm"):
+    for package in ("ray", "torch", "transformers", "verl", "vllm", "math-verify", "sympy"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -101,7 +113,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "arm": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
         "runtime_profile": "deepscaler_paper",
-        "contract_version": "deepscaler-paper-shared-contract-v6",
+        "contract_version": "deepscaler-paper-shared-contract-v9",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": args.status,
         "output_dir": str(output_dir),
@@ -143,6 +155,12 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "max_tokens_per_turn": (args.max_response_length + args.max_agent_steps - 1) // args.max_agent_steps,
             "interaction": "reasoning_continuation_without_correctness_feedback",
             "verification_timing": "after_rollout",
+            "submission_boundary": "outside_thinking_and_unquoted; prompt-open thinking requires closing tag",
+            "final_turn_submission": os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true",
+            "thinking_policy": "default for reasoning turns; enable_thinking=False on final submission turn when enabled",
+            "final_answer_prefill": r"\boxed{" if os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true" else None,
+            "submission_stopping": "first balanced outer box; whole sampled tokens retained; generated suffix counted in budget",
+            "continuation_policy": "advance existing derivation; recheck only a specific inconsistency; penultimate turn prepares submission",
             "total_training_steps": args.total_training_steps,
             "resume_global_step": resume_global_step,
             "save_freq": args.save_freq,

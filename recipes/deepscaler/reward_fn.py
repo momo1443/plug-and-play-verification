@@ -6,12 +6,12 @@ Schedule (controlled by DEEPSCALER_EM_WARMUP_STEPS, default 50):
                        reward = w * EM + (1-w) * process_reward
 
 Process reward:
-  Splits the solution into reasoning steps and verifies every extracted
-  numeric equation in every step. Each step receives the fraction of its
-  equations that verify; a step without a verifiable equation receives zero.
+  Checks supported, asserted numeric equalities in every reasoning turn.
+  Unsupported or ambiguous contexts are excluded; real arithmetic failures
+  remain in the denominator. A turn without evidence receives zero credit.
 
     step_reward = (# verified equations) / (# extracted equations)
-    process_reward = mean(step_reward over all reasoning steps)
+    process_reward = mean(step_reward over equation-bearing reasoning segments)
 
   Trivial literal identities such as ``1 = 1`` do not receive credit. This
   prevents one unrelated tautology from making an otherwise invalid step pass.
@@ -21,6 +21,7 @@ Process reward:
 
 from __future__ import annotations
 
+import ast
 import math
 import os
 import re
@@ -77,31 +78,46 @@ def _split_into_steps(text: str) -> list[str]:
 
 
 def _clean_lhs(lhs: str) -> str:
-    """Remove leading non-math text from LHS of equation."""
-    # Keep the expression after prose/list separators when several equations
-    # share one line (for example, "... 2+3=5 and 4+4=8").
-    lhs = re.split(r"\b(?:and|then|next)\b|[,;:]", lhs, flags=re.IGNORECASE)[-1]
-    # Plain-text model outputs often prefix an equation with a step marker.
-    lhs = re.sub(r"^\s*(?:Step\s+\d+\s*[:.]|\d+[.)])\s*", "", lhs, flags=re.IGNORECASE)
-    # Remove common prefixes like "First,", "Then,", "So,", "Therefore,"
-    lhs = re.sub(r"^(?:First|Then|Next|Finally|So|Therefore|Thus|Hence)[,\s]+", "", lhs, flags=re.IGNORECASE)
-    # Drop a remaining prose prefix before the first numeric/LaTeX token.
-    token = re.search(r"(?:\\[A-Za-z]+|[0-9])", lhs)
-    if token is not None:
-        lhs = lhs[token.start() :]
-    # Remove trailing dots from RHS
+    """Remove presentation prefixes, never search prose for a numeric suffix.
+
+    Searching for the first digit changed ``Day 2`` into ``2`` and discarded
+    operators in expressions such as ``20% of 100``. Unknown labels stay
+    unsupported; the arithmetic later in an equality chain is still checked.
+    """
+    from recipes.deepscaler.math_expressions import normalize_thousands
+    lhs = re.sub(r"\\?\$", "", normalize_thousands(lhs)).strip()
+    lhs = re.sub(
+        r"^\s*(?:Step\s+\d+\s*[:.]|\d+(?:\.(?!\d)|\)))\s*",
+        "", lhs, flags=re.IGNORECASE,
+    )
+    lhs = re.sub(
+        r"^(?:Check(?: the arithmetic)?|Rechecked|Continue with|Calculation(?: check)?|Compute|Calculate|Verify|"
+        r"We (?:compute|calculate|verify)|First|Then|Next|Finally|So|Therefore|Thus|Hence)[,\s]+", "", lhs, flags=re.I,
+    )
     return lhs.strip()
 
 
 def _clean_rhs(rhs: str) -> str:
     """Remove trailing noise from RHS."""
-    rhs = re.split(r"\b(?:and|then|next)\b|[,;]", rhs, maxsplit=1, flags=re.IGNORECASE)[0]
+    from recipes.deepscaler.math_expressions import normalize_thousands, split_top_level
+    rhs = normalize_thousands(rhs).strip()
+    rhs = re.sub(r"^(?:\\?\$)+", "", rhs)
+    # A closing inline delimiter terminates this expression. A leading dollar
+    # sign above is a presentation/currency prefix, not an empty expression.
+    rhs = re.split(r"(?<!\\)\$", rhs, maxsplit=1)[0]
+    rhs = re.split(r"(?<!\.)\.(?=\s+[A-Za-z])", rhs, maxsplit=1)[0]
+    rhs = split_top_level(rhs, ",;")[0]
+    rhs = re.split(r"\b(?:and|then|next)\b", rhs, maxsplit=1, flags=re.IGNORECASE)[0]
     # Remove trailing period/comma
-    rhs = rhs.rstrip(".,;")
+    if not rhs.rstrip().endswith(("...", "…")):
+        rhs = rhs.rstrip(".,;")
     return rhs.strip()
 
 
-def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
+def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
+                               truncated: bool = False, exclude_pi: bool = False,
+                               excluded: list[dict] | None = None,
+                               prior_context: str = "") -> list[tuple[str, str]]:
     """Extract (lhs, rhs) pairs that look like purely numeric equations.
 
     Only extracts equations where both sides appear to be numeric
@@ -110,11 +126,25 @@ def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
     """
     equations: list[tuple[str, str]] = []
     seen: set[str] = set()
+    digit_display_context = False
+
+    def _exclude(lhs, rhs, reason):
+        if excluded is not None:
+            excluded.append({"lhs": lhs, "rhs": rhs, "reason": reason})
 
     def _try_add(lhs: str, rhs: str) -> None:
+        if exclude_star and re.search(r"\*|×", lhs + rhs):
+            return
+        if exclude_pi and re.search(r"\\pi\b|\bpi\b", lhs + rhs):
+            _exclude(lhs, rhs, "pi_used_as_a_variable")
+            return
         lhs = _clean_lhs(lhs)
         rhs = _clean_rhs(rhs)
         if not lhs or not rhs:
+            return
+        if lhs.startswith("+") or (re.search(r"(?:\*|\\times)\s*100\s*$", lhs) and "%" in rhs):
+            # Running-total fragments (+7=42) and percentage display shortcuts
+            # are not complete mathematical equalities.
             return
         # Quick check: both sides should have at least one digit
         if not re.search(r"\d", lhs) and not re.search(r"\d", rhs):
@@ -122,206 +152,148 @@ def _extract_numeric_equations(step_text: str) -> list[tuple[str, str]]:
         # Both sides should be purely numeric expressions
         # (no single-letter variables that would remain unresolved)
         if _is_numeric_expr(lhs) and _is_numeric_expr(rhs):
+            from recipes.deepscaler.math_expressions import evaluate, numerically_equal
+            a, b = evaluate(_latex_to_python(lhs)), evaluate(_latex_to_python(rhs))
+            if (digit_display_context and a is not None and b is not None
+                    and a == int(a) and b == int(b) and 0 <= b <= 9
+                    and a != b and int(a) % 10 == int(b)):
+                _exclude(lhs, rhs, "units_digit_display")
+                return
+            if ("%" in rhs and "%" not in lhs and a is not None and b is not None
+                    and numerically_equal(a, b * 100)):
+                _exclude(lhs, rhs, "percentage_display_without_lhs_units")
+                return
+            if _is_rounded_display(lhs, rhs):
+                _exclude(lhs, rhs, "rounded_decimal_display")
+                return
+            # A repeated literal is neither new process evidence nor a failed
+            # arithmetic check. Incorrect literal equalities still fail.
+            if _is_trivial_literal_identity(lhs, rhs) and _safe_eval(_latex_to_python(lhs)) == _safe_eval(_latex_to_python(rhs)):
+                return
             key = f"{lhs}={rhs}"
             if key not in seen:
                 seen.add(key)
                 equations.append((lhs, rhs))
 
-    # 1. Extract from $$...$$ blocks
-    for m in re.finditer(r"\$\$(.+?)\$\$", step_text, re.DOTALL):
-        _extract_eqs_from_text(m.group(1), _try_add)
-
-    # 2. Extract from $...$ blocks
-    for m in re.finditer(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)", step_text):
-        _extract_eqs_from_text(m.group(1), _try_add)
-
-    # 3. Plain-text equations after removing LaTeX blocks already handled above.
-    plain_text = re.sub(r"\$\$.*?\$\$|(?<!\$)\$(?!\$).*?(?<!\$)\$(?!\$)", " ", step_text, flags=re.DOTALL)
-    for line in plain_text.split("\n"):
+    # Keep expressions spanning several inline math/currency blocks intact:
+    # ``20% of $100 = 20$`` and ``$135 - $105 = $30`` must not lose their LHS.
+    lines = step_text.splitlines()
+    context_lines = prior_context.splitlines()[-3:] + lines
+    context_offset = len(context_lines) - len(lines)
+    last_nonempty = max((i for i, line in enumerate(lines) if line.strip()), default=-1)
+    running_total = False
+    for index, line in enumerate(lines):
         line = line.strip()
         if not line:
             continue
-        _extract_eqs_from_text(line, _try_add)
+        line = re.sub(r"^(?:[-*•]\s+)", "", line)
+        digit_display_context = bool(re.search(
+            r"(?:units|last|ones)[ -]+digits?|possible ends|ends? (?:in|for|with)",
+            "\n".join(context_lines[max(0, context_offset + index - 3):context_offset + index + 1]), re.I,
+        ))
+        bare_line = re.sub(r"\\?\$", "", line).strip()
+        continuation = re.fullmatch(r"\s*[+-]\s*\d+(?:\.\d+)?\s*=\s*[+-]?\d+(?:\.\d+)?\s*[.]?", bare_line)
+        if continuation and running_total:
+            _exclude(bare_line.split("=", 1)[0], bare_line.split("=", 1)[1],
+                     "running_total_requires_previous_value")
+            continue
+        parts = bare_line.split("=")
+        running_total = (len(parts) == 2 and _is_numeric_expr(_clean_lhs(parts[0]))
+                         and _is_numeric_expr(_clean_rhs(parts[1]))
+                         and bool(re.search(r"\d\s*[+*/-]|\\(?:times|cdot)", parts[0])))
+        unfinished = (truncated and index == last_nonempty
+                      and not re.search(r"(?:\$|</think>|(?<!\d)[.!?])\s*$", line))
+        _extract_eqs_from_text(line, _try_add, skip_last=unfinished,
+                              exclude_fn=_exclude)
 
     return equations
 
 
-def _extract_eqs_from_text(text: str, add_fn) -> None:
+def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
+                            exclude_fn=None) -> None:
     """Extract 'LHS = RHS' from a piece of text, calling add_fn for each."""
     # Split on lines first
-    for segment in re.split(r"\\\\|\n|\b(?:and|then|next)\b", text, flags=re.IGNORECASE):
+    from recipes.deepscaler.math_expressions import normalize_thousands, split_top_level
+    segments = re.split(r"\\\\|\n|\b(?:and|then|next)\b", text, flags=re.IGNORECASE)
+    candidates = []
+    for item in segments:
+        # A label before the first equality may end in a colon. A colon on
+        # the RHS (``1=2:(1``) is unsupported notation, not a new equation.
+        equality = item.find("=")
+        if equality >= 0:
+            prefix, suffix = item[:equality], item[equality:]
+            item = split_top_level(prefix, ":")[-1] + suffix
+        pieces = split_top_level(normalize_thousands(item), ",;")
+        for index, piece in enumerate(pieces):
+            # Comma-separated digits are a numeral/list, not several equations.
+            # Signed comma fragments are running totals, not unary assertions.
+            if index and re.search(r"\d", pieces[index - 1]):
+                if "=" not in pieces[index - 1] or re.match(r"\s*[+-]", piece):
+                    if exclude_fn and "=" in piece:
+                        exclude_fn(piece, "", "numeric_list_or_running_total")
+                    continue
+            candidates.append(piece)
+    for segment_index, segment in enumerate(candidates):
         segment = segment.strip()
         if not segment:
             continue
-        # Find single '=' (not ==, !=, <=, >=)
-        # Use lookahead/lookbehind to avoid matching comparison operators
-        matches = re.finditer(r"([^=<>!]+?)\s*(?<!<)(?<!>)(?<!!)=\s*([^=]+)", segment)
-        for m in matches:
-            lhs = m.group(1).strip()
-            rhs = m.group(2).strip()
-            add_fn(lhs, rhs)
+        # Check adjacent expressions in a chain without dropping a later
+        # failure (2+3=5=6). Comparisons are never equality boundaries.
+        # An approximate/congruent expression cannot be the exact RHS. Retain
+        # only exact equalities before the non-equality boundary.
+        segment = re.split(r"\\(?:approx|equiv|sim)\b|≈|≡", segment, maxsplit=1)[0]
+        parts = re.split(r"(?<![=<>!])=(?!=)", segment)
+        for pair_index, (lhs, rhs) in enumerate(zip(parts, parts[1:])):
+            if (pair_index == 1 and re.search(
+                    r"\b(?:for|when|if|case)\s+\$?\s*[A-Za-z]\s*$", parts[0], re.I)
+                    and re.fullmatch(r"\s*\$?\s*[+-]?\d+(?:\.\d+)?\s*\$?\s*", lhs)):
+                # "Total ways for D=5 = 12+24 = 36" labels a case, not an
+                # assertion that the case number equals the computed total.
+                if exclude_fn:
+                    exclude_fn(lhs, rhs, "conditional_label_not_equation")
+                continue
+            if skip_last and segment_index == len(candidates) - 1 and pair_index == len(parts) - 2:
+                if exclude_fn:
+                    exclude_fn(lhs, rhs, "generation_truncated_before_equation_end")
+                continue
+            add_fn(lhs.strip(), rhs.strip())
+
+
+def _is_rounded_display(lhs: str, rhs: str) -> bool:
+    """Exclude plausible rounding, without awarding it exact-equality credit."""
+    from recipes.deepscaler.math_expressions import evaluate, numerically_equal
+    match = re.fullmatch(r"[+-]?\d*\.(\d{2,12})\s*(?:\\?%)?", rhs.strip())
+    if match is None:
+        return False
+    a, b = evaluate(_latex_to_python(lhs)), evaluate(_latex_to_python(rhs))
+    if a is None or b is None or numerically_equal(a, b):
+        return False
+    unit = 10.0 ** -len(match[1]) / (100 if "%" in rhs else 1)
+    try:
+        # Both rounding and truncation are common display conventions. Neither
+        # earns exact credit when its literal value differs from the LHS.
+        return abs(float(a) - float(b)) < unit + 1e-12
+    except (ValueError, OverflowError):
+        return False
 
 
 def _is_numeric_expr(expr: str) -> bool:
-    """Check if an expression appears to be purely numeric (no variables).
-
-    After LaTeX cleanup, a numeric expression should contain only:
-    digits, operators (+-*/), parentheses, dots, spaces, and known functions.
-    """
-    # Remove LaTeX math commands
-    cleaned = expr
-    for func in [
-        "\\sqrt",
-        "\\frac",
-        "\\sin",
-        "\\cos",
-        "\\tan",
-        "\\log",
-        "\\ln",
-        "\\exp",
-        "\\abs",
-        "\\pi",
-        "\\cdot",
-        "\\times",
-        "\\div",
-        "\\left",
-        "\\right",
-        "\\lfloor",
-        "\\rfloor",
-        "\\lceil",
-        "\\rceil",
-        "\\infty",
-    ]:
-        cleaned = cleaned.replace(func, "")
-    # Remove remaining LaTeX commands
-    cleaned = re.sub(r"\\[a-zA-Z]+", "", cleaned)
-    # Remove braces/brackets
-    cleaned = cleaned.replace("{", "").replace("}", "")
-    cleaned = cleaned.replace("[", "").replace("]", "")
-    cleaned = cleaned.replace("(", "").replace(")", "")
-    # Remove digits, operators, spaces, dots, commas
-    cleaned = re.sub(r"[\d+\-*/^.,\s]", "", cleaned)
-    # If anything remains, it's likely a variable name
-    # Allow common math symbols
-    cleaned = cleaned.replace("=", "").replace("!", "").replace(">", "").replace("<", "")
-    # After all removals, if there are alphabetic characters left,
-    # they're likely variable names -> not purely numeric
-    return not re.search(r"[a-zA-Z]", cleaned)
+    from recipes.deepscaler.math_expressions import numeric_tree, evaluation
+    converted = _latex_to_python(expr)
+    return converted is not None and numeric_tree(converted) is not None and evaluation(converted)[1] != 'limit'
 
 
 # ── Safe expression evaluation ────────────────────────────────────
 
 
 def _latex_to_python(expr: str) -> str | None:
-    """Convert a LaTeX math expression to a Python-evaluable string."""
-    if not expr or not expr.strip():
-        return None
-
-    s = expr.strip()
-
-    # Non-ASCII multiplication sign (U+00D7) -> *
-    s = s.replace("×", "*")
-    # Repeating decimals require exact semantics. Fail closed instead of
-    # silently changing 0.\overline{6} into 0.6.
-    if r"\overline" in s:
-        return None
-
-    # Support literal integer binomial coefficients exactly. Symbolic or
-    # malformed binomials remain unsupported and fail closed below.
-    def _replace_binomial(match: re.Match[str]) -> str:
-        n = int(match.group(1))
-        k = int(match.group(2))
-        if n < 0 or k < 0 or k > n:
-            raise ValueError("invalid binomial coefficient")
-        return str(math.comb(n, k))
-
-    try:
-        s = re.sub(
-            r"\\binom\{\s*([+-]?\d+)\s*\}\{\s*([+-]?\d+)\s*\}",
-            _replace_binomial,
-            s,
-        )
-    except ValueError:
-        return None
-    if r"\binom" in s:
-        return None
-    # LaTeX -> Python replacements (order matters)
-    s = s.replace("\\left", "").replace("\\right", "")
-    s = s.replace("\\{", "(").replace("\\}", ")")
-    s = s.replace("\\(", "(").replace("\\)", ")")
-    s = s.replace("\\times", "*")
-    s = s.replace("\\div", "/")
-    s = s.replace("\\cdot", "*")
-    s = s.replace("\\pi", "pi")
-    s = s.replace("\\infty", "inf")
-    s = s.replace("\\sqrt", "sqrt")
-    s = s.replace("\\ln", "log")
-    s = s.replace("\\log", "log")
-    s = s.replace("\\exp", "exp")
-    s = s.replace("\\sin", "sin")
-    s = s.replace("\\cos", "cos")
-    s = s.replace("\\tan", "tan")
-    s = s.replace("\\abs", "abs")
-    # \frac{a}{b} -> (a)/(b)
-    s = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
-    # Remove remaining LaTeX commands
-    s = re.sub(r"\\[a-zA-Z]+", "", s)
-    # Braces -> parens
-    s = s.replace("{", "(").replace("}", ")")
-    s = s.replace("[", "(").replace("]", ")")
-    # ^ -> **
-    s = s.replace("^", "**")
-    # Remove formatting spaces
-    s = s.replace("\\,", "").replace("\\;", "").replace("\\!", "")
-    s = s.replace("\\ ", " ").replace("~", " ")
-    # Remove \text{...} etc
-    s = re.sub(r"\\text\{[^}]*\}", "", s)
-    s = re.sub(r"\\mathrm\{[^}]*\}", "", s)
-    # Implicit multiplication (order matters):
-    # 1) digit directly before letter: 2pi -> 2*pi
-    s = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", s)
-    # 2) digit followed by optional whitespace then '(': 6 ( -> 6*(, 3( -> 3*(
-    s = re.sub(r"(\d)\s*\(", r"\1*(", s)
-    # 3) ')' followed by optional whitespace then digit: )2 -> )*2
-    s = re.sub(r"\)\s*(\d)", r")*\1", s)
-    # 4) ')' followed by optional whitespace then '(': ) ( -> )*(
-    s = re.sub(r"\)\s*\(", r")*(", s)
-    # 5) ')' followed by optional whitespace then letter: )pi -> )*pi
-    s = re.sub(r"\)\s*([a-zA-Z])", r")*\1", s)
-
-    return s.strip() or None
+    from recipes.deepscaler.math_expressions import latex_to_python
+    return latex_to_python(expr)
 
 
-def _safe_eval(expr_str: str) -> float | None:
-    """Safely evaluate a Python math expression to a float."""
-    if not expr_str:
-        return None
-
-    safe_ns = {
-        "__builtins__": {},
-        "sqrt": math.sqrt,
-        "pi": math.pi,
-        "e": math.e,
-        "abs": abs,
-        "sin": math.sin,
-        "cos": math.cos,
-        "tan": math.tan,
-        "log": math.log,
-        "ln": math.log,
-        "exp": math.exp,
-        "inf": float("inf"),
-        "floor": math.floor,
-        "ceil": math.ceil,
-        "factorial": math.factorial,
-    }
-
-    try:
-        result = eval(expr_str, safe_ns, {})  # noqa: S307
-        if isinstance(result, (int, float)) and math.isfinite(result):
-            return float(result)
-        return None
-    except Exception:
-        return None
+def _safe_eval(expr_str: str):
+    from recipes.deepscaler.math_expressions import evaluate
+    return evaluate(expr_str) if expr_str else None
 
 
 _NUMERIC_LITERAL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
@@ -335,36 +307,17 @@ def _is_trivial_literal_identity(lhs_str: str, rhs_str: str) -> bool:
 
 
 def _verify_equation_pair(lhs_str: str, rhs_str: str) -> bool:
-    """Check if LHS = RHS is numerically true after LaTeX conversion."""
+    from recipes.deepscaler.math_expressions import numerically_equal
     if _is_trivial_literal_identity(lhs_str, rhs_str):
         return False
-
-    lhs_py = _latex_to_python(lhs_str)
-    rhs_py = _latex_to_python(rhs_str)
-
-    if lhs_py is None or rhs_py is None:
-        return False
-
-    lhs_val = _safe_eval(lhs_py)
-    rhs_val = _safe_eval(rhs_py)
-
-    if lhs_val is None or rhs_val is None:
-        return False
-
-    if lhs_val == rhs_val:
-        return True
-
-    try:
-        denom = max(abs(lhs_val), abs(rhs_val), 1e-10)
-        return abs(lhs_val - rhs_val) / denom < 1e-6
-    except (ZeroDivisionError, OverflowError):
-        return False
+    lhs, rhs = _latex_to_python(lhs_str), _latex_to_python(rhs_str)
+    return numerically_equal(_safe_eval(lhs), _safe_eval(rhs))
 
 
 # ── Process reward computation ────────────────────────────────────
 
 
-def _process_reward_audit(solution_str: str) -> dict[str, Any]:
+def _process_reward_audit(solution_str: str, *, question: str = "", truncated: bool = False) -> dict[str, Any]:
     """Verify each reasoning step and retain equation-level audit details.
 
     Only steps that contain at least one numeric equation participate in
@@ -376,9 +329,24 @@ def _process_reward_audit(solution_str: str) -> dict[str, Any]:
     step_audits: list[dict[str, Any]] = []
     total_equations = 0
     verified_equations = 0
+    modular_context = bool(re.search(r"\\(?:pmod|bmod)\b|\bmod(?:ulo)?\s+\d+|\bmodular\b", solution_str, re.I))
+    custom_star = bool(re.search(r"(?:\*|×).{0,80}\b(?:means|defined|denotes)\b", question, re.I | re.S))
+    pi_variable = bool(re.search(r"\b(?:probability|let|denote)\b[^\n.]{0,60}(?:\\pi\b|\bpi\b)\s*=", solution_str, re.I))
 
     for index, step in enumerate(steps, start=1):
-        equations = _extract_numeric_equations(step)
+        exclusion = ("modular_arithmetic_context" if modular_context else
+                     "quotient_and_remainder_context" if re.search(r"\b(?:remainder|rem)\b", step, re.I) else
+                     "refuted_equality_context" if re.search(r"\bis false\b|\bcontradiction\b", step, re.I) else
+                     "unit_conversion_context" if re.search(r"\bcents\b", step, re.I) else
+                     "rounded_or_approximate_context" if re.search(r"\b(?:rounded|approximately|approximation)\b", step, re.I) else None)
+        excluded_equations: list[dict] = []
+        equations = [] if exclusion else _extract_numeric_equations(
+            step, exclude_star=custom_star, exclude_pi=pi_variable,
+            truncated=(truncated and index == len(steps)
+                       and solution_str.rstrip().endswith(step.rstrip())),
+            excluded=excluded_equations,
+            prior_context="\n".join(steps[max(0, index - 3):index - 1]),
+        )
         equation_results = [_verify_equation_pair(lhs, rhs) for lhs, rhs in equations]
         step_verified = sum(equation_results)
         step_total = len(equations)
@@ -388,6 +356,9 @@ def _process_reward_audit(solution_str: str) -> dict[str, Any]:
         step_audits.append(
             {
                 "step_index": index,
+                "context_exclusion": exclusion,
+                "custom_star_excluded": custom_star,
+                "excluded_equations": excluded_equations,
                 "equation_count": step_total,
                 "verified_equation_count": step_verified,
                 "step_reward": step_reward,
@@ -432,20 +403,10 @@ def compute_process_reward(solution_str: str) -> tuple[float, int, int]:
 
 
 def compute_terminal_em(solution_str: str, ground_truth: str) -> float:
+    from recipes.deepscaler.math_expressions import answers_equal
     final = final_answer_record(solution_str)
-    if final is None or ground_truth is None:
-        return 0.0
-    answer = str(final["answer"]).strip()
-    if answer == str(ground_truth).strip():
-        return 1.0
-    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", answer) and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", str(ground_truth).strip()):
-        from decimal import Decimal
-        return float(Decimal(answer) == Decimal(str(ground_truth).strip()))
-    from verl.utils.reward_score import math_reward
-    try:
-        return float(math_reward.is_equiv(answer, str(ground_truth)))
-    except (ValueError, TypeError):
-        return 0.0
+    return float(final is not None and ground_truth is not None and
+                 answers_equal(str(final["answer"]), str(ground_truth)))
 
 
 
@@ -483,13 +444,15 @@ def compute_score(
     reasoning = str(final["reasoning"]) if final else solution_str
     verification = verify_process([(1, reasoning)])
     global_step = int(extra_info.get("_agent_r1_global_step", os.environ.get(_ENV_GLOBAL_STEP, "0")))
+    is_validation = bool(extra_info.get("_agent_r1_is_validation", False))
     result = compute_tool_trajectory_reward(
         reward_mode="uniform_equation_process",
         final_response=solution_str if final else None, ground_truth=ground_truth,
         reasoning_segments=[(1, reasoning)], global_step=global_step,
-        is_validation=bool(extra_info.get("_agent_r1_is_validation", False)),
+        is_validation=is_validation,
         em_warmup_steps=EM_WARMUP_STEPS,
-        prompt_group_key=prompt_group_key_from_extra_info(extra_info, data_source=data_source),
+        prompt_group_key=(prompt_group_key_from_extra_info(extra_info, data_source=data_source)
+                          if global_step > EM_WARMUP_STEPS and not is_validation else None),
         process_verification=verification,
     )
     return {
