@@ -19,6 +19,10 @@ import os
 from functools import partial
 from itertools import chain
 
+from verl_patches.attention_padding import install_attention_padding
+
+install_attention_padding()
+
 import torch
 from codetiming import Timer
 from tensordict import NonTensorData, TensorDict

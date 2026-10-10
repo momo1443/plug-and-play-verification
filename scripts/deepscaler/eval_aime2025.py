@@ -12,6 +12,7 @@ Computes exact-match accuracy on AIME 2025 (I+II, 30 problems) using greedy deco
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ from agent_r1.evaluation.consistency import consistency_record
 from agent_r1.evaluation.summarize import summarize
 from recipes.deepscaler.trajectory_reward import verify_process
 from recipes.deepscaler.prompts import build_math_messages, math_continuation_message
+from recipes.deepscaler.submission import FINAL_ANSWER_PREFIX, prefilled_final_record, prefilled_box_end
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +32,7 @@ from recipes.deepscaler.prompts import build_math_messages, math_continuation_me
 
 def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *,
                            max_steps=5, max_tokens=4096, max_model_length=8192,
-                           max_prompt_length=2048):
+                           max_prompt_length=2048, final_turn_submission=True):
     """Batch active trajectories; share the training prompt and total token budget."""
     if max_steps < 1 or max_tokens < 1:
         raise ValueError("Math turn count and total token budget must be positive")
@@ -38,7 +40,7 @@ def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *
     states = []
     for question in questions:
         initial_ids = tokenizer.apply_chat_template(question, tokenize=True,
-            add_generation_prompt=True, enable_thinking=False)
+            add_generation_prompt=True, return_dict=False)
         if len(initial_ids) > max_prompt_length:
             raise ValueError("Math evaluation prompt exceeds the configured input limit")
         states.append({"messages": build_math_messages(question, max_steps), "responses": [],
@@ -46,13 +48,19 @@ def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *
                        "termination_reason": "max_steps"})
     active = list(range(len(states)))
     for turn in range(1, max_steps + 1):
+        submission_turn = final_turn_submission and max_steps > 1 and turn == max_steps
         groups = {}
         for index in active:
             state = states[index]
+            template_options = ({"enable_thinking": False}
+                                if final_turn_submission and max_steps > 1 and turn == max_steps else {})
             prompt = tokenizer.apply_chat_template(state["messages"], tokenize=False,
-                add_generation_prompt=True, enable_thinking=False)
+                add_generation_prompt=True, **template_options)
             prompt_ids = tokenizer.apply_chat_template(state["messages"], tokenize=True,
-                add_generation_prompt=True, enable_thinking=False)
+                add_generation_prompt=True, return_dict=False, **template_options)
+            if submission_turn:
+                prompt += FINAL_ANSWER_PREFIX
+                prompt_ids += tokenizer.encode(FINAL_ANSWER_PREFIX, add_special_tokens=False)
             remaining = max_tokens - state["response_tokens"]
             limit = min(remaining, turn_token_limit, max_model_length - len(prompt_ids))
             if limit <= 0:
@@ -66,7 +74,7 @@ def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *
             outputs = llm.generate([prompt for _, prompt in requests], params)
             if len(outputs) != len(requests):
                 raise RuntimeError("Generation count differs from the evaluation denominator")
-            for (index, _), output in zip(requests, outputs):
+            for (index, prompt), output in zip(requests, outputs):
                 state = states[index]
                 candidate = output.outputs[0]
                 ids = list(candidate.token_ids[:limit])
@@ -75,15 +83,21 @@ def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *
                     continue
                 state["response_tokens"] += len(ids)
                 response = tokenizer.decode(ids, skip_special_tokens=True)
-                final = final_answer_record(response)
+                final = (prefilled_final_record(response) if submission_turn else
+                         final_answer_record(response, require_think_close=bool(re.search(r"<think>\s*$", prompt))))
+                if submission_turn and final:
+                    response = FINAL_ANSWER_PREFIX + response[:prefilled_box_end(response)]
                 state["responses"].append(response)
-                state["reasoning_segments"].append((turn, str(final["reasoning"]) if final else response))
+                state["reasoning_segments"].append((turn, "" if submission_turn else str(final["reasoning"]) if final else response))
                 if final is not None:
                     state["final_response"] = response
                     state["termination_reason"] = "final_answer"
                     continue
                 state["messages"].append({"role": "assistant", "content": response})
-                state["messages"].append(math_continuation_message(final_turn=turn + 1 == max_steps))
+                state["messages"].append(math_continuation_message(
+                    final_turn=turn + 1 == max_steps, submission_only=final_turn_submission,
+                    max_output_tokens=min(turn_token_limit, max_tokens-state["response_tokens"]),
+                    prepare_submission=final_turn_submission and turn + 1 == max_steps - 1))
                 next_active.append(index)
         active = next_active
         if not active:
@@ -111,6 +125,7 @@ def main():
     max_tokens = int(os.environ.get("DEEPSCALER_MAX_RESPONSE_LENGTH",
         os.environ.get("MAX_RESPONSE_LENGTH", "5120" if scale == "9b" else "4096")))
     max_steps = int(os.environ.get("DEEPSCALER_MAX_STEPS", "5"))
+    final_turn_submission = os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true"
     max_model_length = int(os.environ.get("DEEPSCALER_MAX_MODEL_LENGTH",
         str(max(8192, 2048 + max_tokens + 1024))))
 
@@ -154,7 +169,8 @@ def main():
     print(f"Generating up to {max_steps} turns with {max_tokens} total response tokens...")
     t0 = time.time()
     trajectories = generate_math_rollouts(llm, tokenizer, SamplingParams, questions,
-        max_steps=max_steps, max_tokens=max_tokens, max_model_length=max_model_length)
+        max_steps=max_steps, max_tokens=max_tokens, max_model_length=max_model_length,
+        final_turn_submission=final_turn_submission)
     elapsed = time.time() - t0
     print(f"Generation done in {elapsed:.1f}s")
 
@@ -172,7 +188,8 @@ def main():
         correct += int(is_correct)
 
         final = final_answer_record(response)
-        verification = verify_process(trajectory["reasoning_segments"])
+        question_text = "\n".join(str(m['content']) for m in questions[i] if m['role']=='user')
+        verification = verify_process(trajectory["reasoning_segments"], question=question_text)
         results.append({
             **consistency_record(verification, float(is_correct), eligible=final is not None),
             "index": i,

@@ -12,6 +12,8 @@ from agent_r1.evaluation.answers import final_answer_record, score_aime
 from agent_r1.evaluation.consistency import consistency_record
 from recipes.deepscaler.prepare_run import build_manifest
 from recipes.deepscaler.prompts import build_math_messages, math_continuation_message
+from recipes.deepscaler.submission import FINAL_ANSWER_PREFIX, generate_prefilled_submission, prefilled_final_record, prefilled_box_end
+from verl.utils.tokenizer import normalize_token_ids
 from recipes.deepscaler.trajectory_reward import compute_tool_trajectory_reward, verify_process
 from test_process_judge_flows import FakeJudge, load_source
 
@@ -24,15 +26,25 @@ class Tokenizer:
     def __init__(self):
         self.responses = {}
         self.histories = []
+        self.template_options = []
 
     def apply_chat_template(self, messages, *, tokenize=True, **kwargs):
         self.histories.append(copy.deepcopy(messages))
+        self.template_options.append(dict(kwargs))
         if not tokenize:
             return repr(messages)
         return list(range(10 + 5 * len(messages)))
 
     def decode(self, ids, **kwargs):
+        if ids[0] not in self.responses:
+            if self.template_options[-1].get('enable_thinking') is False:
+                return '</think>\n\n'
+            return getattr(self, 'prompt_tail', '')
         return self.responses[ids[0]]
+
+    def encode(self, text, **kwargs):
+        assert text == FINAL_ANSWER_PREFIX
+        return [9000, 9001, 9002]
 
 
 class Generator:
@@ -45,8 +57,12 @@ class Generator:
     async def generate(self, **kwargs):
         index = len(self.calls)
         self.calls.append(copy.deepcopy(kwargs))
-        self.tokenizer.responses[index + 100] = self.texts[index]
-        size = min(self.sizes[index], kwargs["sampling_params"]["max_tokens"])
+        source_index = min(index, len(self.texts) - 1)
+        text = self.texts[source_index]
+        if 9000 in kwargs['prompt_ids'] and text.startswith(FINAL_ANSWER_PREFIX):
+            text = text[len(FINAL_ANSWER_PREFIX):]
+        self.tokenizer.responses[index + 100] = text
+        size = min(self.sizes[source_index], kwargs["sampling_params"]["max_tokens"])
         return SimpleNamespace(token_ids=[index + 100] * size,
                                log_probs=[-0.25] * size, routed_experts=None)
 
@@ -54,18 +70,22 @@ class Generator:
 class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
     async def run_flow(self, texts, *, mode="uniform_equation_process", turns=5,
                        budget=4096, sizes=None, context=8192, update=51,
-                       validation=False, gold="5"):
+                       validation=False, gold="5", implicit_thinking=False,
+                       final_turn_submission=True):
         module = load_source("recipes/deepscaler/agent_flow.py",
             final_answer_record=final_answer_record, verify_process=verify_process,
             compute_tool_trajectory_reward=compute_tool_trajectory_reward,
-            build_math_messages=build_math_messages, math_continuation_message=math_continuation_message)
+            build_math_messages=build_math_messages, math_continuation_message=math_continuation_message,
+            FINAL_ANSWER_PREFIX=FINAL_ANSWER_PREFIX, generate_prefilled_submission=generate_prefilled_submission,
+            prefilled_final_record=prefilled_final_record, normalize_token_ids=normalize_token_ids)
         flow = object.__new__(module.DeepScaleRPaperAgentFlow)
         tokenizer = Tokenizer()
+        tokenizer.prompt_tail = '<think>\n' if implicit_thinking else ''
         generator = Generator(tokenizer, texts, sizes)
         generator.verification_call_counts = []
-        def verify_after_rollout(segments):
+        def verify_after_rollout(segments, **kwargs):
             generator.verification_call_counts.append(len(generator.calls))
-            return verify_process(segments)
+            return verify_process(segments, **kwargs)
         module.verify_process = verify_after_rollout
         flow.server_manager = generator
         flow.tokenizer = tokenizer
@@ -76,22 +96,37 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         flow.initial_prompt_length = 2048
         flow.context_length = context
         flow.em_warmup_steps = 50
+        flow.final_turn_submission = final_turn_submission
+        flow.apply_chat_template_kwargs = {}
         flow.judge_server = FakeJudge()
 
         async def template(messages):
-            return tokenizer.apply_chat_template(messages)
+            return tokenizer.apply_chat_template(messages, **flow.apply_chat_template_kwargs)
         flow.apply_chat_template = template
         output = await flow.run({"temperature": .7}, raw_prompt=QUESTION,
             reward_model={"ground_truth": gold}, extra_info={"index": 1, "split": "train"},
             _agent_r1_global_step=update, _agent_r1_is_validation=validation)
         return output, generator, tokenizer, flow.judge_server
 
+    async def test_open_prompt_thinking_requires_visible_final_submission(self):
+        output, gen, _, _ = await self.run_flow([
+            r"Check $2+3=5$. I should write `\boxed{...}`. The answer is 5.",
+            r"Rechecked $2+3=5$.</think>\boxed{5}",
+        ], implicit_thinking=True)
+        self.assertEqual(len(gen.calls), 2)
+        info = output.steps[-1].extra_fields['reward_extra_info']
+        self.assertEqual(info['acc'], 1)
+        self.assertEqual(info['termination_reason'], 'final_answer')
+        self.assertEqual(info['verification_checks'], [1, 1])
+
     async def test_five_turns_backfill_source_credits_and_final_outcome(self):
         output, gen, tokenizer, _ = await self.run_flow([REASONING] * 4 + [r"\boxed{5}"])
         self.assertEqual(len(output.steps), 5)
         self.assertEqual([step.num_turns for step in output.steps], [1, 2, 3, 4, 5])
-        self.assertEqual([call["sampling_params"]["max_tokens"] for call in gen.calls], [820] * 5)
+        self.assertEqual([call["sampling_params"]["max_tokens"] for call in gen.calls], [820] * 4 + [64])
         self.assertEqual(gen.verification_call_counts, [5])
+        self.assertEqual(output.metrics["step_tool_calls"], [0.0] * 5)
+        self.assertEqual(output.metrics["tool_calls"], 0.0)
         info = output.steps[-1].extra_fields["reward_extra_info"]
         self.assertEqual(info["termination_reason"], "final_answer")
         self.assertEqual(info["generated_response_tokens"], 5)
@@ -101,6 +136,49 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(output.steps[-1].reward_score, info["optimizer_terminal_weight"])
         self.assertAlmostEqual(sum(s.reward_score for s in output.steps), 1)
         self.assertIn("last available", tokenizer.histories[-1][-1]["content"])
+
+    async def test_final_submission_turn_closes_thinking_and_keeps_budget(self):
+        output, gen, tokenizer, _ = await self.run_flow(
+            [REASONING] * 4 + [r"\boxed{5}"], implicit_thinking=True,
+            sizes=[820] * 5,
+        )
+        info = output.steps[-1].extra_fields['reward_extra_info']
+        self.assertEqual(info['terminal_em'], 1)
+        self.assertEqual(info['generated_response_tokens'], 3280 + 64)
+        self.assertEqual([c['sampling_params']['max_tokens'] for c in gen.calls], [820]*4+[64])
+        self.assertEqual(info['final_answer_prefill_step'], 5)
+        self.assertEqual(gen.calls[-1]['prompt_ids'][-3:], [9000, 9001, 9002])
+        self.assertNotIn(9000, output.steps[-1].response_ids)
+        self.assertEqual(len(output.steps[-1].response_ids), len(output.steps[-1].response_logprobs))
+        self.assertIn('next turn is reserved', tokenizer.histories[-2][-1]['content'])
+        self.assertEqual(tokenizer.template_options[-1], {'enable_thinking': False})
+        self.assertTrue(all('enable_thinking' not in c for c in tokenizer.template_options[:-1]))
+        self.assertIn('816 output tokens', tokenizer.histories[-1][-1]['content'])
+        self.assertIn('Respond ONLY', tokenizer.histories[-1][-1]['content'])
+
+    async def test_full_thinking_protocol_remains_selectable(self):
+        output, _, tokenizer, _ = await self.run_flow(
+            [REASONING] * 4 + [r"\boxed{5}"], implicit_thinking=True,
+            final_turn_submission=False,
+        )
+        self.assertFalse(output.steps[-1].extra_fields['reward_extra_info']['has_final_answer'])
+        self.assertTrue(all('enable_thinking' not in c for c in tokenizer.template_options))
+
+    async def test_final_prefill_is_shared_by_all_arms_and_does_not_grade_the_answer_as_process(self):
+        prompts = None
+        for mode in ('terminal_only', 'uniform_equation_process', 'llm_judge'):
+            output, gen, _, judge = await self.run_flow([REASONING] * 4 + ['5}'], mode=mode)
+            current = [call['prompt_ids'] for call in gen.calls]
+            if prompts is None:
+                prompts = current
+            self.assertEqual(current, prompts)
+            info = output.steps[-1].extra_fields['reward_extra_info']
+            self.assertEqual(info['terminal_em'], 1)
+            self.assertEqual(info['deterministic_verification']['participating_step_indices'], [1, 2, 3, 4])
+            self.assertEqual(info['final_answer_prefill'], FINAL_ANSWER_PREFIX)
+            self.assertEqual(output.steps[-1].response_ids, [104])
+            if mode == 'llm_judge':
+                self.assertNotIn(FINAL_ANSWER_PREFIX, judge.calls[0][0])
 
     async def test_all_reward_arms_share_prompts_and_stop_on_wrong_final(self):
         histories = None
@@ -125,14 +203,14 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
     async def test_incomplete_keeps_steps_with_zero_reward_and_independent_audits(self):
         for mode in ("terminal_only", "uniform_equation_process", "llm_judge"):
             output, gen, _, _ = await self.run_flow([REASONING] * 5, mode=mode)
-            self.assertEqual(len(gen.calls), 5)
+            self.assertEqual(len(output.steps), 5)
             self.assertEqual(len(output.steps), 5)
             self.assertTrue(all(step.response_ids for step in output.steps))
             self.assertTrue(all(step.reward_score == 0 for step in output.steps))
             info = output.steps[-1].extra_fields["reward_extra_info"]
             self.assertFalse(info["terminal_eligible"])
             self.assertEqual(info["termination_reason"], "max_steps")
-            self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 5)
+            self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
 
     async def test_corrected_equation_gets_new_credit_without_erasing_failed_history(self):
         output, _, _, _ = await self.run_flow([
@@ -141,6 +219,9 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         info = output.steps[-1].extra_fields["reward_extra_info"]
         self.assertEqual(info["acc"], 1)
         self.assertEqual(info["verification_checks"], [0, 1])
+        self.assertEqual(info["verification_passed_check_count"], 1)
+        self.assertEqual(info["verification_failed_check_count"], 1)
+        self.assertEqual(info["deterministic_process_reward"], 0.5)
         self.assertEqual(info["verification_consistency"], 0)
         self.assertEqual(output.steps[0].reward_score, 0)
         self.assertAlmostEqual(output.steps[1].reward_score, info["optimizer_process_weight"] / 2)
@@ -150,11 +231,21 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["normalizer"], 2)
         self.assertEqual(audit["process_segment_audits"][0]["steps"][0]["equation_checks"][0]["source_step"], 1)
 
+    async def test_length_capped_equation_tail_is_not_a_failed_assertion(self):
+        output, _, _, _ = await self.run_flow(
+            ["Check $2+3=6$.\n$37*40=1", r"\boxed{5}"], sizes=[820, 1],
+        )
+        info = output.steps[-1].extra_fields['reward_extra_info']
+        self.assertEqual(info['truncated_policy_steps'], [1])
+        self.assertEqual(info['verification_checks'], [0])
+        self.assertEqual(info['deterministic_verification']['evidence_parser_version'], 2)
+
     async def test_five_full_turns_do_not_multiply_the_total_token_budget(self):
         for budget, cap, last_cap in ((4096, 820, 816), (5120, 1024, 1024)):
-            output, gen, _, _ = await self.run_flow([REASONING] * 4 + [r"\boxed{5}"],
+            output, gen, _, _ = await self.run_flow([REASONING] * 5,
                 budget=budget, sizes=[cap] * 5)
-            self.assertEqual([c["sampling_params"]["max_tokens"] for c in gen.calls], [cap] * 4 + [last_cap])
+            self.assertEqual([c["sampling_params"]["max_tokens"] for c in gen.calls[:4]], [cap] * 4)
+            self.assertEqual(sum(c["sampling_params"]["max_tokens"] for c in gen.calls[4:]), last_cap)
             self.assertEqual(sum(len(step.response_ids) for step in output.steps), budget)
 
     async def test_warmup_and_validation_use_only_final_reward(self):
@@ -163,6 +254,11 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
                 output, _, _, judge = await self.run_flow([REASONING, r"\boxed{5}"],
                     mode=mode, update=update, validation=validation)
                 self.assertEqual([step.reward_score for step in output.steps], [0, 1])
+                info = output.steps[-1].extra_fields["reward_extra_info"]
+                self.assertEqual(info["process_reward"], 0)
+                self.assertEqual(info["deterministic_process_reward"], 1)
+                self.assertEqual(info["verification_passed_check_count"], 1)
+                self.assertEqual(info["verification_failed_check_count"], 0)
                 self.assertFalse(judge.calls)
 
     async def test_one_and_eight_turn_limits(self):
@@ -172,7 +268,8 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokenizer.histories, [QUESTION])
         output, gen, _, _ = await self.run_flow([REASONING] * 7 + [r"\boxed{5}"], turns=8)
         self.assertEqual(len(output.steps), 8)
-        self.assertTrue(all(c["sampling_params"]["max_tokens"] == 512 for c in gen.calls))
+        self.assertTrue(all(c["sampling_params"]["max_tokens"] == 512 for c in gen.calls[:7]))
+        self.assertEqual(gen.calls[-1]['sampling_params']['max_tokens'], 64)
 
     async def test_rounded_partition_never_exceeds_whole_trajectory_budget(self):
         output, gen, _, _ = await self.run_flow([REASONING] * 4, turns=4, budget=10, sizes=[3] * 4)
@@ -199,7 +296,9 @@ class MathEvaluationTest(unittest.TestCase):
     def setUp(self):
         self.module = load_source("scripts/deepscaler/eval_aime2025.py",
             final_answer_record=final_answer_record, build_math_messages=build_math_messages,
-            math_continuation_message=math_continuation_message, AIME_EXTRACTION_VERSION="test")
+            math_continuation_message=math_continuation_message, AIME_EXTRACTION_VERSION="test",
+            FINAL_ANSWER_PREFIX=FINAL_ANSWER_PREFIX, prefilled_final_record=prefilled_final_record,
+            prefilled_box_end=prefilled_box_end)
 
     def test_evaluation_active_batch_keeps_incomplete_denominator_and_total_budget(self):
         tokenizer = Tokenizer()
@@ -234,6 +333,29 @@ class MathEvaluationTest(unittest.TestCase):
         llm = SimpleNamespace(generate=lambda *args: [])
         with self.assertRaisesRegex(RuntimeError, "denominator"):
             self.module.generate_math_rollouts(llm, Tokenizer(), SimpleNamespace, [QUESTION])
+
+    def test_evaluation_matches_training_thinking_and_submission_boundaries(self):
+        class QwenTokenizer(Tokenizer):
+            def apply_chat_template(self, messages, *, tokenize=True, **kwargs):
+                value = super().apply_chat_template(messages, tokenize=tokenize, **kwargs)
+                if tokenize:
+                    return value
+                return ('assistant\n<think>\n\n</think>\n\n'
+                        if kwargs.get('enable_thinking') is False else 'assistant\n<think>\n')
+        tokenizer = QwenTokenizer()
+        calls = []
+        class LLM:
+            def generate(self, prompts, params):
+                i = len(calls); calls.append(prompts)
+                tokenizer.responses[i+100] = ("5}" if i==4 else
+                    "The answer is 5. Still thinking through the calculation.")
+                return [SimpleNamespace(outputs=[SimpleNamespace(token_ids=[i+100]*params.max_tokens)])]
+        states = self.module.generate_math_rollouts(LLM(), tokenizer, SimpleNamespace, [QUESTION])
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(states[0]['final_response'], r"\boxed{5}")
+        self.assertEqual(states[0]['response_tokens'], 4096)
+        self.assertTrue(all(prompt[0].endswith('<think>\n') for prompt in calls[:4]))
+        self.assertTrue(calls[4][0].endswith('</think>\n\n' + FINAL_ANSWER_PREFIX))
 
 
 class MathManifestTest(unittest.TestCase):

@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import unittest
 from collections.abc import Mapping, Sequence

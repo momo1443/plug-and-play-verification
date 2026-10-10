@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 AIME_EXTRACTION_VERSION = "final-answer-v3"
 
 
-def final_answer_record(text: str) -> dict[str, str] | None:
+def final_answer_record(text: str, *, require_think_close: bool = False) -> dict[str, str] | None:
     """Select the last explicit answer; never search the narrative for a gold match.
 
     Balanced boxed expressions, answer tags and explicit answer statements are
@@ -17,25 +17,39 @@ def final_answer_record(text: str) -> dict[str, str] | None:
     an earlier answer. The returned prefix is usable by a process-only judge.
     """
     candidates: list[tuple[int, int, str | None, str]] = []
-    for match in re.finditer(r"\\boxed\s*\{", text):
+    # Thinking can start in the generation prompt and be absent from decoded
+    # output. The math flow supplies that fact independently of any reference.
+    last_close = text.rfind("</think>")
+    if require_think_close and last_close < 0:
+        return None
+    start_offset = last_close + len("</think>") if last_close >= 0 else 0
+    if "<think>" in text[start_offset:]:
+        return None
+    visible = " " * start_offset + text[start_offset:]
+    # Quoted instructions/examples are not submissions. Keep offsets so the
+    # complete reasoning history can still be audited.
+    visible = re.sub(r"```[\s\S]*?```|`[^`\n]*`", lambda m: " " * len(m.group()), visible)
+    for match in re.finditer(r"\\boxed\s*\{", visible):
         depth = 1
         end = match.end()
         while end < len(text) and depth:
             depth += (text[end] == "{") - (text[end] == "}")
             end += 1
         answer = text[match.end():end - 1].strip() if depth == 0 else None
+        if answer is not None and re.fullmatch(r"(?:\.{3}|…|answer|your answer|[?]+)", answer, re.I):
+            answer = None
         candidates.append((match.start(), end, answer, "boxed"))
-    for match in re.finditer(r"<answer>", text, re.IGNORECASE):
+    for match in re.finditer(r"<answer>", visible, re.IGNORECASE):
         closing = re.search(r"</answer>", text[match.end():], re.IGNORECASE)
         end = match.end() + closing.end() if closing else len(text)
         answer = text[match.end():match.end() + closing.start()].strip() if closing else None
         candidates.append((match.start(), end, answer, "answer_tag"))
     for match in re.finditer(
         r"(?:the\s+)?(?:final\s+)?answer\s*(?:is\s*:?|:)\s*([^\n]+)",
-        text, re.IGNORECASE,
+        visible, re.IGNORECASE,
     ):
         candidates.append((match.start(), match.end(), match.group(1).strip().rstrip("."), "verbal"))
-    stripped = text.rstrip()
+    stripped = visible.rstrip()
     scalar = re.search(r"(?m)^[ \t]*([+-]?\d+(?:\.\d+)?)[ \t]*\Z", stripped)
     if scalar:
         candidates.append((scalar.start(), scalar.end(), scalar.group(1), "final_line"))
