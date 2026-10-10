@@ -9,7 +9,7 @@ fi
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
-source "$PROJECT_DIR/scripts/common/model_training.sh"
+source "$PROJECT_DIR/scripts/common/pnp.sh"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
 case "$ARM" in
@@ -53,7 +53,7 @@ if [[ "$ARM" == A8_LR* ]]; then
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
 elif [[ "$ARM" != A8_LR* ]]; then
-    AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/base.yaml"
+    AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/pnp_hotpotqa.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_certificate_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
 else
@@ -62,7 +62,7 @@ else
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa/reward_fn.py"
 fi
 
-agent_r1_paper_profile hotpotqa "${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
+pnp_paper_profile hotpotqa "${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
 case "$RUN_MODE" in
     main)
@@ -123,7 +123,7 @@ export HOTPOTQA_CORPUS_DATA_ROOT="${HOTPOTQA_CORPUS_DATA_ROOT:-$PROJECT_DIR/data
 export HOTPOTQA_EVIDENCE_SIDECAR="${HOTPOTQA_EVIDENCE_SIDECAR:-$HOTPOTQA_CORPUS_DATA_ROOT/hotpotqa_evidence_v1.sqlite3}"
 export HOTPOTQA_EMBEDDING_MODEL="${HOTPOTQA_EMBEDDING_MODEL:-$WORKSPACE_DIR/models/bge-large-en-v1.5}"
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
-agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
+pnp_model_overrides "$HOTPOTQA_MODEL_PATH"
 
 TRAIN_PATH="${HOTPOTQA_TRAIN_PATH:-$HOTPOTQA_DATA_ROOT/train.parquet}"
 VAL_PATH="${HOTPOTQA_VAL_PATH:-$HOTPOTQA_DATA_ROOT/validation.parquet}"

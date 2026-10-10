@@ -7,12 +7,26 @@ files, prepared datasets, and each task's services available. See the
 
 ## Paper training
 
+PNP has a common entrypoint at the repository root:
+
+```bash
+bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
+bash run_pnp.sh hotpotqa --model Qwen3.5-9B --gpus 0,1,2,3,4,5,6,7
+```
+
+Dataset launchers and agent configurations are named `pnp_<dataset>.sh` and
+`pnp_<dataset>.yaml`. Model profiles are `models/Qwen3.5-4B.sh` and
+`models/Qwen3.5-9B.sh`; shared settings are in `common/pnp.sh`.
+The 4B mathematics profile defaults to four GPUs, vLLM memory fraction 0.30,
+32 concurrent sequences, checkpointing every 10 updates, and no periodic evaluation.
+Other task profiles retain their existing GPU requirements; TACO requires eight GPUs.
+
 | Domain | Outcome-only GRPO | Verifier GRPO |
 | --- | --- | --- |
-| DeepScaleR | `bash scripts/deepscaler/run_deepscaler_a1.sh` | `bash scripts/deepscaler/run_deepscaler_a9_uniform.sh` |
-| HotpotQA | `bash scripts/hotpotqa/run_a1.sh` | `bash scripts/hotpotqa/run_a9_uniform.sh` |
-| TACO | `bash scripts/taco/run_a1_terminal.sh` | `bash scripts/taco/run_a9_uniform.sh` |
-| Vision-R1 | `bash scripts/vision_r1/run_a1_terminal.sh` | `bash scripts/vision_r1/run_a9_uniform.sh` |
+| DeepScaleR | `bash scripts/deepscaler/run_deepscaler_a1.sh` | `bash scripts/deepscaler/pnp_deepscaler.sh` |
+| HotpotQA | `bash scripts/hotpotqa/run_a1.sh` | `bash scripts/hotpotqa/pnp_hotpotqa.sh` |
+| TACO | `bash scripts/taco/run_a1_terminal.sh` | `bash scripts/taco/pnp_taco.sh` |
+| Vision-R1 | `bash scripts/vision_r1/run_a1_terminal.sh` | `bash scripts/vision_r1/pnp_vision_r1.sh` |
 
 ```bash
 # Frozen process judge; domain: deepscaler, hotpotqa, taco, or vision.
@@ -30,18 +44,20 @@ an optional single-generation setting. The total generated-token budget
 remains 4096 (4B) or 5120 (9B); no correctness feedback enters this flow.
 The reported mathematics results use the default five-generation protocol.
 
-HotpotQA and TACO also provide `run_a9_uniform_9b.sh` wrappers. Domain launchers
-share model adaptation from `common/model_training.sh`. `run_a7.sh` is the
-retained weak-execution control; `run_a9.sh` is an alternative hardware wrapper
+The shared `models/Qwen3.5-9B.sh DATASET` profile includes the previous HotpotQA
+and TACO 9B memory settings. Domain launchers share model adaptation from
+`common/pnp.sh`. `run_a7.sh` is the
+retained weak-execution control; `pnp_hotpotqa_8gpu.sh` is an alternative hardware wrapper
 for the same HotpotQA verifier contract.
 
 ## Evaluation
 
 | Task | Entry point |
 | --- | --- |
+| AIME agent accuracy (2025 / 2026) | `scripts/deepscaler/pnp_aime.py`, using an explicit dataset path and name |
 | AIME 2025 | `scripts/deepscaler/eval_aime2025.py`; paired A0 wrapper `scripts/deepscaler/run_aime2025_a0.sh` |
 | HotpotQA A0 | `scripts/hotpotqa/run_a0.sh` |
-| HotpotQA certificate checkpoints | `scripts/hotpotqa/run_validation.sh` |
+| HotpotQA certificate checkpoints | `scripts/hotpotqa/pnp_hotpotqa_eval.sh` |
 | MATH-Vision A0 | `scripts/mathvision/run_a0_react.sh`; standalone evaluator `recipes/mathvision/evaluate_react.py` |
 | LiveCodeBench A0 | `recipes/livecodebench_a0/evaluate_a0.py` |
 | Audit metrics from JSONL | `python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json` |

@@ -4,11 +4,13 @@ The repository is organized around the paper's four domains. Run commands from
 the repository root; [the launcher index](../scripts/README.md) lists the entrypoints.
 
 ```text
+run_pnp.sh         Common PNP dataset, model and GPU selection
 agent_r1/          Shared verifier contract, rewards, rollout, GRPO/PPO, metrics
   config/          Shared Hydra trainer configuration
 recipes/           Domain flows, verifiers, data preparation, domain YAML configs
 scripts/           Training and evaluation entrypoints, grouped by domain
-  common/          Shared model adaptation and paper budgets
+  models/          Qwen3.5-4B.sh and Qwen3.5-9B.sh model profiles
+  common/pnp.sh    Shared model adaptation, budgets and dispatch
   extensions/      Optional ToolEnv/A8 experiments and hardware/debug profiles
   patches/         Explicit compatibility patches for the training environment
 tests/             CPU contracts, launcher checks, and runtime-dependent tests
@@ -20,6 +22,17 @@ verl_patches/      Runtime weight-transfer implementation
 Domain YAML files stay beside the code that consumes them; shared trainer config
 stays in `agent_r1/config/`. The `agent_r1` and `recipes` Python package names are
 preserved so imports, Hydra targets, and checkpoint configurations remain stable.
+
+PNP entrypoints use the following naming convention:
+
+| Purpose | File |
+| --- | --- |
+| Common training entry | `run_pnp.sh` |
+| Dataset training entry | `scripts/<dataset>/pnp_<dataset>.sh` |
+| Dataset agent configuration | `recipes/<recipe>/pnp_<dataset>.yaml` |
+| Model training profile | `scripts/models/Qwen3.5-4B.sh`, `scripts/models/Qwen3.5-9B.sh` |
+| Math smoke check | `scripts/deepscaler/pnp_deepscaler_smoke.sh` |
+| AIME agent evaluation | `scripts/deepscaler/pnp_aime.py` |
 
 ## Current documentation
 
@@ -41,7 +54,7 @@ and `recipes/livecodebench_a0/` contain evaluation utilities.
 | Previous location | Current location |
 | --- | --- |
 | `examples/<domain>/` | `scripts/<domain>/` (math uses `scripts/deepscaler/`) |
-| `examples/hotpotqa_a9/run_validation.sh` | `scripts/hotpotqa/run_validation.sh` |
+| `examples/hotpotqa_a9/run_validation.sh` | `scripts/hotpotqa/pnp_hotpotqa_eval.sh` |
 | ToolEnv, A8, hardware/debug wrappers | `scripts/extensions/` |
 | `scripts/patch_*.py` | `scripts/patches/` |
 | `scripts/finegrained_eval.py` | `scripts/extensions/hotpotqa_lr/finegrained_eval.py` |
@@ -51,7 +64,7 @@ and `recipes/livecodebench_a0/` contain evaluation utilities.
 
 The unused GSM8K examples (whose recipe was absent), independent Paper Search
 recipe/examples, upstream Agent-R1 documentation site/results/figures, and two
-obsolete DeepScaleR aliases were removed. Use `run_deepscaler_a9_uniform.sh`
+obsolete DeepScaleR aliases were removed. Use `pnp_deepscaler.sh`
 instead of `run_deepscaler_a9_fixed73.sh`, and the extension's
 `run_deepscaler_tool_a1.sh` instead of `run_deepscaler_tool.sh`.
 

@@ -20,7 +20,7 @@ export PYTHON_BIN="${HOTPOTQA_PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl
 
 # Config rendering and CPU preflight do not need a live Judge process.
 if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" == "1" || "${HOTPOTQA_PREFLIGHT_ONLY:-0}" == "1" ]]; then
-    exec bash "$HERE/run_rlvr.sh"
+    exec bash "$HERE/pnp_hotpotqa_train.sh"
 fi
 
 : "${HOTPOTQA_OUTPUT_DIR:?HOTPOTQA_OUTPUT_DIR is required}"
@@ -104,6 +104,6 @@ if [[ "$judge_healthy" != true ]]; then
     exit 1
 fi
 
-bash "$HERE/run_rlvr.sh" &
+bash "$HERE/pnp_hotpotqa_train.sh" &
 TRAIN_PID=$!
 wait "$TRAIN_PID"

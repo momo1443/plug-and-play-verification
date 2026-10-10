@@ -30,11 +30,23 @@ def main():
     if not 0 < args.train_max_samples <= rows:
         raise ValueError("Training prefix must be positive and available in the prepared split")
     root = Path(args.project_dir)
-    code_paths = ["recipes/vision_r1/agent_flow.py", "recipes/vision_r1/verifier.py", "recipes/vision_r1/artifacts.py", "recipes/vision_r1/base.yaml",
-                  "recipes/vision_r1/prepare_data.py", "recipes/vision_r1/prepare_run.py",
-                  "agent_r1/verifier/reward.py", "agent_r1/evaluation/consistency.py",
-                  "agent_r1/trainer/ppo/core_algos.py", "scripts/common/model_training.sh",
-                  "scripts/vision_r1/run_visual_agent.sh"]
+    code_paths = [
+        "recipes/vision_r1/agent_flow.py",
+        "recipes/vision_r1/verifier.py",
+        "recipes/vision_r1/artifacts.py",
+        "recipes/vision_r1/pnp_vision_r1.yaml",
+        "recipes/vision_r1/prepare_data.py",
+        "recipes/vision_r1/prepare_run.py",
+        "agent_r1/verifier/reward.py",
+        "agent_r1/evaluation/consistency.py",
+        "agent_r1/trainer/ppo/core_algos.py",
+        "scripts/common/pnp.sh",
+        "run_pnp.sh",
+        "scripts/models/Qwen3.5-4B.sh",
+        "scripts/models/Qwen3.5-9B.sh",
+        "scripts/vision_r1/pnp_vision_r1.sh",
+        "scripts/vision_r1/pnp_vision_r1_train.sh",
+    ]
     manifest = {
         "contract_version": "vision-r1-independent-process-outcome-v2", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "arm": args.arm, "model": file_identity(Path(args.model_path) / "config.json"),

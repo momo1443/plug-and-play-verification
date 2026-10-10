@@ -21,5 +21,5 @@ export RAY_TMPDIR="${RAY_TMPDIR:-/tmp/pnp-math-smoke-$$}"
 export HOTPOTQA_SAVE_FREQ="${HOTPOTQA_SAVE_FREQ:--1}"
 
 cd "$PROJECT_DIR"
-exec bash scripts/deepscaler/run_deepscaler_a9_uniform.sh \
+exec bash scripts/deepscaler/pnp_deepscaler.sh \
     ray_kwargs.ray_init.num_cpus=8 actor_rollout_ref.rollout.agent.num_workers=2 "$@"

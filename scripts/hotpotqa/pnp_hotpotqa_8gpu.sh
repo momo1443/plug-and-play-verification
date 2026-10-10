@@ -26,4 +26,4 @@ export HOTPOTQA_SKIP_PREFLIGHT="${HOTPOTQA_SKIP_PREFLIGHT:-0}"
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a9_certmix_emwarm50_main10k_n4_500step_6gpu_vllm040_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/pnp_hotpotqa_train.sh"

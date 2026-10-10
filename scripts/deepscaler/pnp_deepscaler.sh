@@ -39,10 +39,10 @@ export AGENT_R1_TORCH_PADDING="${AGENT_R1_TORCH_PADDING:-1}"
 DEFAULT_MODEL_PATH="$WORKSPACE_DIR/models/Qwen3.5-4B"
 [[ -f "$PROJECT_DIR/models/Qwen3.5-4B/config.json" ]] && DEFAULT_MODEL_PATH="$PROJECT_DIR/models/Qwen3.5-4B"
 export HOTPOTQA_MODEL_PATH="${DEEPSCALER_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$DEFAULT_MODEL_PATH}}"
-source "$PROJECT_DIR/scripts/common/model_training.sh"
-agent_r1_model_overrides "$HOTPOTQA_MODEL_PATH"
-agent_r1_optimizer_overrides "$HOTPOTQA_MODEL_PATH"
-agent_r1_paper_profile deepscaler "$HOTPOTQA_MODEL_PATH"
+source "$PROJECT_DIR/scripts/common/pnp.sh"
+pnp_model_overrides "$HOTPOTQA_MODEL_PATH"
+pnp_optimizer_overrides "$HOTPOTQA_MODEL_PATH"
+pnp_paper_profile deepscaler "$HOTPOTQA_MODEL_PATH"
 export DEEPSCALER_REWARD_MODE="${DEEPSCALER_REWARD_MODE:-uniform_equation_process}"
 export DEEPSCALER_MAX_STEPS="${DEEPSCALER_MAX_STEPS:-$PAPER_MAX_STEPS}"
 if ! [[ "$DEEPSCALER_MAX_STEPS" =~ ^[1-9][0-9]*$ ]]; then
@@ -50,7 +50,7 @@ if ! [[ "$DEEPSCALER_MAX_STEPS" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 
-# ── A9 Schedule Config ───────────────────────────────────────────
+# ── PNP Schedule Config ───────────────────────────────────────────
 export DEEPSCALER_EM_WARMUP_STEPS="${DEEPSCALER_EM_WARMUP_STEPS:-50}"
 
 # Data paths — DeepScaleR
@@ -189,7 +189,7 @@ cd "$PROJECT_DIR"
     --save-freq "$SAVE_FREQ" \
     --seed "$EXPERIMENT_SEED"
 
-echo "=== DeepScaleR A9 Uniform GRPO ==="
+echo "=== PNP DeepScaleR ==="
 echo "Model: $HOTPOTQA_MODEL_PATH"
 echo "Train: $TRAIN_PATH ($TRAIN_MAX_SAMPLES samples)"
 echo "Val:   $VAL_PATH ($VAL_MAX_SAMPLES samples)"
@@ -277,7 +277,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     +actor_rollout_ref.rollout.engine_kwargs.vllm.seed="$EXPERIMENT_SEED" \
     actor_rollout_ref.rollout.multi_turn.enable="$MULTI_TURN_ENABLED" \
     actor_rollout_ref.rollout.agent.max_steps="$DEEPSCALER_MAX_STEPS" \
-    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/deepscaler/paper.yaml" \
+    actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/deepscaler/pnp_deepscaler.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow=deepscaler_paper_agent \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=False \

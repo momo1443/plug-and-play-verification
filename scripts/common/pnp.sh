@@ -1,8 +1,29 @@
 #!/usr/bin/env bash
-# Shared model adaptation settings for the paper launchers. Source this file,
-# then call agent_r1_model_overrides with the actual actor model path.
+# Shared PNP model adaptation, budgets and dataset dispatch.
 
-agent_r1_model_overrides() {
+pnp_model_path() {
+    local dataset="$1" model_name="$2"
+    local project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    local default_path="$project_dir/../models/$model_name"
+    [[ -f "$project_dir/models/$model_name/config.json" ]] && default_path="$project_dir/models/$model_name"
+    case "$dataset" in
+        deepscaler) export DEEPSCALER_MODEL_PATH="${PNP_MODEL_PATH:-${DEEPSCALER_MODEL_PATH:-$default_path}}" ;;
+        hotpotqa) export HOTPOTQA_MODEL_PATH="${PNP_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$default_path}}" ;;
+        taco) export TACO_A9_MODEL_PATH="${PNP_MODEL_PATH:-${TACO_A9_MODEL_PATH:-$default_path}}" ;;
+        vision_r1) export VISION_R1_MODEL_PATH="${PNP_MODEL_PATH:-${VISION_R1_MODEL_PATH:-$default_path}}" ;;
+        *) echo "Unknown PNP dataset: $dataset" >&2; return 2 ;;
+    esac
+}
+
+pnp_launch_dataset() {
+    local dataset="$1"
+    shift
+    case "$dataset" in deepscaler|hotpotqa|taco|vision_r1) ;; *) echo "Unknown PNP dataset: $dataset" >&2; return 2 ;; esac
+    local project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    exec bash "$project_dir/scripts/$dataset/pnp_$dataset.sh" "$@"
+}
+
+pnp_model_overrides() {
     local model_path="${1%/}"
     AGENT_R1_MODEL_NAME="${model_path##*/}"
     local default_rank=0
@@ -31,7 +52,7 @@ agent_r1_model_overrides() {
 }
 
 # Appendix C defaults, with the user-requested 9B batch of 8 for eight A40 GPUs.
-agent_r1_paper_profile() {
+pnp_paper_profile() {
     local domain="$1"
     local model_path="${2%/}"
     local inferred_scale=4b
@@ -61,7 +82,7 @@ agent_r1_paper_profile() {
 }
 
 # Reuse the repository's existing step-level PPO critic path for paper baselines.
-agent_r1_optimizer_overrides() {
+pnp_optimizer_overrides() {
     local model_path="$1"
     AGENT_R1_TRAINER_MODULE=agent_r1.trainer.main_agent_grpo
     AGENT_R1_ALGORITHM_ARGS=(algorithm.adv_estimator=grpo ++algorithm.grpo.credit_assignment=step_causal algorithm.norm_adv_by_std_in_grpo=True)

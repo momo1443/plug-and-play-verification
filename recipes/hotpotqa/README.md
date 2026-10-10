@@ -15,13 +15,13 @@ its [historical guide](../../docs/archive/hotpotqa-legacy.md) is archived.
 
 ```bash
 bash scripts/hotpotqa/run_a1.sh          # outcome-only GRPO
-bash scripts/hotpotqa/run_a9_uniform.sh  # verifier GRPO
+bash scripts/hotpotqa/pnp_hotpotqa.sh  # verifier GRPO
 bash scripts/hotpotqa/run_a6.sh          # frozen process judge
 bash scripts/hotpotqa/run_a2.sh          # gold process-only ablation
 bash scripts/hotpotqa/run_a3.sh          # gold 0.5 mixture ablation
 bash scripts/ppo/run_terminal.sh hotpotqa
 bash scripts/hotpotqa/run_a0.sh          # base-model certificate validation
-bash scripts/hotpotqa/run_validation.sh  # certificate checkpoint validation
+bash scripts/hotpotqa/pnp_hotpotqa_eval.sh  # certificate checkpoint validation
 ```
 
 Configure model/data/output paths and resources through the launcher's

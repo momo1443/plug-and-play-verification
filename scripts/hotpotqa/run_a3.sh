@@ -6,7 +6,7 @@ set -euo pipefail
 # match. Final-answer tokens remain in the policy loss under raw completion.
 #
 # Self-contained entrypoint; shared scientific/runtime defaults are owned by
-# run_rlvr.sh and remain overridable through documented HOTPOTQA_* variables.
+# pnp_hotpotqa_train.sh and remain overridable through documented HOTPOTQA_* variables.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"
@@ -18,4 +18,4 @@ export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a3_${HOTPOTQA_RUN_MODE}_grpo_stepcausal_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/pnp_hotpotqa_train.sh"

@@ -40,4 +40,4 @@ export HOTPOTQA_SAVE_FREQ=50
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a1_${HOTPOTQA_RUN_MODE}_grpo_stepcausal_main30k_n4_1500step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/../../hotpotqa/run_rlvr.sh"
+exec bash "$HERE/../../hotpotqa/pnp_hotpotqa_train.sh"

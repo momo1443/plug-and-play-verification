@@ -138,7 +138,7 @@ def _code_hashes(project_dir: Path, arm: RewardArm) -> dict[str, str]:
         "recipes/hotpotqa/validate_formal_a0_artifacts.py",
         "recipes/hotpotqa/judge_prompts.py",
         "recipes/hotpotqa/judge_server.py",
-        "scripts/hotpotqa/run_rlvr.sh",
+        "scripts/hotpotqa/pnp_hotpotqa_train.sh",
         f"scripts/hotpotqa/run_{arm.value.lower()}.sh",
     ]
     hashes: dict[str, str] = {}

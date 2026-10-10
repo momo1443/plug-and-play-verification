@@ -17,4 +17,4 @@ source "$HERE/common_v2.sh"
 export RUN_ID="${RUN_ID:-qwen35-4b_a8v2_lr_base_${HOTPOTQA_LR_REASON_STEP_FORMAT}_main30k_n4_1500step_6gpu_vllm025_mlen8192_mseq20_autokv_save50_$(date +%Y%m%d-%H%M%S)}"
 export HOTPOTQA_OUTPUT_DIR="${HOTPOTQA_OUTPUT_DIR:-$WORKSPACE_DIR/logs/$RUN_ID}"
 
-exec bash "$PROJECT_DIR/scripts/hotpotqa/run_rlvr.sh"
+exec bash "$PROJECT_DIR/scripts/hotpotqa/pnp_hotpotqa_train.sh"

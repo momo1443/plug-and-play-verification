@@ -10,7 +10,7 @@ set -euo pipefail
 # process verifier.
 #
 # Self-contained entrypoint; shared scientific/runtime defaults are owned by
-# run_rlvr.sh and remain overridable through documented HOTPOTQA_* variables.
+# pnp_hotpotqa_train.sh and remain overridable through documented HOTPOTQA_* variables.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"
@@ -28,4 +28,4 @@ export HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZAT
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a7_weakexec_matched_6gpu_first30k_n4_fusedtriton_vllm040_actor8192_noentropy_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/run_rlvr.sh"
+exec bash "$HERE/pnp_hotpotqa_train.sh"

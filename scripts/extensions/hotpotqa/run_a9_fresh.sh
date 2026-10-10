@@ -7,7 +7,7 @@ set -euo pipefail
 #   - max_actor_ckpt_to_keep=1 (only latest checkpoint)
 #   - Ray tmpdir on local /tmp (short path for AF_UNIX)
 #
-# Uses the formal run_rlvr.sh launcher which handles preflight, manifest, etc.
+# Uses the formal pnp_hotpotqa_train.sh launcher which handles preflight, manifest, etc.
 # After a 50-step terminal-EM warmup, sample one terminal/process mixture
 # shared by every rollout in the same prompt group.
 
@@ -35,4 +35,4 @@ export RAY_TMPDIR
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a9_certmix_emwarm50_main10k_n4_500step_6gpu_vllm040_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/../../hotpotqa/run_rlvr.sh"
+exec bash "$HERE/../../hotpotqa/pnp_hotpotqa_train.sh"

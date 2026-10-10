@@ -44,7 +44,7 @@ case "$DATASET" in
         export DEEPSCALER_MODEL_PATH="${DEEPSCALER_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
         export DEEPSCALER_TRAIN_MAX_SAMPLES="${DEEPSCALER_TRAIN_MAX_SAMPLES:-10000}"
         export DEEPSCALER_TOTAL_TRAINING_STEPS="${DEEPSCALER_TOTAL_TRAINING_STEPS:-500}"
-        command=(bash "$PROJECT_DIR/scripts/deepscaler/run_deepscaler_a9_uniform.sh")
+        command=(bash "$PROJECT_DIR/scripts/deepscaler/pnp_deepscaler.sh")
         ;;
     hotpotqa)
         export HOTPOTQA_REWARD_ARM=A6
@@ -54,7 +54,7 @@ case "$DATASET" in
         export HOTPOTQA_TOTAL_TRAINING_STEPS="${HOTPOTQA_TOTAL_TRAINING_STEPS:-500}"
         export HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-$ACTOR_GPU_COUNT}"
         export HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-$ACTOR_GPU_COUNT}"
-        command=(bash "$PROJECT_DIR/scripts/hotpotqa/run_rlvr.sh")
+        command=(bash "$PROJECT_DIR/scripts/hotpotqa/pnp_hotpotqa_train.sh")
         ;;
     taco)
         export TACO_A9_REWARD_MODE=llm_judge
@@ -65,7 +65,7 @@ case "$DATASET" in
         export TACO_A9_ROLLOUT_GPUS="${TACO_A9_ROLLOUT_GPUS:-$ACTOR_GPU_COUNT}"
         export TACO_A9_VLLM_GPU_MEMORY_UTILIZATION="${TACO_A9_VLLM_GPU_MEMORY_UTILIZATION:-0.30}"
         export TACO_A9_VLLM_KV_CACHE_BYTES="${TACO_A9_VLLM_KV_CACHE_BYTES:-4294967296}"
-        command=(bash "$PROJECT_DIR/scripts/taco/run_a9_uniform.sh")
+        command=(bash "$PROJECT_DIR/scripts/taco/pnp_taco.sh")
         ;;
     vision)
         export VISION_R1_ARM=JUDGE
@@ -74,7 +74,7 @@ case "$DATASET" in
         export VISION_R1_TOTAL_TRAINING_STEPS="${VISION_R1_TOTAL_TRAINING_STEPS:-500}"
         export VISION_R1_TENSOR_PARALLEL_SIZE="${VISION_R1_TENSOR_PARALLEL_SIZE:-1}"
         export VISION_R1_VLLM_GPU_MEMORY_UTILIZATION="${VISION_R1_VLLM_GPU_MEMORY_UTILIZATION:-0.30}"
-        command=(bash "$PROJECT_DIR/scripts/vision_r1/run_visual_agent.sh")
+        command=(bash "$PROJECT_DIR/scripts/vision_r1/pnp_vision_r1_train.sh")
         ;;
     *)
         echo "Unknown dataset: $DATASET" >&2

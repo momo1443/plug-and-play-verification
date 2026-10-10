@@ -226,7 +226,7 @@ def main():
                 "parallelism": f"{len(args.gpus.split(','))} independent single-GPU replicas",
                 "verification_rewards_computed": False, "gold_feedback_provided": False,
                 "code_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                                for name in ("scripts/deepscaler/eval_aime_agent.py", "recipes/deepscaler/prompts.py",
+                                for name in ("scripts/deepscaler/pnp_aime.py", "recipes/deepscaler/prompts.py",
                                              "recipes/deepscaler/submission.py", "agent_r1/evaluation/answers.py",
                                              "recipes/deepscaler/math_expressions.py")}}
     (output / "run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

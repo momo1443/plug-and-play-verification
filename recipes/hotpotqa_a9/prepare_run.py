@@ -186,7 +186,7 @@ def main() -> None:
         "recipes/reward_mixing.py",
         "recipes/hotpotqa/env/search_tool.py",
         "recipes/hotpotqa/evidence.py",
-        "recipes/hotpotqa_a9/base.yaml",
+        "recipes/hotpotqa_a9/pnp_hotpotqa.yaml",
         "recipes/hotpotqa_a9/dsl.py",
         "recipes/hotpotqa_a9/protocol.py",
         "recipes/hotpotqa_a9/prompts.py",
@@ -195,8 +195,13 @@ def main() -> None:
         "recipes/hotpotqa_a9/reward_fn.py",
         "recipes/hotpotqa_a9/agent_flow.py",
         "recipes/hotpotqa_a9/prepare_run.py",
-        "scripts/hotpotqa/run_rlvr.sh",
-        "scripts/hotpotqa/run_a9.sh",
+        "scripts/common/pnp.sh",
+        "run_pnp.sh",
+        "scripts/models/Qwen3.5-4B.sh",
+        "scripts/models/Qwen3.5-9B.sh",
+        "scripts/hotpotqa/pnp_hotpotqa.sh",
+        "scripts/hotpotqa/pnp_hotpotqa_train.sh",
+        "scripts/hotpotqa/pnp_hotpotqa_8gpu.sh",
     ]
     code_hashes = {}
     for relative in code_paths:

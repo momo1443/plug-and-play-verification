@@ -36,4 +36,4 @@ export RAY_TMPDIR
 
 export RUN_ID="${RUN_ID:-qwen35-4b_a9_uniform_resume_emwarm50_main10k_n4_500step_6gpu_vllm025_refkl001_$(date +%Y%m%d-%H%M%S)}"
 
-exec bash "$HERE/../../hotpotqa/run_rlvr.sh"
+exec bash "$HERE/../../hotpotqa/pnp_hotpotqa_train.sh"

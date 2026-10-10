@@ -88,7 +88,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "recipes/deepscaler/prepare_tool_data.py",
         "recipes/deepscaler/prepare_tool_pair_run.py",
         "scripts/extensions/deepscaler/run_deepscaler_tool_pair.sh",
-        "scripts/common/model_training.sh",
+        "scripts/common/pnp.sh",
         "scripts/llm_judge/run_with_frozen_judge.sh",
         "scripts/llm_judge/run_grpo_4b_judge_9b.sh",
     ]
