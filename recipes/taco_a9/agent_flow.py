@@ -304,6 +304,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     verification=verification,
                     schedule=schedule,
                     terminal_gate_passed=submitted_artifact is not None,
+                    process_requires_terminal_submission=False,
                 )
                 reward_score = 0.0
                 step_kind = "submit"
@@ -389,6 +390,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             composed = compose_verification_reward(
                 terminal_reward=outcome_reward, verification=verification, schedule=schedule,
                 terminal_gate_passed=submitted_artifact is not None,
+                process_requires_terminal_submission=False,
             )
             terminal_info.update({"acc": outcome_reward, "terminal_private_all_pass": outcome_reward,
                                   "reward_mode": "llm_judge",
@@ -396,6 +398,33 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                                   "verifier_timing": "causal_prefix_backfill",
                                   **judge_reward_info(verification)})
             apply_composed_reward(steps, composed, extra_final_info=terminal_info)
+        elif submitted_artifact is None and steps[-1].extra_fields.get("step_kind") != "submit":
+            # Budget exhaustion still replays existing developer-test evidence.
+            # The absent submission certificate remains a zero denominator slot.
+            verification = await self.loop.run_in_executor(
+                None,
+                lambda: verify_process(
+                    artifacts=artifacts, records=records, raw_certificate=None,
+                    submitted_artifact=None, developer_suite=developer_suite,
+                    executor=self.executor, run_step_indices=run_step_indices,
+                    final_step_index=len(steps),
+                ),
+            )
+            composed = compose_verification_reward(
+                terminal_reward=0.0, verification=verification, schedule=schedule,
+                terminal_gate_passed=False, process_requires_terminal_submission=False,
+            )
+            apply_composed_reward(steps, composed, extra_final_info={
+                **consistency_record(verification, 0.0, eligible=False, extra_checks=action_checks),
+                "acc": 0.0, "terminal_private_all_pass": 0.0,
+                "terminal_private_pass_rate": 0.0,
+                "verified_process_reward": verification.process_reward,
+                "artifact_process_audits": verification.audit.get("artifact_process_audits", []),
+                "certificate_audit": verification.audit.get("certificate_audit"),
+                "reward_mode": self.reward_mode,
+                "verifier_timing": "terminal_trajectory_replay",
+                "training_global_step": global_step,
+            })
         # Failed/no-submit traces remain in the Eq. (9) denominator.
         final_info = steps[-1].extra_fields.setdefault("reward_extra_info", {})
         if "verification_protocol" not in final_info:

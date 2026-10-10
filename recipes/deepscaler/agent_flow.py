@@ -55,6 +55,7 @@ class DeepScaleRPaperAgentFlow(AgentFlowBase):
         reasoning_segments = []
         truncated_steps = []
         final_response = None
+        selected_answer = None
         response_tokens = 0
         prefill_step = None
         submission_requests = 0
@@ -139,6 +140,7 @@ class DeepScaleRPaperAgentFlow(AgentFlowBase):
                 if truncated and truncated_steps[-1] == turn:
                     truncated_steps.pop()
                 final_response = FINAL_ANSWER_PREFIX + text if submission_turn else text
+                selected_answer = final["answer"]
                 termination_reason = "final_answer"
                 break
             messages.append({"role": "assistant", "content": text})
@@ -165,6 +167,7 @@ class DeepScaleRPaperAgentFlow(AgentFlowBase):
             )
         reward = compute_tool_trajectory_reward(
             reward_mode=self.reward_mode, final_response=final_response,
+            selected_answer=selected_answer,
             ground_truth=kwargs["reward_model"]["ground_truth"],
             reasoning_segments=reasoning_segments, global_step=global_step,
             is_validation=validation, em_warmup_steps=self.em_warmup_steps,

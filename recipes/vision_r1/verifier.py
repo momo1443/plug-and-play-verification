@@ -55,21 +55,50 @@ def verify_process(
     raw_certificate: Any,
     submitted_answer: str,
 ) -> VerificationResult:
-    """Verify certificate schema, answer coupling, lineage, and crop replay."""
+    """Verify crop evidence independently of final-answer eligibility.
+
+    A readable certificate selects its required evidence; missing or invalid
+    certificates fall back to the recorded crops with one zero certificate
+    slot. Missing required crops stay in the denominator. Answer coupling is
+    an audit check and never suppresses independently replayed crop credits.
+    """
 
     all_crop_checks = [_replay_artifact(artifact, artifacts)[0]
                        for artifact in artifacts.values() if artifact.parent_artifact_id is not None]
     certificate, certificate_errors = parse_visual_certificate(raw_certificate)
     if certificate is None:
+        crops = [artifact for artifact in artifacts.values() if artifact.parent_artifact_id is not None]
+        artifact_audits = []
+        credits = []
+        crop_ids = {artifact.artifact_id for artifact in crops}
+        declared_ids = raw_certificate.get("evidence_artifact_ids", []) if isinstance(raw_certificate, Mapping) else []
+        missing_evidence_slots = sum(
+            not isinstance(item, str) or item not in crop_ids for item in declared_ids
+        ) if isinstance(declared_ids, list) else 1
+        # Even malformed declarations retain extractable missing evidence slots.
+        denominator = len(crops) + missing_evidence_slots + 1
+        for artifact in crops:
+            valid, audit = _replay_artifact(artifact, artifacts)
+            artifact_audits.append(audit)
+            if valid:
+                credits.append(VerificationCredit(
+                    step_index=artifact.created_step, score=1.0 / denominator,
+                    audit={"kind": "visual_crop_replay", "artifact_id": artifact.artifact_id,
+                           "sha256": artifact.sha256},
+                ))
         return VerificationResult(
-            credits=(),
+            credits=tuple(credits),
             audit={
                 "verifier": "vision_r1_visual_replay",
                 "schema_valid": False,
-                "applicable_checks": [0] + [int(value) for value in all_crop_checks],
+                "applicable_checks": [0] + [0] * missing_evidence_slots + [int(value) for value in all_crop_checks],
                 "answer_coupled": False,
                 "certificate_errors": list(certificate_errors),
-                "artifact_audits": [],
+                "artifact_audits": artifact_audits,
+                "process_denominator": denominator,
+                "missing_certificate_slots": 1,
+                "missing_evidence_slots": missing_evidence_slots,
+                "replay_valid_artifact_count": len(credits),
             },
         )
 
@@ -88,7 +117,7 @@ def verify_process(
 
     denominator = len(certificate.evidence_artifact_ids)
     credits = ()
-    if answer_coupled and denominator:
+    if denominator:
         credits = tuple(
             VerificationCredit(
                 step_index=artifact.created_step,
@@ -111,6 +140,8 @@ def verify_process(
             "certificate_errors": [],
             "artifact_audits": artifact_audits,
             "cited_artifact_count": denominator,
+            "process_denominator": denominator,
+            "missing_certificate_slots": 0,
             "replay_valid_artifact_count": len(valid_artifacts),
         },
     )

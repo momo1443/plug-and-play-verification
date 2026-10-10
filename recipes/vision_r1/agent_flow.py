@@ -209,10 +209,10 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                             feedback = _artifact_feedback(artifact)
                             feedback_image = artifact.image
                 elif action_name == "submit_answer":
+                    raw_certificate = arguments.get("certificate")
                     answer = arguments.get("answer")
                     if isinstance(answer, str) and answer.strip():
                         submitted_answer = answer.strip()
-                        raw_certificate = arguments.get("certificate")
                         step_kind = "submit_answer"
                     else:
                         feedback = "Invalid submit_answer: answer must be a non-empty string."
@@ -269,6 +269,8 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                     terminal_reward=terminal_score,
                     verification=verification,
                     schedule=schedule,
+                    terminal_gate_passed=True,
+                    process_requires_terminal_submission=False,
                 )
                 apply_composed_reward(
                     steps,
@@ -317,6 +319,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             composed = compose_verification_reward(
                 terminal_reward=terminal_score, verification=verification, schedule=schedule,
                 terminal_gate_passed=submitted_answer is not None,
+                process_requires_terminal_submission=False,
             )
             apply_composed_reward(steps, composed, extra_final_info={
                 **consistency_record(verify_process(
@@ -329,27 +332,29 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             })
             terminal_applied = True
         if not terminal_applied:
+            verification = verify_process(
+                artifacts=artifacts, raw_certificate=raw_certificate,
+                submitted_answer=submitted_answer or "",
+            )
             composed = compose_verification_reward(
                 terminal_reward=0.0,
-                verification=VerificationResult(
-                    credits=(),
-                    audit={"verifier": "not_run_without_valid_submission"},
-                ),
+                verification=verification,
                 schedule=schedule,
+                terminal_gate_passed=False,
+                process_requires_terminal_submission=False,
             )
             apply_composed_reward(
                 steps,
                 composed,
                 extra_final_info={
-                    **consistency_record(VerificationResult(credits=(), audit={"applicable_checks": [0]}), 0.0, eligible=False),
+                    **consistency_record(verification, 0.0, eligible=False, extra_checks=action_checks),
                     "acc": 0.0,
                     "terminal_exact_math_match": 0.0,
-                    "verified_process_reward": 0.0,
+                    "verified_process_reward": verification.process_reward,
                     "reward_mode": self.reward_mode,
-                    "verifier_timing": "not_run_without_valid_submission",
+                    "verifier_timing": "terminal_visual_replay",
                     "llm_judge_score": None,
                     "judge_invalid": False,
-                    "optimizer_total_reward": 0.0,
                 },
             )
         return AgentFlowOutput(steps=steps, metrics=metrics)

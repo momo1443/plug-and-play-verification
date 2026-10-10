@@ -74,3 +74,30 @@ class SubmissionGenerationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(prefilled_final_record('}'))
         self.assertIsNone(prefilled_final_record('...}'))
         self.assertIsNone(prefilled_final_record('<think>5}'))
+
+    async def test_restarted_box_is_submission_without_artificial_outer_close(self):
+        for completion in (r'I have finished. \boxed{15}', r'Result: \boxed{15}' + '\n}'):
+            with self.subTest(completion=completion):
+                output, _, tokenizer, _ = await self.generate(completion)
+                kept = tokenizer.decode(output.token_ids)
+                self.assertEqual(prefilled_final_record(kept)['answer'], '15')
+                self.assertEqual(prefilled_final_record(completion)['answer'], '15')
+                self.assertTrue(kept.endswith(r'\boxed{15}'))
+                self.assertEqual(len(output.token_ids), len(output.log_probs))
+
+    async def test_quoted_boxes_thinking_and_placeholders_are_not_submissions(self):
+        for completion in (r'Use `\boxed{5}` when ready', r'Use `\boxed{5}',
+                           r'<think>\boxed{5}</think> Still thinking',
+                           r'\boxed{...}', r'\boxed{answer}', r'\boxed{5'):
+            with self.subTest(completion=completion):
+                self.assertIsNone(prefilled_final_record(completion))
+        completion = r'Example `\boxed{99}`. Actual result: \boxed{5}'
+        output, _, tokenizer, _ = await self.generate(completion)
+        self.assertEqual(tokenizer.decode(output.token_ids), completion)
+        self.assertEqual(prefilled_final_record(completion)['answer'], '5')
+
+    async def test_first_complete_submission_is_reference_independent(self):
+        completion = r'\boxed{6} then \boxed{5}'
+        output, _, tokenizer, _ = await self.generate(completion)
+        self.assertEqual(tokenizer.decode(output.token_ids), r'\boxed{6}')
+        self.assertEqual(prefilled_final_record(completion)['answer'], '6')

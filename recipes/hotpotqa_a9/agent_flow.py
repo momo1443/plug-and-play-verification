@@ -555,6 +555,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     verification=verification,
                     schedule=schedule,
                     terminal_gate_passed=eligible,
+                    process_requires_terminal_submission=False,
                 )
                 trajectory_audit = deterministic_verification.audit["certificate_audit"]
                 audit_records = trajectory_audit["steps"]
@@ -622,6 +623,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                 final_step = steps[-1]
                 reward_info = final_step.extra_fields["reward_extra_info"]
                 reward_info["format_gate_triggered"] = not eligible
+                reward_info["format_gate_scope"] = "terminal_component_only"
                 self._record_step_timing(metrics, step_metrics)
                 break
 

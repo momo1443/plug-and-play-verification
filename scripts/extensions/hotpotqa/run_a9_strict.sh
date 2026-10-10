@@ -3,7 +3,7 @@ set -euo pipefail
 
 # A9 strict format: uniform U(0,1) reward + format_gate
 # 每条 trajectory 随机采样 w~U(0,1)，reward = w * terminal_em + (1-w) * process
-# 如果模型没产出合法 finish tool call，归零全部 reward（format_gate）
+# 如果模型没产出合法 finish tool call，只将结果奖励归零，保留已验证的过程奖励。
 # 使用 GPU 0,1,4,5,6,7（6 张卡）
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

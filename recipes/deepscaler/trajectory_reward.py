@@ -51,6 +51,7 @@ class TrajectoryReward:
             "weight_sampling": self.weight_sampling,
             "optimizer_weight_group_key": self.prompt_group_key,
             "has_final_answer": self.has_final_answer,
+            "process_requires_terminal_submission": self.composed.process_requires_terminal_submission,
             "process_segment_audits": self.process_segment_audits,
         }
 
@@ -110,7 +111,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]], *, question: s
         credits=credits,
         audit={
             "verifier": "deepscaler_numeric_equations",
-            "evidence_parser_version": 2,
+            "evidence_parser_version": 3,
             "normalization": "mean_over_equation_bearing_policy_steps_including_failures",
             "normalizer": denominator,
             "participating_step_indices": [int(record["turn"]) for record in participating],
@@ -164,6 +165,7 @@ def compute_tool_trajectory_reward(
     em_warmup_steps: int,
     prompt_group_key: str | None = None,
     process_verification: VerificationResult | None = None,
+    selected_answer: str | None = None,
 ) -> TrajectoryReward:
     """Score one complete DeepScaleR trajectory.
 
@@ -171,14 +173,20 @@ def compute_tool_trajectory_reward(
     outcome-only warmup and prompt-group mixture weights. For A9, exclude tool
     XML and observations from reasoning_segments. The judge arm instead takes
     a separately computed process_verification with causal source-step credits.
+    Missing submissions receive terminal EM zero while their independently
+    verified process credits remain eligible under the existing schedule.
     """
     if reward_mode not in {"terminal_only", "uniform_equation_process", "llm_judge"}:
         raise ValueError(f"Unsupported DeepScaleR ToolEnv reward mode: {reward_mode}")
 
     has_final_answer = bool(final_response and final_response.strip())
-    terminal_em = (
-        float(compute_terminal_em("deepmath", final_response, ground_truth)) if has_final_answer else 0.0
-    )
+    if selected_answer is not None and has_final_answer:
+        from recipes.deepscaler.math_expressions import answers_equal
+        terminal_em = float(answers_equal(selected_answer, ground_truth))
+    else:
+        terminal_em = (
+            float(compute_terminal_em("deepmath", final_response, ground_truth)) if has_final_answer else 0.0
+        )
 
     if reward_mode == "terminal_only":
         schedule = _terminal_schedule("terminal_only")
@@ -207,6 +215,7 @@ def compute_tool_trajectory_reward(
         verification=verification,
         schedule=schedule,
         terminal_gate_passed=has_final_answer,
+        process_requires_terminal_submission=False,
     )
     process_segment_audits = list(verification.audit.get("process_segment_audits", []))
     return _as_trajectory_reward(

@@ -49,6 +49,11 @@ from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord
 from recipes.taco_a9.protocol import parse_tool_call
 from recipes.taco_a9.reward_contract import reward_schedule as taco_schedule
 from recipes.taco_a9.sandbox import TestCase, TestSuite
+from recipes.hotpotqa_a9.protocol import parse_finish_call, parse_search_call
+from recipes.hotpotqa_a9.reward_sources import arm_schedule, gold_evidence_verification, observable_search_verification
+from recipes.hotpotqa_a9.verifier import verify_process as verify_qa_process
+from recipes.hotpotqa_lr.protocol import extract_tool_calls
+from recipes.hotpotqa_lr.verifier import artifact_content_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -192,6 +197,9 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
         failure=False,
         direct=False,
         developer_test=False,
+        reward_mode="llm_judge",
+        qa_arm="A9",
+        malformed=False,
     ):
         judge = FakeJudge(None if failure else 1.0)
         if domain == "deepmath":
@@ -204,6 +212,8 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             texts = ["Intermediate deduction", "FINAL correct" if correct else "FINAL wrong"]
             if incomplete:
                 texts = ["Intermediate deduction", "Another intermediate deduction"]
+            if malformed:
+                texts[1] = "Malformed final answer"
 
             class Env:
                 tool_schemas = []
@@ -223,6 +233,53 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             flow._create_env = lambda **kwargs: Env()
             flow.em_warmup_steps = 50
             flow.skip_special_tokens = True
+        elif domain == "hotpotqa":
+            module = load_source(
+                "recipes/hotpotqa_a9/agent_flow.py",
+                arm_schedule=arm_schedule, verify_process=verify_qa_process,
+                gold_evidence_verification=gold_evidence_verification,
+                observable_search_verification=observable_search_verification,
+                extract_tool_calls=extract_tool_calls,
+                parse_finish_call=parse_finish_call, parse_search_call=parse_search_call,
+            )
+            flow = object.__new__(module.HotpotQACertificateAgentFlow)
+            flow.thinking_mode = "disabled"
+            flow.reward_arm = qa_arm
+            flow.process_reward_enabled = True
+            flow.em_warmup_steps = 50
+            flow.reward_horizon = 3
+            flow.enable_tool_parse_feedback = True
+            flow.search_tool = SimpleNamespace(
+                require_sentence_evidence=True,
+                evidence_store=SimpleNamespace(sample=lambda split, index: SimpleNamespace(
+                    question="Task without hidden answer", dataset_question_id="q1", official_qid="q1",
+                    sample_key="train:1", gold_evidence_ids=("fact:1",), unresolved_gold_facts=(),
+                )),
+            )
+            evidence = {"artifact_id": "passage:1", "text": "Alpha is relevant evidence.",
+                        "content_sha256": artifact_content_sha256("Alpha is relevant evidence.")}
+            certificate = {"source_id": "passage:1", "support_span": "Alpha", "target": "Alpha"}
+            texts = [call("search", query="Alpha", certificate=certificate)] * 3
+            texts += ["invalid action" if incomplete else
+                      call("finish", status="answer", answer="correct" if correct else "wrong")]
+            if malformed:
+                texts[-1] = call("finish", status="answer", answer="")
+            flow._prompt_ids_within_budget = lambda **kwargs: ([1], "question", {"passage:1": evidence})
+            flow._do_search = lambda query, assistant_turn: {
+                "success": True, "assistant_turn": assistant_turn, "returned_evidence": [evidence]}
+            def attach_gold(step, gold, covered, **kwargs):
+                step["new_gold_evidence_ids"] = list(gold - covered)
+                covered.update(gold)
+            flow._attach_gold_audit = attach_gold
+            flow._ingest_search_step = lambda *args: None
+            flow._extra_fields = lambda **kwargs: {"reward_extra_info": {}}
+
+            async def qa_postprocess(step, **kwargs):
+                if step.reward_score is None:
+                    finish = parse_finish_call(flow.tokenizer.decode(step.response_ids))
+                    step.reward_score = float(finish.answer == "correct")
+                return step
+            flow._postprocess = qa_postprocess
         elif domain == "taco":
             module = load_source(
                 "recipes/taco_a9/agent_flow.py",
@@ -240,28 +297,36 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             texts = [call("write_code", code="print(1)"), call("submit", code_artifact_id=artifact.artifact_id)]
             if incomplete:
                 texts[1] = call("write_code", code="print(2)")
+            if malformed:
+                texts[1] = call("submit", code_artifact_id="missing")
             flow.store = SimpleNamespace(suites=lambda task: (TestSuite("dev", ()), TestSuite("private", ())))
             if developer_test:
                 texts.insert(1, call("run_developer_tests", code_artifact_id=artifact.artifact_id))
 
-            async def run_suite(code, suite, ordinal, metrics):
+            def make_record(code, suite, ordinal):
+                passed = correct if suite.suite_id == "private" else True
                 record = ExecutionRecord(
                     run_id=f"run:{ordinal}",
                     code_artifact_id=code.artifact_id,
                     code_sha256=code.sha256,
                     suite_id=suite.suite_id,
-                    suite_sha256="suite",
+                    suite_sha256=suite.sha256,
                     result_sha256="result",
-                    passed=int(correct),
+                    passed=int(passed),
                     total=1,
-                    all_passed=correct,
+                    all_passed=passed,
                     timed_out=False,
                 )
+                return record
+
+            async def run_suite(code, suite, ordinal, metrics):
+                record = make_record(code, suite, ordinal)
                 hidden = "PRIVATE-SECRET" if suite.suite_id == "private" else "developer-example"
                 return record, {"outcomes": [{"passed": correct, "case_index": 0, "stdin": hidden}]}
 
             flow._run_suite = run_suite
-            flow.executor = SimpleNamespace()
+            flow.executor = SimpleNamespace(run_suite=lambda code, suite, run_ordinal:
+                                            (make_record(code, suite, run_ordinal), {}))
             flow.max_code_prompt_chars = 12000
             flow.terminal_warmup_steps = 50
         else:
@@ -293,13 +358,15 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             ]
             if incomplete:
                 texts[1] = "invalid action"
+            if malformed:
+                texts[1] = call("submit_answer", answer="")
             flow.terminal_warmup_steps = 50
         if direct:
             texts = texts[-1:]
         flow.max_steps = max(2, len(texts))
         flow.prompt_length = 10000
         flow.response_length = 1000
-        flow.reward_mode = "llm_judge"
+        flow.reward_mode = reward_mode
         flow.judge_server = judge
         flow.loop = asyncio.get_running_loop()
         generation = FakeGeneration(texts)
@@ -309,12 +376,81 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
             {},
             raw_prompt=[{"role": "user", "content": "Task without hidden answer"}],
             reward_model={"ground_truth": "correct"},
-            extra_info={"question_id": "q1"},
+            extra_info={"question_id": "q1", "index": 1, "split": "train"},
             data_source=domain,
             _agent_r1_global_step=update,
             _agent_r1_is_validation=validation,
         )
         return output, judge
+
+    async def test_qa_preserves_search_credit_for_wrong_and_missing_answers(self):
+        for arm in ("A2", "A3", "A9", "A6", "A7"):
+            for incomplete in (False, True):
+                with self.subTest(arm=arm, incomplete=incomplete):
+                    output, _ = await self.run_domain("hotpotqa", qa_arm=arm, correct=False, incomplete=incomplete)
+                    info = output.steps[-1].extra_fields["reward_extra_info"]
+                    self.assertEqual(info["optimizer_terminal_component"], 0)
+                    self.assertEqual(info["acc"], 0)
+                    self.assertGreater(sum(step.reward_score for step in output.steps), 0)
+                    self.assertFalse(info["process_requires_terminal_submission"])
+                    self.assertEqual(info["terminal_gate_passed"], not incomplete)
+                    self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
+
+    async def test_deterministic_code_and_visual_evidence_survives_missing_submission(self):
+        for domain, mode in (("taco", "uniform_certificate"), ("vision_r1", "uniform_visual_certificate")):
+            output, _ = await self.run_domain(domain, incomplete=True, reward_mode=mode,
+                                             developer_test=domain == "taco")
+            info = output.steps[-1].extra_fields["reward_extra_info"]
+            self.assertEqual(info["terminal_reward"], 0)
+            self.assertEqual(info["optimizer_terminal_component"], 0)
+            self.assertFalse(info["terminal_gate_passed"])
+            self.assertGreater(info["optimizer_process_total"], 0)
+            self.assertAlmostEqual(info["process_reward"], 1 / 3 if domain == "taco" else 1 / 2)
+            self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
+
+    async def test_deterministic_rewards_keep_valid_process_when_outcome_wrong(self):
+        for domain, mode in (("taco", "uniform_certificate"), ("vision_r1", "uniform_visual_certificate")):
+            output, _ = await self.run_domain(domain, correct=False, reward_mode=mode,
+                                             developer_test=domain == "taco")
+            info = output.steps[-1].extra_fields["reward_extra_info"]
+            self.assertEqual(info["acc"], 0)
+            self.assertEqual(info["optimizer_terminal_component"], 0)
+            self.assertGreater(info["optimizer_process_total"], 0)
+
+    async def test_malformed_submission_keeps_process_and_fails_outcome_for_all_domains(self):
+        for domain in ("deepmath", "hotpotqa", "taco", "vision_r1"):
+            for mode in ("llm_judge", "uniform_certificate"):
+                if domain == "deepmath" and mode != "llm_judge":
+                    continue  # Deterministic math flow covered by test_math_continuation.
+                selected_mode = "uniform_visual_certificate" if domain == "vision_r1" and mode != "llm_judge" else mode
+                output, _ = await self.run_domain(
+                    domain, malformed=True, reward_mode=selected_mode,
+                    qa_arm="A6" if mode == "llm_judge" else "A9",
+                    developer_test=domain == "taco",
+                )
+                info = output.steps[-1].extra_fields["reward_extra_info"]
+                self.assertEqual(info["terminal_reward"], 0)
+                self.assertEqual(info["optimizer_terminal_component"], 0)
+                self.assertFalse(info["terminal_gate_passed"])
+                self.assertGreater(info["optimizer_process_total"], 0)
+                self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
+
+    async def test_qa_and_vision_same_prefix_keep_same_credit_across_outcomes(self):
+        for domain, mode in (("hotpotqa", "uniform_certificate"), ("vision_r1", "uniform_visual_certificate")):
+            credits = []
+            for options in ({"correct": True}, {"correct": False}, {"incomplete": True}, {"malformed": True}):
+                output, _ = await self.run_domain(domain, reward_mode=mode, **options)
+                credits.append([step.reward_score for step in output.steps[:-1]])
+            self.assertTrue(all(credit == credits[0] for credit in credits))
+
+    async def test_no_submission_does_not_change_terminal_only_phases(self):
+        for domain in ("deepmath", "hotpotqa", "taco", "vision_r1"):
+            for options in ({"update": 50}, {"validation": True}):
+                output, judge = await self.run_domain(domain, incomplete=True, qa_arm="A6", **options)
+                info = output.steps[-1].extra_fields["reward_extra_info"]
+                self.assertEqual(info["optimizer_process_weight"], 0)
+                self.assertEqual(sum(step.reward_score for step in output.steps), 0)
+                self.assertEqual(judge.calls, [])
 
     async def test_three_domains_preserve_binary_outcomes_and_place_process_rewards(self):
         for domain in ("deepmath", "taco", "vision_r1"):
@@ -342,10 +478,13 @@ class ProcessJudgeFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(judge.calls, [])
                 self.assertEqual([s.reward_score for s in output.steps], [0.0, 1.0])
 
-    async def test_incomplete_trajectories_zero_all_composed_rewards(self):
+    async def test_incomplete_domains_keep_judge_progress_with_zero_outcome(self):
         for domain in ("deepmath", "taco", "vision_r1"):
             output, judge = await self.run_domain(domain, incomplete=True)
-            self.assertTrue(all(step.reward_score == 0 for step in output.steps))
+            self.assertGreater(output.steps[0].reward_score, 0)
+            self.assertAlmostEqual(sum(step.reward_score for step in output.steps),
+                                   output.steps[-1].extra_fields['reward_extra_info']['optimizer_process_total'])
+            self.assertFalse(output.steps[-1].extra_fields['reward_extra_info']['process_requires_terminal_submission'])
             self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["terminal_reward"], 0.0)
             self.assertTrue(judge.calls)
 

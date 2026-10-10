@@ -114,10 +114,16 @@ def _clean_rhs(rhs: str) -> str:
     return rhs.strip()
 
 
+def _normalize_mixed_prose(text: str) -> str:
+    return re.sub(r"\b(\d+)\s+and\s+(\d+)\s*/\s*(\d+)\b",
+                  lambda m: f"({m[1]}+{m[2]}/{m[3]})"
+                  if 0 < int(m[2]) < int(m[3]) else m.group(), text, flags=re.I)
+
+
 def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
                                truncated: bool = False, exclude_pi: bool = False,
                                excluded: list[dict] | None = None,
-                               prior_context: str = "") -> list[tuple[str, str]]:
+                               prior_context: str = "", following_context: str = "") -> list[tuple[str, str]]:
     """Extract (lhs, rhs) pairs that look like purely numeric equations.
 
     Only extracts equations where both sides appear to be numeric
@@ -142,6 +148,13 @@ def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
         rhs = _clean_rhs(rhs)
         if not lhs or not rhs:
             return
+        if re.fullmatch(r"\d*\.\d+\s+\(\s*\d+(?:\.\d+)?\s*\\?%\s*\)", rhs):
+            _exclude(lhs, rhs, "parenthetical_percentage_annotation")
+            return
+        if any(re.fullmatch(r"[+-]?\d+\s*/\s*\d+\s*/\s*[+-]?\d+\s*/\s*\d+", side)
+               for side in (lhs, rhs)):
+            _exclude(lhs, rhs, "ambiguous_division_of_inline_fractions")
+            return
         if lhs.startswith("+") or (re.search(r"(?:\*|\\times)\s*100\s*$", lhs) and "%" in rhs):
             # Running-total fragments (+7=42) and percentage display shortcuts
             # are not complete mathematical equalities.
@@ -159,8 +172,8 @@ def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
                     and a != b and int(a) % 10 == int(b)):
                 _exclude(lhs, rhs, "units_digit_display")
                 return
-            if ("%" in rhs and "%" not in lhs and a is not None and b is not None
-                    and numerically_equal(a, b * 100)):
+            if (("%" in rhs) != ("%" in lhs) and a is not None and b is not None
+                    and (numerically_equal(a, b * 100) if "%" in rhs else numerically_equal(a * 100, b))):
                 _exclude(lhs, rhs, "percentage_display_without_lhs_units")
                 return
             if _is_rounded_display(lhs, rhs):
@@ -187,6 +200,14 @@ def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
         if not line:
             continue
         line = re.sub(r"^(?:[-*•]\s+)", "", line)
+        # Only an explicitly labelled, locally rejected root test is excluded.
+        # Ordinary mistakes remain failed checks even if later corrected.
+        following = "\n".join((lines[index + 1:] + following_context.splitlines())[:5])
+        if (re.search(r"\boriginal equation\s*:", line, re.I)
+                and re.search(r"LHS\s*\$?\\neq\$?\s*RHS", following, re.I)
+                and re.search(r"not a solution", following, re.I)):
+            _exclude(line, "", "extraneous_root_explicitly_rejected")
+            continue
         digit_display_context = bool(re.search(
             r"(?:units|last|ones)[ -]+digits?|possible ends|ends? (?:in|for|with)",
             "\n".join(context_lines[max(0, context_offset + index - 3):context_offset + index + 1]), re.I,
@@ -201,7 +222,8 @@ def _extract_numeric_equations(step_text: str, *, exclude_star: bool = False,
         running_total = (len(parts) == 2 and _is_numeric_expr(_clean_lhs(parts[0]))
                          and _is_numeric_expr(_clean_rhs(parts[1]))
                          and bool(re.search(r"\d\s*[+*/-]|\\(?:times|cdot)", parts[0])))
-        unfinished = (truncated and index == last_nonempty
+        unfinished = ((truncated or (line.count('$') % 2 == 1 and re.search(r"\d,\s*$", line)))
+                      and index == last_nonempty
                       and not re.search(r"(?:\$|</think>|(?<!\d)[.!?])\s*$", line))
         _extract_eqs_from_text(line, _try_add, skip_last=unfinished,
                               exclude_fn=_exclude)
@@ -214,7 +236,10 @@ def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
     """Extract 'LHS = RHS' from a piece of text, calling add_fn for each."""
     # Split on lines first
     from recipes.deepscaler.math_expressions import normalize_thousands, split_top_level
-    segments = re.split(r"\\\\|\n|\b(?:and|then|next)\b", text, flags=re.IGNORECASE)
+    text = _normalize_mixed_prose(text)
+    # Sentence boundaries must precede equality-chain parsing. In particular,
+    # '-100. -100/200 = -.5' contains two expressions, not a decimal product.
+    segments = re.split(r"\\\\|\n|(?<!\.)\.(?!\.)(?=\s)|\b(?:and|then|next)\b", text, flags=re.IGNORECASE)
     candidates = []
     for item in segments:
         # A label before the first equality may end in a colon. A colon on
@@ -222,8 +247,16 @@ def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
         equality = item.find("=")
         if equality >= 0:
             prefix, suffix = item[:equality], item[equality:]
-            item = split_top_level(prefix, ":")[-1] + suffix
+            # A clock separator is part of a time, never a label boundary.
+            prefix = re.sub(r"(?<=\d):(?=\d)", "\x00", prefix)
+            item = split_top_level(prefix, ":")[-1].replace("\x00", ":") + suffix
         pieces = split_top_level(normalize_thousands(item), ",;")
+        if (len(pieces) >= 3 and '=' in pieces[0]
+                and all(re.fullmatch(r"\s*\$?\s*[+-]?\d+\s*\$?\s*[.]?", part)
+                        for part in pieces[1:])):
+            if exclude_fn:
+                exclude_fn(item, "", "list_rhs_not_scalar_equality")
+            continue
         for index, piece in enumerate(pieces):
             # Comma-separated digits are a numeral/list, not several equations.
             # Signed comma fragments are running totals, not unary assertions.
@@ -232,10 +265,37 @@ def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
                     if exclude_fn and "=" in piece:
                         exclude_fn(piece, "", "numeric_list_or_running_total")
                     continue
-            candidates.append(piece)
+            if piece.strip():
+                candidates.append(piece)
+    # A prose parenthesis can contain an independently delimited calculation.
+    # Do not extract arbitrary numeric suffixes or currency subexpressions.
+    candidates = [match[1] for match in re.finditer(r"\(\$([^$]+=[^$]+)\$\)", text)] + candidates
     for segment_index, segment in enumerate(candidates):
         segment = segment.strip()
         if not segment:
+            continue
+        exclusion = None
+        if re.search(r"\b(?:remainder|rem)\b|\$?\s+R\s+\$?\s*\d", segment, re.I):
+            exclusion = "quotient_and_remainder_context"
+        elif re.search(r"\?\s*(?:No\b|Not\b)|\(\s*impossible\s*\)", segment, re.I):
+            exclusion = "explicitly_rejected_hypothesis"
+        elif re.search(r"\bbinary\b", text, re.I) and not re.search(r"_\s*\{?2\}?", segment):
+            exclusion = "implicit_binary_notation"
+        elif re.search(r"\b(?:lire|yen|euros?|cents)\b", segment, re.I):
+            exclusion = "unit_conversion_context"
+        elif (re.search(r"\b(?:marked price|MP|discount)\b", text, re.I)
+              and re.search(r"\d\s*[-+]\s*\d+\s*\\?%", segment)):
+            exclusion = "percentage_price_shorthand"
+        elif (re.search(r"\bcumulative\b", text, re.I)
+              and re.search(r"\d+\s*\(\d+\)\s*=", segment)):
+            exclusion = "frequency_table_not_multiplication"
+        elif (re.search(r"\b(?:minutes|hours)\s*:", text, re.I)
+              and (annotation := re.search(r"\b(\d+)\s+\((\d+\s*[+-]\s*\d+)\)", segment))
+              and _safe_eval(_latex_to_python(annotation[2])) == int(annotation[1])):
+            exclusion = "time_borrowing_annotation"
+        if exclusion:
+            if exclude_fn and '=' in segment:
+                exclude_fn(segment, "", exclusion)
             continue
         # Check adjacent expressions in a chain without dropping a later
         # failure (2+3=5=6). Comparisons are never equality boundaries.
@@ -244,6 +304,12 @@ def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
         segment = re.split(r"\\(?:approx|equiv|sim)\b|≈|≡", segment, maxsplit=1)[0]
         parts = re.split(r"(?<![=<>!])=(?!=)", segment)
         for pair_index, (lhs, rhs) in enumerate(zip(parts, parts[1:])):
+            if (pair_index == 1 and re.search(r"\b(?:between|distance)\b", text, re.I)
+                    and re.fullmatch(r"\s*\$?\s*[A-Za-z]\s*", parts[0])
+                    and re.fullmatch(r"\s*[+-]?\d+(?:\.\d+)?\s*\$\s*", lhs)):
+                if exclude_fn:
+                    exclude_fn(lhs, rhs, "coordinate_label_not_equation")
+                continue
             if (pair_index == 1 and re.search(
                     r"\b(?:for|when|if|case)\s+\$?\s*[A-Za-z]\s*$", parts[0], re.I)
                     and re.fullmatch(r"\s*\$?\s*[+-]?\d+(?:\.\d+)?\s*\$?\s*", lhs)):
@@ -262,17 +328,41 @@ def _extract_eqs_from_text(text: str, add_fn, *, skip_last: bool = False,
 def _is_rounded_display(lhs: str, rhs: str) -> bool:
     """Exclude plausible rounding, without awarding it exact-equality credit."""
     from recipes.deepscaler.math_expressions import evaluate, numerically_equal
-    match = re.fullmatch(r"[+-]?\d*\.(\d{2,12})\s*(?:\\?%)?", rhs.strip())
-    if match is None:
-        return False
+    match = re.fullmatch(r"[+-]?\d*\.(\d{1,12})\s*(?:\\?%)?", rhs.strip())
     a, b = evaluate(_latex_to_python(lhs)), evaluate(_latex_to_python(rhs))
     if a is None or b is None or numerically_equal(a, b):
         return False
-    unit = 10.0 ** -len(match[1]) / (100 if "%" in rhs else 1)
     try:
         # Both rounding and truncation are common display conventions. Neither
         # earns exact credit when its literal value differs from the LHS.
-        return abs(float(a) - float(b)) < unit + 1e-12
+        difference = abs(float(a) - float(b))
+        if match and (len(match[1]) >= 2 or '%' in rhs):
+            unit = 10.0 ** -len(match[1]) / (100 if "%" in rhs else 1)
+            if difference < unit + 1e-12:
+                return True
+        # Propagate one displayed decimal unit through supported arithmetic.
+        # This only excludes uncertain equalities; it never makes them true.
+        # Limit both work and accepted precision. Ordinary integers retain
+        # exact semantics, including integers in a mostly decimal expression.
+        uncertainty = 0.0
+        for expression, value in ((lhs, a), (rhs, b)):
+            decimals = [m for m in re.finditer(r"(?<![\w.])\d*\.(\d{1,12})(?!\d)", expression)
+                        if len(m[1]) >= 2 or re.match(r"\s*(?:\*|\\times|\\cdot|×)\s*10\s*\^",
+                                                     expression[m.end():])]
+            if len(decimals) > 8:
+                return False
+            for decimal in decimals:
+                unit = 10.0 ** -len(decimal[1])
+                alternatives = []
+                for direction in (-1, 1):
+                    replacement = f"({decimal.group()}+({direction * unit:.14f}))"
+                    perturbed = expression[:decimal.start()] + replacement + expression[decimal.end():]
+                    converted = _latex_to_python(perturbed)
+                    result = evaluate(converted) if converted else None
+                    if result is not None:
+                        alternatives.append(abs(float(result) - float(value)))
+                uncertainty += max(alternatives, default=0.0)
+        return uncertainty > 0 and difference < uncertainty * (1 - 1e-9)
     except (ValueError, OverflowError):
         return False
 
@@ -346,6 +436,7 @@ def _process_reward_audit(solution_str: str, *, question: str = "", truncated: b
                        and solution_str.rstrip().endswith(step.rstrip())),
             excluded=excluded_equations,
             prior_context="\n".join(steps[max(0, index - 3):index - 1]),
+            following_context="\n".join(steps[index:index + 5]),
         )
         equation_results = [_verify_equation_pair(lhs, rhs) for lhs, rhs in equations]
         step_verified = sum(equation_results)

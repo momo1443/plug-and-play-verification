@@ -8,6 +8,7 @@ from types import SimpleNamespace as AgentFlowStep
 from agent_r1.verifier import (
     VerificationCredit,
     VerificationResult,
+    UniformRewardSchedule,
     apply_composed_reward,
     compose_verification_reward,
     uniform_reward_schedule,
@@ -89,6 +90,39 @@ class VerifierRewardTest(unittest.TestCase):
                 ),
                 audit={},
             )
+
+    def test_default_policy_decouples_process_from_terminal_submission(self) -> None:
+        composed = compose_verification_reward(
+            terminal_reward=0.0,
+            verification=VerificationResult(credits=(VerificationCredit(1, 0.5, {}),), audit={}),
+            schedule=UniformRewardSchedule(0.7, 0.3, "mixed", "fixed", None),
+            terminal_gate_passed=False,
+        )
+        self.assertFalse(composed.process_requires_terminal_submission)
+        self.assertEqual(composed.terminal_component, 0)
+        self.assertAlmostEqual(composed.process_step_components[1], 0.15)
+
+    def test_unsubmitted_process_credits_can_be_retained_without_terminal_credit(self) -> None:
+        schedule = UniformRewardSchedule(0.7, 0.3, "mixed", "fixed", None)
+        verification = VerificationResult(
+            credits=(VerificationCredit(1, 0.25, {}), VerificationCredit(2, 0.75, {})),
+            audit={},
+        )
+        for retain in (False, True):
+            with self.subTest(retain=retain):
+                composed = compose_verification_reward(
+                    terminal_reward=1.0, verification=verification, schedule=schedule,
+                    terminal_gate_passed=False,
+                    process_requires_terminal_submission=not retain,
+                )
+                self.assertEqual(composed.terminal_component, 0)
+                self.assertFalse(composed.terminal_gate_passed)
+                steps = [AgentFlowStep(reward_score=0.0, extra_fields={}) for _ in range(3)]
+                apply_composed_reward(steps, composed)
+                expected = [0.075, 0.225, 0] if retain else [0, 0, 0]
+                for step, reward in zip(steps, expected):
+                    self.assertAlmostEqual(step.reward_score, reward)
+                self.assertAlmostEqual(composed.score, 0.3 if retain else 0)
 
 
 if __name__ == "__main__":

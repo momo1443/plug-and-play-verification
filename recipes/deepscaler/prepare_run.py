@@ -159,7 +159,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "final_turn_submission": os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true",
             "thinking_policy": "default for reasoning turns; enable_thinking=False on final submission turn when enabled",
             "final_answer_prefill": r"\boxed{" if os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true" else None,
-            "submission_stopping": "first balanced outer box; whole sampled tokens retained; generated suffix counted in budget",
+            "submission_stopping": "first completed prefilled or explicit box; whole sampled tokens retained; generated suffix counted in budget",
             "continuation_policy": "advance existing derivation; recheck only a specific inconsistency; penultimate turn prepares submission",
             "total_training_steps": args.total_training_steps,
             "resume_global_step": resume_global_step,
@@ -173,6 +173,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         },
         "reward_contract": {
             "terminal_gate": "valid_final_answer_submission",
+            "process_requires_terminal_submission": False,
             "reward_mode": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
             "schedule": {
                 "warmup_steps": args.em_warmup_steps,

@@ -299,6 +299,8 @@ def main() -> None:
             "process_weight": 1.0 - expected_terminal,
             "weight_sampling": "uniform_0_1_per_prompt_group" if mode.endswith("uniform") else "fixed",
             "format_gate": True,
+            "format_gate_scope": "terminal_component_only",
+            "process_requires_terminal_submission": False,
             "reward_source": mode,
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
             "process_is_terminal_em_gated": False,

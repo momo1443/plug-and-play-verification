@@ -73,11 +73,28 @@ def main():
             em = int(submission is not None and answers_equal(submission, gold))
             valid_success = int(em and bool(checks) and all(checks))
             changed = checks != last['deterministic_verification']['applicable_checks'] or abs(process-last['deterministic_process_reward']) > 1e-12
+            def check_counts(audit):
+                return Counter((check['source_step'], check['lhs'], check['rhs'], bool(check['valid']))
+                               for segment in audit['process_segment_audits']
+                               for step in segment['steps'] for check in step['equation_checks'])
+            before = check_counts(last['deterministic_verification'])
+            after = check_counts(verification.audit)
+            removed, added = before - after, after - before
+            equation_changes = [
+                {'source_step':turn, 'lhs':lhs, 'rhs':rhs, 'valid':valid,
+                 'old_count':before[(turn,lhs,rhs,valid)], 'new_count':after[(turn,lhs,rhs,valid)]}
+                for turn,lhs,rhs,valid in sorted(set(removed) | set(added))
+            ]
             totals.update({'trajectories': 1, 'original_correct': bool(last['terminal_em']),
                            'replayed_correct_with_clean_reference': em, 'verified_success': valid_success,
                            'checks': len(checks), 'passed': sum(checks), 'failed': len(checks)-sum(checks),
                            'no_checks': not checks, 'process_changed': changed,
                            'old_submission_rejected': bool(last['has_final_answer'] and submission is None),
+                           'replayed_submitted': submission is not None,
+                           'recovered_submissions': bool(not last['has_final_answer'] and submission is not None),
+                           'recovered_correct_submissions': bool(not last['has_final_answer'] and em),
+                           'original_correct_now_incorrect': bool(last['terminal_em'] and not em),
+                           'removed_checks': sum(removed.values()), 'added_checks': sum(added.values()),
                            'terminal_score_changed': em != bool(last['terminal_em']),
                            'corrected_reference_trajectories': bool(correction),
                            'quarantined_reference_trajectories': bool(excluded)})
@@ -91,9 +108,12 @@ def main():
             records.append({'uid':uid,'global_step':row['global_step'],'source_index':index,
                             'reference_exclusion':excluded,'reference_corrected':bool(correction),
                             'submitted_answer':submission,'gold':gold,'terminal_em':em,
+                            'submission_method':final['method'] if final else None,
+                            'old_submitted':bool(last['has_final_answer']),
                             'verified_success':valid_success,'process_reward':process,
                             'checks':len(checks),'failed_checks':len(checks)-sum(checks),
-                            'process_changed':changed,'old_terminal_em':last['terminal_em']})
+                            'process_changed':changed,'old_terminal_em':last['terminal_em'],
+                            'equation_changes':equation_changes})
             if line_number % 200 == 0: print(f"Replayed {line_number} trajectories", flush=True)
     report = {'input':str(args.input.resolve()), 'coverage':'all_complete_records', 'totals':dict(totals),
               'remaining_failed_equations':[{'lhs':a,'rhs':b,'count':n,**failures[(a,b)]} for (a,b),n in failed.most_common()],

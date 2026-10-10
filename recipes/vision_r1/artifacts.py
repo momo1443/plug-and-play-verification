@@ -131,9 +131,9 @@ def parse_visual_certificate(value: Any) -> tuple[VisualCertificate | None, tupl
         errors.append("evidence_artifact_ids_empty")
     elif len(evidence_ids) > 2:
         errors.append("too_many_evidence_artifacts")
-    elif len(set(evidence_ids)) != len(evidence_ids) or not all(
+    elif not all(
         isinstance(item, str) and item.startswith("image:crop:") for item in evidence_ids
-    ):
+    ) or len(set(evidence_ids)) != len(evidence_ids):
         errors.append("evidence_artifact_ids_invalid")
     if not isinstance(claim, str) or not claim.strip() or len(claim) > 500:
         errors.append("claim_invalid")

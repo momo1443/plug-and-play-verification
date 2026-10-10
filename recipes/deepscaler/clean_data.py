@@ -31,7 +31,7 @@ def answer_parse_status(answer: str) -> tuple[str, str]:
         return answer, "ambiguous_ellipsis"
     try:
         return answer, "symbolic_or_structured" if _parsed_answer(answer) else "unsupported_answer_format"
-    except (ValueError, TypeError, TimeoutError, RecursionError):
+    except (ValueError, TypeError, TimeoutError, RecursionError, RuntimeError):
         return answer, "unsupported_answer_format"
 
 
