@@ -144,6 +144,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
         }
         submitted_answer: str | None = None
         raw_certificate: Any = None
+        submission_attempted = False
         terminal_applied = False
         action_checks = []
 
@@ -209,6 +210,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                             feedback = _artifact_feedback(artifact)
                             feedback_image = artifact.image
                 elif action_name == "submit_answer":
+                    submission_attempted = True
                     raw_certificate = arguments.get("certificate")
                     answer = arguments.get("answer")
                     if isinstance(answer, str) and answer.strip():
@@ -262,6 +264,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                         artifacts=artifacts,
                         raw_certificate=raw_certificate,
                         submitted_answer=submitted_answer,
+                        submission_attempted=submission_attempted,
                     )
 
                 )
@@ -325,6 +328,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                 **consistency_record(verify_process(
                     artifacts=artifacts, raw_certificate=raw_certificate,
                     submitted_answer=submitted_answer or "",
+                    submission_attempted=submission_attempted,
                 ), terminal_score, eligible=submitted_answer is not None, extra_checks=action_checks),
                 "acc": terminal_score, "terminal_exact_math_match": terminal_score,
                 "verified_process_reward": verification.process_reward, "reward_mode": "llm_judge",
@@ -335,6 +339,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             verification = verify_process(
                 artifacts=artifacts, raw_certificate=raw_certificate,
                 submitted_answer=submitted_answer or "",
+                submission_attempted=submission_attempted,
             )
             composed = compose_verification_reward(
                 terminal_reward=0.0,

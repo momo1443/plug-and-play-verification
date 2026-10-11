@@ -6,6 +6,7 @@ import argparse
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -14,7 +15,7 @@ import pyarrow.parquet as pq
 from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord, parse_submission_certificate
 from recipes.taco_a9.prepare_data import build_dataset
 from recipes.taco_a9.reward_contract import sample_weights
-from recipes.taco_a9.sandbox import TestCase, TestSuite
+from recipes.taco_a9.sandbox import TestCase as SandboxTestCase, TestSuite as SandboxTestSuite
 from recipes.taco_a9.verifier import (
     CertificateAudit,
     CodeArtifactAudit,
@@ -51,7 +52,7 @@ class TacoA9Test(unittest.TestCase):
     def test_lineage_accepts_final_code_with_real_passing_run(self):
         artifact = self._artifact()
         record = self._record(artifact)
-        suite = TestSuite("developer_v1", (TestCase("", ""),))
+        suite = SandboxTestSuite("developer_v1", (SandboxTestCase("", ""),))
         raw = {
             "final_code_artifact_id": artifact.artifact_id,
             "final_code_sha256": artifact.sha256,
@@ -74,7 +75,7 @@ class TacoA9Test(unittest.TestCase):
         artifact = self._artifact()
         other = CodeArtifact.create(2, "print('different')\n")
         record = self._record(other)
-        suite = TestSuite("developer_v1", (TestCase("", ""),))
+        suite = SandboxTestSuite("developer_v1", (SandboxTestCase("", ""),))
         raw = {
             "final_code_artifact_id": artifact.artifact_id,
             "final_code_sha256": artifact.sha256,
@@ -167,7 +168,7 @@ class TacoA9Test(unittest.TestCase):
 
     def test_artifact_process_requires_exact_replayable_evidence(self):
         artifact = self._artifact()
-        suite = TestSuite("developer_v1", (TestCase("", "ok\n"),))
+        suite = SandboxTestSuite("developer_v1", (SandboxTestCase("", "ok\n"),))
 
         class FakeExecutor:
             def run_suite(self, replay_artifact, replay_suite, *, run_ordinal):
@@ -224,6 +225,68 @@ class TacoA9Test(unittest.TestCase):
         )
         self.assertEqual(result.process_reward, 1.0)
         self.assertEqual(result.components_by_step(), {2: 0.5, 3: 0.5})
+
+    def test_untested_versions_and_untriggered_submission_checks_are_excluded(self):
+        tested = CodeArtifactAudit("code:1", "a" * 64, 1, "run:1", 1, 1, 2, 2, 1, 1, ())
+        untested = CodeArtifactAudit("code:2", "b" * 64, 0, None, 0, 0, 0, 0, 0, 0, ("artifact_not_tested",))
+        result = build_verification_result(
+            [tested, untested], CertificateAudit(0, 0, 0, 0, ()),
+            run_step_indices={"run:1": 2}, final_step_index=3,
+            certificate_applicable=False,
+        )
+        self.assertEqual(result.process_reward, 1)
+        self.assertEqual(result.audit["process_denominator"], 1)
+        self.assertEqual(result.components_by_step(), {2: 1})
+        self.assertEqual(result.audit["applicable_checks"], [1])
+        self.assertFalse(result.audit["artifact_process_audits"][1]["check_applicable"])
+
+    def test_failed_execution_and_required_missing_certificate_are_retained(self):
+        passed = CodeArtifactAudit("code:1", "a" * 64, 1, "run:1", 1, 1, 2, 2, 1, 1, ())
+        failed = replace(passed, artifact_id="code:2", run_id="run:2",
+                         passed=0, developer_pass_rate=0, verified_score=0)
+        result = build_verification_result(
+            [passed, failed], CertificateAudit(0, 0, 0, 0, ("certificate_not_object",)),
+            run_step_indices={"run:1": 2, "run:2": 4}, final_step_index=5,
+        )
+        self.assertAlmostEqual(result.process_reward, 1 / 3)
+        self.assertEqual(result.audit["process_denominator"], 3)
+        self.assertEqual(result.audit["applicable_checks"], [0, 1, 0])
+
+    def test_no_applicable_checks_receive_zero_process_reward(self):
+        result = build_verification_result(
+            [], CertificateAudit(0, 0, 0, 0, ()),
+            run_step_indices={}, final_step_index=1, certificate_applicable=False,
+        )
+        self.assertEqual(result.process_reward, 0)
+        self.assertEqual(result.audit["process_denominator"], 0)
+        self.assertEqual(result.audit["applicable_checks"], [])
+
+    def test_lineage_failure_is_retained_at_the_attempted_execution_step(self):
+        artifact = self._artifact()
+        record = replace(self._record(artifact), code_sha256="0" * 64)
+
+        class NoReplayExecutor:
+            def run_suite(self, *args, **kwargs):
+                raise AssertionError("Lineage mismatch must not be replayed")
+
+        result = verify_process(
+            artifacts={artifact.artifact_id: artifact}, records={record.run_id: record},
+            raw_certificate=None, submitted_artifact=None,
+            developer_suite=SandboxTestSuite("developer_v1", (SandboxTestCase("", ""),)),
+            executor=NoReplayExecutor(), run_step_indices={record.run_id: 2}, final_step_index=3,
+        )
+        self.assertEqual(result.process_reward, 0)
+        self.assertEqual(result.audit["process_denominator"], 1)
+        self.assertEqual(result.components_by_step(), {2: 0})
+        self.assertIn("execution_lineage_mismatch", result.audit["artifact_process_audits"][0]["errors"])
+
+    def test_tested_artifact_cannot_silently_lose_its_source_step(self):
+        tested = CodeArtifactAudit("code:1", "a" * 64, 1, "run:1", 1, 1, 2, 2, 1, 1, ())
+        with self.assertRaisesRegex(ValueError, "source rollout step"):
+            build_verification_result(
+                [tested], CertificateAudit(0, 0, 0, 0, ()),
+                run_step_indices={}, final_step_index=1, certificate_applicable=False,
+            )
 
     def test_preparation_excludes_solutions_and_partitions_tests(self):
         with tempfile.TemporaryDirectory() as temporary:

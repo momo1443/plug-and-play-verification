@@ -9,8 +9,10 @@ from agent_r1.verifier import (
     ComposedVerificationReward,
     UniformRewardSchedule,
     VerificationCredit,
+    VerificationGroup,
     VerificationResult,
     compose_verification_reward,
+    normalize_verification_groups,
     uniform_reward_schedule,
 )
 from recipes.deepscaler.reward_fn import _process_reward_audit
@@ -90,15 +92,27 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]], *, question: s
             ],
         }
         records.append(record)
-    participating = [record for record in records if record["equation_count"] > 0]
-    denominator = len(participating)
-    for record in records:
-        participates = record["equation_count"] > 0
+    # One group per interaction step. Weights preserve equal weighting of
+    # equation-bearing internal segments, then equations within each segment.
+    normalization = normalize_verification_groups(tuple(
+        VerificationGroup(
+            group_id=f"math:turn:{record['turn']}",
+            scores=tuple(float(check["valid"]) for segment in record["steps"]
+                         for check in segment["equation_checks"]),
+            base_weights=tuple(1.0 / segment["equation_count"] for segment in record["steps"]
+                               for _ in segment["equation_checks"]),
+        ) for record in records
+    ))
+    denominator = normalization["normalizer"]
+    for record, group in zip(records, normalization["groups"], strict=True):
+        participates = group["applicable_check_count"] > 0
         record.update({
             "participates_in_process_reward": participates,
             "normalizer": denominator,
-            "normalized_credit": float(record["process_reward"]) / denominator if participates else 0.0,
+            "normalized_credit": group["normalized_credit"],
+            "normalization_group": group,
         })
+    participating = [record for record in records if record["participates_in_process_reward"]]
     credits = tuple(
         VerificationCredit(
             step_index=int(record["turn"]),
@@ -114,6 +128,7 @@ def verify_process(reasoning_segments: Iterable[tuple[int, str]], *, question: s
             "evidence_parser_version": 3,
             "normalization": "mean_over_equation_bearing_policy_steps_including_failures",
             "normalizer": denominator,
+            "normalization_groups": normalization["groups"],
             "participating_step_indices": [int(record["turn"]) for record in participating],
             "empty_step_policy": "zero_credit_excluded_from_denominator",
             "applicable_checks": [int(check["valid"]) for record in records for step in record["steps"] for check in step["equation_checks"]],

@@ -8,7 +8,7 @@ from agent_r1.verifier import UniformRewardSchedule, uniform_reward_schedule
 _GROUP_WEIGHT_NAMESPACE = b"taco-a9-group-weight-v1"
 
 
-CONTRACT_VERSION = "taco-a9-terminal50-verified-process-group-uniform-v3"
+CONTRACT_VERSION = "taco-a9-terminal50-verified-process-group-uniform-v4"
 
 
 def sample_weights(

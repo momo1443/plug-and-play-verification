@@ -308,6 +308,7 @@ def main() -> None:
             "process_requires_terminal_submission": False,
             "reward_source": mode,
             "reward_horizon": CONTRACT_CERT_MIX.reward_horizon,
+            "process_denominator": "actual applicable certificate transitions within the reward horizon, including failures; unused positions excluded",
             "process_is_terminal_em_gated": False,
             "gold_answer_visible_to_verifier": False,
             "gold_evidence_visible_to_verifier": args.arm in {"A2", "A3"},

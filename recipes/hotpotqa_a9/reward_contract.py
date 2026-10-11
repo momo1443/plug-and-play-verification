@@ -33,7 +33,7 @@ CONTRACT_FORMAT_STRICT = CertificateRewardContract(
     terminal_weight=0.5, process_weight=0.5, format_gate=True,
 )
 
-A9_CONTRACT_VERSION = "hotpotqa-independent-process-outcome-v5"
+A9_CONTRACT_VERSION = "hotpotqa-independent-process-outcome-v6"
 
 # Import-time invariant check
 if abs(CONTRACT_CERT_MIX.terminal_weight + CONTRACT_CERT_MIX.process_weight - 1.0) > 1e-12:

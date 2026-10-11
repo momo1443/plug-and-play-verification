@@ -67,7 +67,7 @@ and the run manifest when preparing the final paper tables.
 
 ## Validation scope
 
-Run `python3 -m unittest discover -s tests -p test_paper_launcher_config.py -v`
+Run `python3 -m unittest discover -s tests -p test_pnp_config.py -v`
 from the repository root. These tests run the actual shell launchers with a
 Python stub, exercise model/length overrides, and capture trainer arguments.
 They do not load models or run distributed optimization. The recorded earlier

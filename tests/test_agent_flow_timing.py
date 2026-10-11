@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import torch
 
 from agent_r1.agent_flow.agent_flow import AgentFlowManager
-from recipes.hotpotqa.hotpotqa_agent_flow import HotpotQAAgentFlow
 
 
 class AgentFlowTimingTest(unittest.TestCase):
@@ -58,20 +57,6 @@ class AgentFlowTimingTest(unittest.TestCase):
         self.assertEqual(timing["agent_flow/slowest/total_prompt_length"], 2)
         self.assertEqual(timing["agent_flow/slowest/total_response_length"], 3)
 
-    def test_hotpotqa_records_zero_tool_time_for_a_step_without_a_tool_call(self):
-        metrics = {
-            "generate_sequences": 0.0,
-            "tool_calls": 0.0,
-            "step_generate_sequences": [],
-            "step_tool_calls": [],
-        }
-
-        HotpotQAAgentFlow._record_step_timing(metrics, {"generate_sequences": 1.25})
-
-        self.assertEqual(metrics["generate_sequences"], 1.25)
-        self.assertEqual(metrics["tool_calls"], 0.0)
-        self.assertEqual(metrics["step_generate_sequences"], [1.25])
-        self.assertEqual(metrics["step_tool_calls"], [0.0])
 
     def test_legacy_multistep_metrics_do_not_publish_false_step_statistics(self):
         metrics = [

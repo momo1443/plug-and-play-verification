@@ -110,7 +110,7 @@ def main() -> None:
         "contract_version": (
             "taco-qwen35-9b-process-judge-v2"
             if args.reward_mode == "llm_judge"
-            else "taco-a9-verified-process-group-uniform-v3"
+            else "taco-a9-verified-process-group-uniform-v4"
         ),
         "status": "prepared",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -147,7 +147,7 @@ def main() -> None:
             "private_tests_visible_to_actor": False,
             "private_tests_used_after_submit": True,
             "sandbox": "bubblewrap",
-            "certificate_verifier": "taco-a9-execution-replay-v1",
+            "certificate_verifier": "taco-a9-execution-replay-v2",
         },
         "reward_contract": ({
             "process_requires_terminal_submission": False,
@@ -166,7 +166,8 @@ def main() -> None:
             "process_requires_terminal_submission": False,
             "weight_sampling": "uniform_0_1_per_prompt_group_after_terminal_warmup",
             "formula": "w * private_test_all_pass + (1-w) * verified_process_reward",
-            "process_formula": "mean(replay_gated_developer_pass_rate_per_unique_artifact, certificate_score)",
+            "process_formula": "mean(replay_gated_developer_pass_rate_per_tested_artifact, applicable_certificate_score)",
+            "process_denominator": "tested code versions plus one certificate check if submission attempted; failures retained, untested versions and untriggered checks excluded",
             "outcome_formula": "1 iff all private tests pass, else 0",
             "validation_formula": "report private_test_all_pass and verified_process_reward separately",
             "terminal_warmup_steps": args.terminal_warmup_steps,

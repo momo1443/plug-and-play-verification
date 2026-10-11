@@ -2,10 +2,8 @@
 
 import dataclasses
 import json
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from recipes.hotpotqa_a9.dsl import (
     FinishCertificate,
@@ -19,7 +17,6 @@ from recipes.hotpotqa_a9.protocol import (
 )
 from recipes.hotpotqa_a9.reward_contract import (
     CONTRACT_CERT_MIX,
-    CONTRACT_FORMAT_STRICT,
 )
 from recipes.hotpotqa_a9.reward_sources import optimizer_reward_schedule
 from recipes.hotpotqa_a9.verifier import (
@@ -218,11 +215,13 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(audits[0].grounding_valid, 1)
         self.assertEqual(audits[0].coupling_valid, 1)
         self.assertEqual(audits[0].own_valid, 1)
-        self.assertAlmostEqual(audits[0].raw_local_credit, 1.0 / 3.0)
+        self.assertAlmostEqual(audits[0].raw_local_credit, 1.0)
+        self.assertEqual(audits[0].normalizer, 1)
 
         result = verify_process(transitions, [1], reward_horizon=3)
-        self.assertAlmostEqual(result.process_reward, 1.0 / 3.0)
-        self.assertEqual(result.components_by_step(), {2: 1.0 / 3.0})
+        self.assertAlmostEqual(result.process_reward, 1.0)
+        self.assertEqual(result.components_by_step(), {2: 1.0})
+        self.assertEqual(result.audit["process_denominator"], 1)
 
     def test_trajectory_zero_credit_on_parse_failure(self):
         transitions = [{
@@ -247,7 +246,7 @@ class VerifierTest(unittest.TestCase):
         }]
         audits = verify_trajectory(transitions, reward_horizon=3)
         record = trajectory_audit_record(audits)
-        self.assertAlmostEqual(record["local_reward"], 1.0 / 3.0)
+        self.assertAlmostEqual(record["local_reward"], 1.0)
         self.assertEqual(record["parsed_certificate_count"], 1)
         self.assertEqual(record["credited_transition_count"], 1)
 
@@ -267,6 +266,43 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(audits[3].raw_local_credit, 0.0)
         self.assertIn("reward_horizon_exceeded", audits[3].errors)
 
+    def test_inapplicable_action_does_not_dilute_certificate_credit(self):
+        valid = {
+            "action_type": "search", "action_value": "June Miller nationality",
+            "certificate": {"source_id": "passage:17",
+                            "support_span": "Henry Miller married June Miller",
+                            "target": "June Miller"},
+            "available_artifacts": self.artifacts,
+        }
+        result = verify_process([{"action_type": "reasoning"}, valid], [0, 1])
+        self.assertEqual(result.process_reward, 1)
+        self.assertEqual(result.audit["process_denominator"], 1)
+        self.assertEqual(result.components_by_step(), {2: 1})
+        self.assertEqual(result.audit["applicable_checks"], [1])
+
+    def test_required_missing_malformed_or_failed_certificate_stays_in_denominator(self):
+        valid = {
+            "action_type": "search", "action_value": "June Miller nationality",
+            "certificate": {"source_id": "passage:17",
+                            "support_span": "Henry Miller married June Miller",
+                            "target": "June Miller"},
+            "available_artifacts": self.artifacts,
+        }
+        for certificate in (None, {"bad": "field"},
+                            {**valid["certificate"], "support_span": "Invented quotation"}):
+            with self.subTest(certificate=certificate):
+                result = verify_process([valid, {**valid, "certificate": certificate}], [0, 1])
+                self.assertEqual(result.process_reward, 0.5)
+                self.assertEqual(result.audit["process_denominator"], 2)
+                self.assertEqual(result.audit["applicable_checks"], [1, 0])
+
+    def test_no_applicable_checks_receive_zero_process_reward(self):
+        for transitions, indices in (([], []), ([{"action_type": "reasoning"}], [0])):
+            result = verify_process(transitions, indices)
+            self.assertEqual(result.process_reward, 0)
+            self.assertEqual(result.audit["process_denominator"], 0)
+            self.assertEqual(result.audit["applicable_checks"], [])
+
 
 # -- Reward Contract --
 
@@ -281,13 +317,6 @@ class RewardContractTest(unittest.TestCase):
 
     def test_cert_mix_format_gate_on(self):
         self.assertTrue(CONTRACT_CERT_MIX.format_gate)
-
-    def test_format_strict_weights(self):
-        self.assertAlmostEqual(CONTRACT_FORMAT_STRICT.terminal_weight, 0.5)
-        self.assertAlmostEqual(CONTRACT_FORMAT_STRICT.process_weight, 0.5)
-
-    def test_format_strict_format_gate_on(self):
-        self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
 
 
 # -- Reward Schedule --
@@ -390,10 +419,6 @@ class FormatGateTest(unittest.TestCase):
         self.assertTrue(CONTRACT_CERT_MIX.format_gate)
         self.assertFalse(CONTRACT_CERT_MIX.process_requires_terminal_submission)
 
-    def test_format_gate_strict_on(self):
-        """CONTRACT_FORMAT_STRICT has format_gate enabled."""
-        self.assertTrue(CONTRACT_FORMAT_STRICT.format_gate)
-        self.assertFalse(CONTRACT_FORMAT_STRICT.process_requires_terminal_submission)
 
     def test_warmup_schedule_remains_outcome_only(self):
         """Eligibility is separate from the warmup mixture weights."""
@@ -406,7 +431,7 @@ class FormatGateTest(unittest.TestCase):
         self.assertEqual(phase, "em_warmup")
 
     def test_format_gate_post_warmup_phase(self):
-        """The strict ablation preserves the shared uniform A9 schedule."""
+        """PNP uses the uniform certificate schedule after warmup."""
         tw, pw, phase = optimizer_reward_schedule(
             global_step=200,
             is_validation=False,
@@ -428,14 +453,13 @@ class RewardArmTest(unittest.TestCase):
             "final_response_mask": 1,
         })
 
-    def test_a9_subarm_contracts(self):
-        contract = training_reward_contract(RewardArm.A9_CERT_MIX)
-        self.assertAlmostEqual(contract.terminal_weight, 0.5)
-        self.assertAlmostEqual(contract.process_weight, 0.5)
 
-    def test_a9_no_binary_check(self):
+    def test_pnp_process_credit_preserves_fractional_scores(self):
         result = search_step_reward(RewardArm.A9_CERT_MIX, 0.33, is_validation=False)
-        self.assertAlmostEqual(result, 0.33 * 0.5)# -- Validation-time Lenient Fallback --
+        self.assertAlmostEqual(result, 0.33 * 0.5)
+
+
+# -- Final Submission Protocol --
 
 
 class A9SubmissionProtocolTest(unittest.TestCase):
@@ -488,8 +512,8 @@ class A9SubmissionProtocolTest(unittest.TestCase):
             1.0,
         )
 
-    def test_validation_lenient_fallback_wrong_answer(self):
-        """Lenient fallback should still return 0 for wrong answers."""
+    def test_validation_rejects_wrong_answer_without_finish(self):
+        """A wrong answer tag without finish is not a valid submission."""
         from recipes.hotpotqa_a9.reward_fn import compute_score as a9_compute_score
 
         completion = "<answer>British</answer>"
@@ -504,7 +528,7 @@ class A9SubmissionProtocolTest(unittest.TestCase):
 
 
 class LauncherTest(unittest.TestCase):
-    def test_rlvr_sh_routes_a9_to_certificate_agent(self):
+    def test_pnp_launcher_routes_to_certificate_agent(self):
         shared = (PROJECT_ROOT / "scripts/hotpotqa/pnp_hotpotqa_train.sh").read_text(encoding="utf-8")
         self.assertIn("recipes/hotpotqa_a9/pnp_hotpotqa.yaml", shared)
         self.assertIn("hotpotqa_certificate_agent", shared)
