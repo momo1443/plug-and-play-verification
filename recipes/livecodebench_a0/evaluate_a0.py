@@ -17,9 +17,6 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
-
 FUNCTIONAL_RUNNER = Path(__file__).with_name("functional_runner.py")
 
 
@@ -311,6 +308,9 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def main() -> None:
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
+
     args = parse_args()
     if not shutil.which("bwrap"):
         raise RuntimeError("bubblewrap is required; refusing to execute generated code unsandboxed")

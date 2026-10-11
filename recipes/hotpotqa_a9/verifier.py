@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from agent_r1.verifier import VerificationCredit, VerificationResult
+from agent_r1.verifier import VerificationCredit, VerificationGroup, VerificationResult, normalize_verification_groups
 from recipes.hotpotqa_a9.dsl import (
     CERTIFICATE_SCHEMA_VERSION,
     FinishCertificate,
@@ -16,7 +16,7 @@ from recipes.hotpotqa_a9.dsl import (
 from recipes.hotpotqa_lr.reward_fn import normalize_answer
 from recipes.hotpotqa_lr.verifier import artifact_content_sha256
 
-VERIFIER_VERSION = "hotpotqa-a9-certificate-v1"
+VERIFIER_VERSION = "hotpotqa-a9-certificate-v2"
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,10 @@ class CertificateStepAudit:
     own_valid: int
     raw_local_credit: float
     errors: tuple[str, ...]
+    check_applicable: bool
+    participates_in_process_reward: bool
+    normalizer: int
+    normalization_group: Mapping[str, Any] | None = None
 
     def record(self) -> dict[str, Any]:
         return {
@@ -48,6 +52,10 @@ class CertificateStepAudit:
             "own_valid": self.own_valid,
             "raw_local_credit": self.raw_local_credit,
             "errors": list(self.errors),
+            "check_applicable": self.check_applicable,
+            "participates_in_process_reward": self.participates_in_process_reward,
+            "normalizer": self.normalizer,
+            "normalization_group": dict(self.normalization_group or {}),
         }
 
 
@@ -98,7 +106,11 @@ def verify_trajectory(
     1. Parse the certificate (best-effort; failure yields 0 credit).
     2. Check grounding: does support_span appear in the source artifact?
     3. Check coupling: does the certificate relate to the action taken?
-    4. Compute credit: own_valid / horizon if within horizon, else 0.
+    4. Average over actual applicable transitions within the reward horizon.
+
+    Unused horizon positions and actions without a certificate check are
+    excluded. A search/finish action still requires its certificate: missing,
+    malformed, or failed required evidence contributes zero to the average.
 
     No dependency taint, no novelty gating, no ref chains — all removed
     from A8 to keep the verifier minimal and focused on what it can
@@ -143,8 +155,9 @@ def verify_trajectory(
 
         own_valid = grounding_valid * coupling_valid
         horizon_ok = index <= reward_horizon
+        applicable = action_type in {"search", "finish"}
+        participates = applicable and horizon_ok
 
-        credit = float(own_valid) / float(reward_horizon) if horizon_ok else 0.0
         if not horizon_ok:
             errors.append("reward_horizon_exceeded")
 
@@ -158,12 +171,24 @@ def verify_trajectory(
                 grounding_valid=grounding_valid,
                 coupling_valid=coupling_valid,
                 own_valid=own_valid,
-                raw_local_credit=credit,
+                raw_local_credit=0.0,
                 errors=tuple(errors),
+                check_applicable=applicable,
+                participates_in_process_reward=participates,
+                normalizer=0,
             )
         )
 
-    return tuple(audits)
+    normalization = normalize_verification_groups(tuple(
+        VerificationGroup(
+            group_id=f"hotpotqa:transition:{audit.transition_index}",
+            scores=(float(audit.own_valid),),
+            applicable=(audit.participates_in_process_reward,),
+        ) for audit in audits
+    ))
+    return tuple(replace(audit, raw_local_credit=group["normalized_credit"],
+                         normalizer=normalization["normalizer"], normalization_group=group)
+                 for audit, group in zip(audits, normalization["groups"], strict=True))
 
 
 def trajectory_audit_record(audits: Sequence[CertificateStepAudit]) -> dict[str, Any]:
@@ -180,6 +205,7 @@ def trajectory_audit_record(audits: Sequence[CertificateStepAudit]) -> dict[str,
         ),
         "credited_transition_count": sum(audit.raw_local_credit > 0 for audit in audits),
         "local_reward": float(local_reward),
+        "process_denominator": audits[0].normalizer if audits else 0,
         "mean_grounding": (
             sum(audit.grounding_valid for audit in audits) / count if count else 0.0
         ),
@@ -208,6 +234,8 @@ def build_verification_result(
     credits: list[VerificationCredit] = []
     credits_by_step: dict[int, list[dict[str, Any]]] = {}
     for audit, zero_based_step_index in zip(audits, transition_flow_step_indices, strict=True):
+        if not audit.participates_in_process_reward:
+            continue
         step_index = int(zero_based_step_index) + 1
         record = audit.record()
         credits.append(
@@ -223,7 +251,11 @@ def build_verification_result(
         audit={
             "verifier": VERIFIER_VERSION,
             "certificate_audit": summary,
-            "applicable_checks": [audit.own_valid for audit in audits],
+            "normalization": "mean_over_applicable_transitions_within_reward_horizon_including_failures",
+            "process_denominator": summary["process_denominator"],
+            "normalization_groups": [dict(audit.normalization_group or {}) for audit in audits],
+            "empty_step_policy": "zero_credit_excluded_from_denominator",
+            "applicable_checks": [audit.own_valid for audit in audits if audit.check_applicable],
             "credits_by_step": credits_by_step,
         },
     )

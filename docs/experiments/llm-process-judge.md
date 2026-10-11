@@ -40,8 +40,4 @@ AGENT_R1_JUDGE_CONFIG_ONLY=1 bash scripts/llm_judge/run_grpo_4b_judge_9b.sh all
 
 ## Verification scope
 
-Focused tests cover causal judge prompts, bounded/source-attributed rewards, distinct binary outcomes, incomplete trajectories, warmup/validation, fail-closed metadata, and image-aware local/remote request caching. `test_process_judge_flows.py` executes production flow methods with mocked generation, environment and outcome-matcher boundaries, omitting heavy runtime imports through AST loading. These CPU tests do not validate Ray/veRL integration, GPU serving, learned judge quality, or training performance.
-
-```bash
-PYTHONPATH=.:tests python -m unittest test_cross_domain_llm_judge test_process_judge_flows test_hotpotqa_judge_server test_hotpotqa_reward_arms
-```
+The maintained `tests/` suite covers the current deterministic PNP method and its shared training infrastructure. Dedicated LLM judge comparison tests were removed during test cleanup. The retained suite does not validate judge prompting, caching, serving, or scoring; those require separate validation before running this comparison arm.

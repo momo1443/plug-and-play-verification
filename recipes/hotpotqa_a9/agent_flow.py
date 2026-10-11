@@ -489,15 +489,18 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
             terminal = final_turn or (finish is not None and finish.answer is not None)
             if terminal:
                 answer = finish.answer if finish is not None else None
-                if answer is not None:
+                finish_attempted = call is not None and call.get("name") == "finish"
+                if answer is not None or finish_attempted:
+                    certificate_finish = finish if finish is not None else parse_finish_call(visible_text)
                     transitions.append(
                         {
-                            "certificate": finish.certificate_raw if finish else None,
+                            "certificate": certificate_finish.certificate_raw if certificate_finish else None,
                             "certificate_parsed": (
-                                finish.certificate.record() if finish and finish.certificate else None
+                                certificate_finish.certificate.record()
+                                if certificate_finish and certificate_finish.certificate else None
                             ),
                             "action_type": "finish",
-                            "action_value": answer,
+                            "action_value": answer or "",
                             "available_artifacts": available_artifacts,
                         }
                     )

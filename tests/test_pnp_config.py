@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TARGETS = "[q_proj,k_proj,v_proj,o_proj,up_proj,gate_proj,down_proj]"
 
 
-class PaperLauncherConfigTest(unittest.TestCase):
+class PnpConfigTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -48,11 +48,10 @@ class PaperLauncherConfigTest(unittest.TestCase):
             "HOTPOTQA_OUTPUT_DIR": str(self.output), "HOTPOTQA_SKIP_PREFLIGHT": "1",
             # Nonempty optional arrays also allow testing on macOS Bash 3.2.
             "HOTPOTQA_HYDRA_CONFIG_ONLY": "1", "HOTPOTQA_VLLM_KV_CACHE_MEMORY_BYTES": "1024",
-            "DEEPSCALER_TOOL_OUTPUT_DIR": str(self.output),
-            "DEEPSCALER_TOOL_PAIR_DATA_DIR": str(self.root),
+            "DEEPSCALER_OUTPUT_DIR": str(self.output),
+            "DEEPSCALER_TRAIN_PATH": str(self.root / "train.parquet"),
+            "DEEPSCALER_VAL_PATH": str(self.root / "validation.parquet"),
             "TACO_A9_OUTPUT_DIR": str(self.output), "TACO_A9_DATA_ROOT": str(self.root),
-            "TACO_A1_OUTPUT_DIR": str(self.output), "TACO_A1_OUTPUT_ROOT": str(self.root),
-            "TACO_A1_DATA_ROOT": str(self.root), "TACO_A1_SMOKE": "true",
             "VISION_R1_OUTPUT_DIR": str(self.output), "VISION_R1_RAW_DATA_ROOT": str(self.root),
             "VISION_R1_PREPARED_ROOT": str(self.root), "VISION_R1_MODEL_PATH": str(self.model),
         })
@@ -90,34 +89,25 @@ class PaperLauncherConfigTest(unittest.TestCase):
 
     def test_4b_domains_preserve_full_finetuning(self):
         for launcher in ("hotpotqa/pnp_hotpotqa.sh", "taco/pnp_taco.sh",
-                         "vision_r1/pnp_vision_r1.sh", "extensions/deepscaler/run_deepscaler_tool_a9.sh"):
+                         "vision_r1/pnp_vision_r1.sh", "deepscaler/pnp_deepscaler.sh"):
             with self.subTest(launcher=launcher):
                 self.assert_adaptation(self.launch("scripts/" + launcher), 0)
 
-    def test_deepscaler_profiles_keep_distinct_lengths(self):
-        for launcher, expected in (("deepscaler/pnp_deepscaler.sh", ("2048", "4096")),
-                                   ("extensions/deepscaler/run_deepscaler_tool_a9.sh", ("4096", "2048"))):
-            with self.subTest(launcher=launcher):
-                options = self.launch("scripts/" + launcher)
-                self.assertEqual((options["data.max_prompt_length"], options["data.max_response_length"]), expected)
-                self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"],
-                                 "8192" if launcher.startswith("deepscaler/") else expected[0])
-                self.assertEqual(options["actor_rollout_ref.rollout.response_length"], expected[1])
+    def test_deepscaler_model_profiles_keep_their_completion_budgets(self):
+        for scale, expected_response in (("4b", "4096"), ("9b", "5120")):
+            with self.subTest(scale=scale):
+                options = self.launch("scripts/deepscaler/pnp_deepscaler.sh", AGENT_R1_MODEL_SCALE=scale)
+                self.assertEqual(options["data.max_prompt_length"], "2048")
+                self.assertEqual(options["data.max_response_length"], expected_response)
+                self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"], "8192")
+                self.assertEqual(options["actor_rollout_ref.rollout.response_length"], expected_response)
 
-    def test_toolenv_length_override_reaches_data_and_rollout(self):
-        options = self.launch("scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh",
-                              DEEPSCALER_TOOL_MAX_PROMPT_LENGTH="3072",
-                              DEEPSCALER_TOOL_MAX_RESPONSE_LENGTH="1024")
-        self.assertEqual(options["data.max_prompt_length"], "3072")
-        self.assertEqual(options["data.max_response_length"], "1024")
-        self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"], "3072")
-        self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "1024")
 
-    def test_named_9b_model_enables_lora_in_toolenv_and_vision(self):
+    def test_named_9b_model_enables_lora_in_math_and_vision(self):
         model = self.root / "Qwen3.5-9B"
         model.mkdir()
         (model / "config.json").write_text("{}")
-        for launcher, key in (("extensions/deepscaler/run_deepscaler_tool_a9.sh", "DEEPSCALER_TOOL_MODEL_PATH"),
+        for launcher, key in (("deepscaler/pnp_deepscaler.sh", "DEEPSCALER_MODEL_PATH"),
                               ("vision_r1/pnp_vision_r1.sh", "VISION_R1_MODEL_PATH")):
             with self.subTest(launcher=launcher):
                 self.assert_adaptation(self.launch("scripts/" + launcher, **{key: str(model)}), 64)
@@ -131,39 +121,22 @@ class PaperLauncherConfigTest(unittest.TestCase):
         self.assertEqual(options["actor_rollout_ref.model.lora_alpha"], "16")
         self.assertEqual(options["actor_rollout_ref.model.target_modules"], "[q_proj,v_proj]")
 
-    def test_outcome_only_baselines_share_model_adaptation(self):
-        model9b = self.root / "Qwen3.5-9B"
-        model9b.mkdir()
-        (model9b / "config.json").write_text("{}")
-        for model, rank in ((self.model, 0), (model9b, 64)):
-            for launcher, key in (
-                ("hotpotqa/run_a1.sh", "HOTPOTQA_MODEL_PATH"),
-                ("taco/run_a1_terminal.sh", "TACO_A1_MODEL_PATH"),
-                ("vision_r1/run_a1_terminal.sh", "VISION_R1_MODEL_PATH"),
-                ("extensions/deepscaler/run_deepscaler_tool_a1.sh", "DEEPSCALER_TOOL_MODEL_PATH"),
-            ):
-                with self.subTest(launcher=launcher, rank=rank):
-                    self.assert_adaptation(self.launch("scripts/" + launcher, **{key: str(model)}), rank)
 
     def test_invalid_lora_rank_fails_before_trainer(self):
-        result = subprocess.run(["bash", str(PROJECT_ROOT / "scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh")],
+        result = subprocess.run(["bash", str(PROJECT_ROOT / "scripts/deepscaler/pnp_deepscaler.sh")],
                                 env=dict(self.env, AGENT_R1_LORA_RANK="-1"), capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("AGENT_R1_LORA_RANK", result.stderr)
         self.assertFalse(self.calls.exists())
 
-class PaperBudgetIntegrationTest(unittest.TestCase):
-    setUp = PaperLauncherConfigTest.setUp
-    launch = PaperLauncherConfigTest.launch
-    assert_adaptation = PaperLauncherConfigTest.assert_adaptation
+class PnpBudgetIntegrationTest(unittest.TestCase):
+    setUp = PnpConfigTest.setUp
+    launch = PnpConfigTest.launch
+    assert_adaptation = PnpConfigTest.assert_adaptation
     def test_canonical_training_profiles_have_paper_budget(self):
         for launcher, batch in (("deepscaler/pnp_deepscaler.sh", "20"),
-                                ("deepscaler/run_deepscaler_a1.sh", "20"),
-                                ("hotpotqa/run_a1.sh", "20"),
                                 ("hotpotqa/pnp_hotpotqa.sh", "20"),
-                                ("taco/run_a1_terminal.sh", "20"),
                                 ("taco/pnp_taco.sh", "20"),
-                                ("vision_r1/run_a1_terminal.sh", "20"),
                                 ("vision_r1/pnp_vision_r1.sh", "20")):
             with self.subTest(launcher=launcher):
                 options = self.launch("scripts/" + launcher)
@@ -175,11 +148,6 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
         self.assertEqual(options["data.train_batch_size"], "8")
         self.assertEqual(options["trainer.total_training_steps"], "500")
 
-    def test_matched_hotpot_interfaces_for_all_reward_sources(self):
-        for arm in ("A1", "A2", "A3", "A6", "A7", "A9"):
-            options = self.launch("scripts/hotpotqa/pnp_hotpotqa_train.sh", HOTPOTQA_REWARD_ARM=arm)
-            self.assertEqual(options["actor_rollout_ref.rollout.agent.default_agent_flow"], "hotpotqa_certificate_agent")
-            self.assertTrue(options["custom_reward_function.path"].endswith("hotpotqa_a9/reward_fn.py"))
 
     def test_9b_math_uses_paper_completion_length_and_shared_flow(self):
         options = self.launch("scripts/deepscaler/pnp_deepscaler.sh", AGENT_R1_MODEL_SCALE="9b")
@@ -193,13 +161,9 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
         model.mkdir()
         (model / "config.json").write_text("{}")
         for launcher, model_key in (
-            ("deepscaler/run_deepscaler_a1.sh", "DEEPSCALER_MODEL_PATH"),
             ("deepscaler/pnp_deepscaler.sh", "DEEPSCALER_MODEL_PATH"),
-            ("hotpotqa/run_a1.sh", "HOTPOTQA_MODEL_PATH"),
             ("hotpotqa/pnp_hotpotqa.sh", "HOTPOTQA_MODEL_PATH"),
-            ("taco/run_a1_terminal.sh", "TACO_A1_MODEL_PATH"),
             ("taco/pnp_taco.sh", "TACO_A9_MODEL_PATH"),
-            ("vision_r1/run_a1_terminal.sh", "VISION_R1_MODEL_PATH"),
             ("vision_r1/pnp_vision_r1.sh", "VISION_R1_MODEL_PATH"),
         ):
             with self.subTest(launcher=launcher):
@@ -211,7 +175,7 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
                 self.assert_adaptation(options, 64)
 
     def test_9b_ppo_and_explicit_batch_override(self):
-        options = self.launch("scripts/deepscaler/run_deepscaler_a1.sh",
+        options = self.launch("scripts/deepscaler/pnp_deepscaler.sh",
                               AGENT_R1_MODEL_SCALE="9b", AGENT_R1_OPTIMIZER="ppo")
         self.assertEqual(options["data.train_batch_size"], "8")
         self.assertEqual(options["algorithm.adv_estimator"], "gae")
@@ -220,17 +184,10 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
                               TACO_A9_TRAIN_BATCH_SIZE="4")
         self.assertEqual(options["data.train_batch_size"], "4")
 
-    def test_judge_batch_follows_actor_scale(self):
-        for scale, batch in (("4b", "20"), ("9b", "8")):
-            for domain in ("deepscaler", "hotpotqa", "taco", "vision"):
-                with self.subTest(scale=scale, domain=domain):
-                    options = self.launch("scripts/llm_judge/run_grpo_4b_judge_9b.sh",
-                        arguments=(domain,), AGENT_R1_MODEL_SCALE=scale, AGENT_R1_JUDGE_API_KEY="test")
-                    self.assertEqual(options["data.train_batch_size"], batch)
 
     def test_math_turn_override_and_single_turn_compatibility(self):
         for turns in ("1", "5", "8"):
-            for launcher in ("deepscaler/run_deepscaler_a1.sh", "deepscaler/pnp_deepscaler.sh"):
+            for launcher in ("deepscaler/pnp_deepscaler.sh",):
                 with self.subTest(turns=turns, launcher=launcher):
                     options = self.launch("scripts/" + launcher, DEEPSCALER_MAX_STEPS=turns)
                     self.assertEqual(options["actor_rollout_ref.rollout.agent.max_steps"], turns)
@@ -240,8 +197,8 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
                                      "2048" if turns == "1" else "8192")
                     self.assertEqual(options["data.max_response_length"], "4096")
 
-    def test_math_defaults_to_five_turns_in_both_training_arms(self):
-        for launcher in ("deepscaler/run_deepscaler_a1.sh", "deepscaler/pnp_deepscaler.sh"):
+    def test_math_defaults_to_five_turns(self):
+        for launcher in ("deepscaler/pnp_deepscaler.sh",):
             options = self.launch("scripts/" + launcher)
             self.assertEqual(options["actor_rollout_ref.rollout.agent.max_steps"], "5")
             self.assertEqual(options["actor_rollout_ref.rollout.multi_turn.enable"], "True")
@@ -255,8 +212,8 @@ class PaperBudgetIntegrationTest(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("DEEPSCALER_MAX_STEPS", result.stderr)
 
-    def test_ppo_baselines_enable_existing_critic_with_same_budget(self):
-        for launcher in ("deepscaler/run_deepscaler_a1.sh", "taco/run_a1_terminal.sh", "vision_r1/run_a1_terminal.sh"):
+    def test_pnp_ppo_enables_critic_with_same_budget(self):
+        for launcher in ("deepscaler/pnp_deepscaler.sh", "taco/pnp_taco.sh", "vision_r1/pnp_vision_r1.sh"):
             options = self.launch("scripts/" + launcher, AGENT_R1_OPTIMIZER="ppo")
             self.assertEqual(options["algorithm.adv_estimator"], "gae")
             self.assertEqual(options["critic.enable"], "True")

@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from agent_r1.verifier import VerificationCredit, VerificationResult
+from agent_r1.verifier import VerificationCredit, VerificationGroup, VerificationResult, normalize_verification_groups
 from recipes.taco_a9.dsl import CodeArtifact, ExecutionRecord, SubmissionCertificate, parse_submission_certificate
 from recipes.taco_a9.sandbox import BubblewrapPythonExecutor, TestSuite
 
 
-VERIFIER_VERSION = "taco-a9-execution-replay-v1"
+VERIFIER_VERSION = "taco-a9-execution-replay-v2"
 
 
 @dataclass(frozen=True)
@@ -72,44 +72,75 @@ def build_verification_result(
     *,
     run_step_indices: Mapping[str, int],
     final_step_index: int,
+    certificate_applicable: bool = True,
 ) -> VerificationResult:
-    """TACO plugin: map replay audits and the submission certificate to credits."""
+    """Average over tested code versions and an attempted submission's certificate.
 
-    denominator = len(artifact_audits) + 1
+    Writing an untested intermediate version does not trigger a replay check.
+    Failed test/replay checks stay in the denominator, as does missing required
+    certificate evidence when a submission was attempted.
+    """
+
+    normalization = normalize_verification_groups(tuple(
+        VerificationGroup(
+            group_id=f"taco:code:{item.artifact_id}", kind="singleton_artifact",
+            scores=(float(item.verified_score),), applicable=(bool(item.tested),),
+        ) for item in artifact_audits
+    ) + (VerificationGroup(
+        group_id="taco:submission_certificate", kind="singleton_artifact",
+        scores=(float(certificate_audit.raw_local_credit),), applicable=(certificate_applicable,),
+    ),))
+    participating = [item for item in artifact_audits if item.tested]
+    denominator = normalization["normalizer"]
     credits: list[VerificationCredit] = []
     credits_by_step: dict[int, list[dict[str, Any]]] = {}
-    for artifact_audit in artifact_audits:
-        if artifact_audit.run_id is None:
+    artifact_records = []
+    for artifact_audit, group in zip(artifact_audits, normalization["groups"][:-1], strict=True):
+        record = {**artifact_audit.record(),
+                  "check_applicable": bool(artifact_audit.tested),
+                  "participates_in_process_reward": bool(artifact_audit.tested),
+                  "normalizer": denominator,
+                  "normalization_group": group}
+        artifact_records.append(record)
+        if not artifact_audit.tested:
             continue
         step_index = run_step_indices.get(artifact_audit.run_id)
         if step_index is None:
-            continue
-        record = artifact_audit.record()
+            raise ValueError("Every tested code artifact requires its source rollout step")
         credits.append(
             VerificationCredit(
                 step_index=step_index,
-                score=float(artifact_audit.verified_score) / denominator,
+                score=group["normalized_credit"],
                 audit=record,
             )
         )
         credits_by_step.setdefault(step_index, []).append(record)
 
-    certificate_record = certificate_audit.record()
-    credits.append(
-        VerificationCredit(
-            step_index=final_step_index,
-            score=float(certificate_audit.raw_local_credit) / denominator,
-            audit=certificate_record,
+    certificate_record = {**certificate_audit.record(),
+                          "check_applicable": certificate_applicable,
+                          "participates_in_process_reward": certificate_applicable,
+                          "normalizer": denominator,
+                          "normalization_group": normalization["groups"][-1]}
+    if certificate_applicable:
+        credits.append(
+            VerificationCredit(
+                step_index=final_step_index,
+                score=normalization["groups"][-1]["normalized_credit"],
+                audit=certificate_record,
+            )
         )
-    )
-    credits_by_step.setdefault(final_step_index, []).append(certificate_record)
+        credits_by_step.setdefault(final_step_index, []).append(certificate_record)
     return VerificationResult(
         credits=tuple(credits),
         audit={
             "verifier": VERIFIER_VERSION,
-            "artifact_process_audits": [item.record() for item in artifact_audits],
+            "normalization": "mean_over_tested_code_versions_and_applicable_submission_certificate_including_failures",
+            "process_denominator": denominator,
+            "normalization_groups": normalization["groups"],
+            "empty_step_policy": "zero_credit_excluded_from_denominator",
+            "artifact_process_audits": artifact_records,
             "certificate_audit": certificate_record,
-            "applicable_checks": [certificate_audit.own_valid] + [item.verified_score for item in artifact_audits],
+            "applicable_checks": ([certificate_audit.own_valid] if certificate_applicable else []) + [item.verified_score for item in participating],
             "credits_by_step": credits_by_step,
         },
     )
@@ -157,7 +188,9 @@ def audit_code_artifacts(
             if not matching_records:
                 errors.append("replay_result_mismatch")
 
-        selected = matching_records[0] if matching_records else (exact_records[0] if exact_records else None)
+        selected = (matching_records[0] if matching_records else
+                    exact_records[0] if exact_records else
+                    candidate_records[0] if candidate_records else None)
         passed = int(selected.passed) if selected is not None else 0
         total = int(selected.total) if selected is not None else 0
         pass_rate = passed / total if total else 0.0
@@ -255,6 +288,7 @@ def verify_process(
     executor: BubblewrapPythonExecutor,
     run_step_indices: Mapping[str, int],
     final_step_index: int,
+    submission_attempted: bool | None = None,
 ) -> VerificationResult:
     """Public TACO verifier plugin entry point."""
 
@@ -264,19 +298,25 @@ def verify_process(
         developer_suite=developer_suite,
         executor=executor,
     )
-    certificate_audit, _ = verify_submission_certificate(
-        raw_certificate,
-        submitted_artifact=submitted_artifact,
-        artifacts=artifacts,
-        records=records,
-        developer_suite=developer_suite,
-        replay_valid_run_ids=replay_valid_run_ids,
-    )
+    certificate_applicable = (bool(submission_attempted) or raw_certificate is not None
+                              or submitted_artifact is not None)
+    if certificate_applicable:
+        certificate_audit, _ = verify_submission_certificate(
+            raw_certificate,
+            submitted_artifact=submitted_artifact,
+            artifacts=artifacts,
+            records=records,
+            developer_suite=developer_suite,
+            replay_valid_run_ids=replay_valid_run_ids,
+        )
+    else:
+        certificate_audit = CertificateAudit(0, 0, 0, 0, ())
     result = build_verification_result(
         artifact_audits,
         certificate_audit,
         run_step_indices=run_step_indices,
         final_step_index=final_step_index,
+        certificate_applicable=certificate_applicable,
     )
 
     # Keep failed or inconsistent earlier runs even if a later version passes.

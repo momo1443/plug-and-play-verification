@@ -72,9 +72,43 @@ class VisionR1ArtifactTest(unittest.TestCase):
                     artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
                     raw_certificate=certificate, submitted_answer="",
                 )
+                expected_denominator = 1 if certificate is None else 2
+                self.assertEqual(result.process_reward, 1 / expected_denominator)
+                self.assertEqual(result.audit["process_denominator"], expected_denominator)
+                self.assertFalse(result.audit["schema_valid"])
+
+    def test_missing_required_certificate_on_attempted_submission_stays_in_denominator(self) -> None:
+        for answer, attempted in (("11", None), ("", True)):
+            with self.subTest(answer=answer, attempted=attempted):
+                result = verify_process(
+                    artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop},
+                    raw_certificate=None, submitted_answer=answer,
+                    submission_attempted=attempted,
+                )
                 self.assertEqual(result.process_reward, 0.5)
                 self.assertEqual(result.audit["process_denominator"], 2)
-                self.assertFalse(result.audit["schema_valid"])
+                self.assertEqual(result.audit["missing_certificate_slots"], 1)
+                self.assertIn(0, result.audit["applicable_checks"])
+
+    def test_failed_crop_is_retained_without_submission(self) -> None:
+        failed = replace(self.crop, artifact_id="image:crop:failed", sha256="0" * 64)
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root, self.crop.artifact_id: self.crop,
+                       failed.artifact_id: failed},
+            raw_certificate=None, submitted_answer="",
+        )
+        self.assertEqual(result.process_reward, 0.5)
+        self.assertEqual(result.audit["process_denominator"], 2)
+        self.assertEqual(result.audit["applicable_checks"], [1, 0])
+
+    def test_no_applicable_checks_receive_zero_process_reward(self) -> None:
+        result = verify_process(
+            artifacts={self.root.artifact_id: self.root}, raw_certificate=None, submitted_answer="",
+        )
+        self.assertEqual(result.process_reward, 0)
+        self.assertEqual(result.audit["process_denominator"], 0)
+        self.assertEqual(result.audit["applicable_checks"], [])
+        self.assertEqual(result.audit["missing_certificate_slots"], 0)
 
     def test_missing_required_crop_stays_in_denominator_without_submission(self) -> None:
         certificate = {**self.certificate,

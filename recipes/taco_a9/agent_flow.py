@@ -147,11 +147,14 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
         self.max_code_prompt_chars = int(kwargs.get("max_code_prompt_chars", 12000))
         self.terminal_warmup_steps = int(kwargs.get("terminal_warmup_steps", 50))
         self.reward_mode = str(kwargs.get("reward_mode", "uniform_certificate"))
-        self.store = TacoTaskStore(
+        task_store = kwargs.get("task_store")
+        self.store = task_store if task_store is not None else TacoTaskStore(
             str(kwargs.get("sidecar_path") or os.environ.get("TACO_A9_SIDECAR", "")),
             str(kwargs.get("sidecar_index_path") or os.environ.get("TACO_A9_SIDECAR_INDEX", "")),
         )
-        self.executor = BubblewrapPythonExecutor(timeout_seconds=float(kwargs.get("timeout_seconds", 2.0)))
+        executor = kwargs.get("executor")
+        self.executor = executor if executor is not None else BubblewrapPythonExecutor(
+            timeout_seconds=float(kwargs.get("timeout_seconds", 2.0)))
         if self.reward_mode == "uniform_certificate" and self.max_steps != 5:
             raise ValueError("TACO A9 requires exactly five agent turns")
         if self.reward_mode == "terminal_private_binary" and self.max_steps < 4:
@@ -293,6 +296,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                             executor=self.executor,
                             run_step_indices=run_step_indices,
                             final_step_index=len(steps) + 1,
+                            submission_attempted=True,
                         ),
                     )
                     certificate_score = float(
@@ -400,7 +404,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             apply_composed_reward(steps, composed, extra_final_info=terminal_info)
         elif submitted_artifact is None and steps[-1].extra_fields.get("step_kind") != "submit":
             # Budget exhaustion still replays existing developer-test evidence.
-            # The absent submission certificate remains a zero denominator slot.
+            # No submit action means no applicable submission-certificate check.
             verification = await self.loop.run_in_executor(
                 None,
                 lambda: verify_process(
@@ -408,6 +412,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     submitted_artifact=None, developer_suite=developer_suite,
                     executor=self.executor, run_step_indices=run_step_indices,
                     final_step_index=len(steps),
+                    submission_attempted=False,
                 ),
             )
             composed = compose_verification_reward(

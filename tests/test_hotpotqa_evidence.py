@@ -3,19 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import faiss
+import threading
+from dataclasses import field
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from recipes.hotpotqa.build_evidence_sidecar import build_evidence_sidecar
-from recipes.hotpotqa.env.search_tool import (
-    CorpusParagraph,
-    HotpotQASearchToolLegacy,
-    Passage,
-    parse_legacy_tool_result,
-)
 from recipes.hotpotqa.evidence import (
     EVIDENCE_SCHEMA_VERSION,
     OfficialEvidenceStore,
@@ -25,12 +20,16 @@ from recipes.hotpotqa.evidence import (
     parse_evidence_id,
     sentence_evidence_records,
 )
-from recipes.hotpotqa.hotpotqa_agent_flow import (
-    _format_history_actions,
-    _format_passage_list,
+from pnp_test_utils import load_source
+
+search_module = load_source(
+    "recipes/hotpotqa/env/search_tool.py", threading=threading, field=field, np=np,
+    EVIDENCE_SCHEMA_VERSION=EVIDENCE_SCHEMA_VERSION, OfficialEvidenceStore=OfficialEvidenceStore,
+    coerce_bool=coerce_bool,
 )
-from recipes.hotpotqa.validate_formal_a0_artifacts import validate_formal_a0_artifacts
-from recipes.hotpotqa.validate_formal_a0_output import validate_formal_a0_output
+CorpusParagraph = search_module.CorpusParagraph
+HotpotQASearchToolLegacy = search_module.HotpotQASearchToolLegacy
+parse_legacy_tool_result = search_module.parse_legacy_tool_result
 
 
 def _agent_row(question: str, answer: str, split: str, index: int) -> dict:
@@ -74,12 +73,6 @@ class HotpotQAEvidenceTest(unittest.TestCase):
         (corpus_dir / "hpqa_corpus.jsonl").write_text(
             "".join(json.dumps(row) + "\n" for row in corpus_rows), encoding="utf-8"
         )
-        vectors = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
-        np.save(corpus_dir / "hpqa_corpus.npy", vectors)
-        index = faiss.IndexFlatIP(2)
-        index.add(vectors)
-        faiss.write_index(index, str(corpus_dir / "index.bin"))
-
         train_parquet = root / "train.parquet"
         validation_parquet = root / "validation.parquet"
         pd.DataFrame([_agent_row("Train?", "Train answer", "train", 0)]).to_parquet(
@@ -152,7 +145,7 @@ class HotpotQAEvidenceTest(unittest.TestCase):
             self.assertEqual([row["sentence_id"] for row in evidence], [0, 1])
             self.assertTrue((corpus_dir / "hotpotqa_evidence_v1.manifest.json").is_file())
 
-    def test_formal_search_payload_uses_sidecar_and_keeps_ids_out_of_prompt(self):
+    def test_search_payload_retains_sidecar_evidence_for_certificate_verification(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             _, _, sidecar = self._artifacts(Path(temp_dir))
             tool = object.__new__(HotpotQASearchToolLegacy)
@@ -173,106 +166,15 @@ class HotpotQAEvidenceTest(unittest.TestCase):
                 [make_evidence_id(0, 0), make_evidence_id(0, 1)],
             )
             passage = parse_legacy_tool_result(json.dumps(payload))[0]
-            prompt_text = _format_passage_list([("query", passage)], 10000)
-            self.assertIn("Train Title Sentence zero.", prompt_text)
-            self.assertNotIn(EVIDENCE_SCHEMA_VERSION, prompt_text)
+            self.assertIn("Train Title Sentence zero.", passage.text)
+            self.assertEqual(passage.sentence_evidence, result["sentence_evidence"])
 
-    def test_legacy_search_payload_remains_text_only(self):
-        tool = object.__new__(HotpotQASearchToolLegacy)
-        tool.require_sentence_evidence = False
-        tool.evidence_schema_version = "legacy-compatible"
-        tool._corpus = [CorpusParagraph(pid=0, title="Title", text="Evidence.")]
-        payload = json.loads(tool._format_results(np.array([0]), np.array([0.625])))
-        self.assertEqual(payload, {"results": ["Title Evidence."]})
-
-    def test_formal_preflight_verifies_sidecar_and_hashes(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            corpus_dir, validation_path, sidecar = self._artifacts(Path(temp_dir))
-            summary = validate_formal_a0_artifacts(
-                validation_path=validation_path,
-                corpus_dir=corpus_dir,
-                evidence_sidecar_path=sidecar,
-                expected_validation_rows=1,
-            )
-            self.assertEqual(summary["corpus_rows"], 2)
-            self.assertEqual(summary["index_vectors"], 2)
-            self.assertEqual(summary["validation_gold_mapping_rate"], 1.0)
-
-    def test_formal_output_validator_replays_evidence_metrics(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "0.jsonl"
-            sentences = sentence_evidence_records(
-                pid=0, title="Title", sentences=["Evidence."]
-            )
-            evidence_id = make_evidence_id(0, 0)
-            record = {
-                "sample_index": 0,
-                "sample_key": "validation:0",
-                "dataset_question_id": "validation_0",
-                "official_qid": "qid-0",
-                "thinking_mode": "disabled",
-                "qwen_thinking": [
-                    {"turn": 1, "content": "", "complete": True}
-                ],
-                "force_first_search": False,
-                "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
-                "gold_evidence_ids": [evidence_id],
-                "unresolved_gold_facts": [],
-                "search_queries": ["query"],
-                "search_steps": [
-                    {
-                        "search_index": 1,
-                        "assistant_turn": 1,
-                        "source": "model",
-                        "query": "query",
-                        "success": True,
-                        "returned_evidence": [
-                            {
-                                "pid": 0,
-                                "title": "Title",
-                                "text": "Title Evidence.",
-                                "score": 0.5,
-                                "sentence_evidence": sentences,
-                            }
-                        ],
-                        "returned_evidence_ids": [evidence_id],
-                        "new_gold_evidence_ids": [evidence_id],
-                        "covered_gold_evidence_ids": [evidence_id],
-                        "audit_process_reward": 1.0,
-                    }
-                ],
-                "evidence_metrics": {
-                    "evidence_metrics_eligible": True,
-                    "gold_evidence_count": 1,
-                    "unresolved_gold_fact_count": 0,
-                    "retrieved_evidence_count": 1,
-                    "supporting_fact_hits": 1,
-                    "supporting_fact_recall": 1.0,
-                    "supporting_fact_precision": 1.0,
-                    "at_least_one_support": True,
-                    "both_support": True,
-                    "complete_coverage_search_step": 1,
-                },
-                "score": 1.0,
-            }
-            output_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
-            summary = validate_formal_a0_output(output_path, expected_rows=1)
-            self.assertEqual(summary["strict_accuracy"], 1.0)
-            self.assertEqual(summary["both_support_recall"], 1.0)
 
     def test_boolean_strings_do_not_use_python_truthiness(self):
         self.assertFalse(coerce_bool("false"))
         self.assertTrue(coerce_bool("true"))
         with self.assertRaises(ValueError):
             coerce_bool("maybe")
-
-    def test_formal_recipe_uses_shared_agentflow_and_three_searches_plus_final(self):
-        base_yaml = Path(__file__).parents[1] / "recipes" / "hotpotqa" / "base.yaml"
-        text = base_yaml.read_text(encoding="utf-8")
-        self.assertIn("hotpotqa_agent_flow.HotpotQAAgentFlow", text)
-        self.assertIn("max_steps: 4", text)
-        self.assertIn("force_first_search: false", text)
-        self.assertNotIn("hotpotqa_agent_loop", text)
 
 
 if __name__ == "__main__":

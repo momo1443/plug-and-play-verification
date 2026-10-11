@@ -3,15 +3,15 @@
 import subprocess
 import unittest
 
-import test_paper_launcher_config as launcher_harness
+import test_pnp_config as launcher_harness
 
 PROJECT_ROOT = launcher_harness.PROJECT_ROOT
 
 
 class PnpLauncherTest(unittest.TestCase):
-    setUp = launcher_harness.PaperLauncherConfigTest.setUp
-    launch = launcher_harness.PaperLauncherConfigTest.launch
-    assert_adaptation = launcher_harness.PaperLauncherConfigTest.assert_adaptation
+    setUp = launcher_harness.PnpConfigTest.setUp
+    launch = launcher_harness.PnpConfigTest.launch
+    assert_adaptation = launcher_harness.PnpConfigTest.assert_adaptation
 
     def test_four_gpu_math_profile_matches_current_experiment(self):
         options = self.launch(

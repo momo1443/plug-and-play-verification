@@ -52,12 +52,18 @@ for the same HotpotQA verifier contract.
 
 ## Evaluation
 
+Use `bash run_pnp_eval.sh BENCHMARK ...` for matched single-trajectory PNP
+evaluation of `aime2026`, `hotpotqa`, `livecodebench`, and `mathvision`.
+The [shared guide](../docs/pnp_evaluation.md) documents the required frozen
+dataset revisions, model exports, budgets, final graders, and CPU preflight.
+The entries below include compatibility wrappers and historical baselines.
+
 | Task | Entry point |
 | --- | --- |
-| AIME agent accuracy (2025 / 2026) | `scripts/deepscaler/pnp_aime.py`, using an explicit dataset path and name |
+| AIME2026 PNP compatibility wrapper | `scripts/deepscaler/pnp_aime.py`, delegating to the shared evaluator |
 | AIME 2025 | `scripts/deepscaler/eval_aime2025.py`; paired A0 wrapper `scripts/deepscaler/run_aime2025_a0.sh` |
 | HotpotQA A0 | `scripts/hotpotqa/run_a0.sh` |
-| HotpotQA certificate checkpoints | `scripts/hotpotqa/pnp_hotpotqa_eval.sh` |
+| HotpotQA PNP compatibility wrapper | `scripts/hotpotqa/pnp_hotpotqa_eval.sh`, delegating to the shared evaluator |
 | MATH-Vision A0 | `scripts/mathvision/run_a0_react.sh`; standalone evaluator `recipes/mathvision/evaluate_react.py` |
 | LiveCodeBench A0 | `recipes/livecodebench_a0/evaluate_a0.py` |
 | Audit metrics from JSONL | `python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json` |

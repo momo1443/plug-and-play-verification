@@ -5,6 +5,7 @@ the repository root; [the launcher index](../scripts/README.md) lists the entryp
 
 ```text
 run_pnp.sh         Common PNP dataset, model and GPU selection
+run_pnp_eval.sh    Shared standalone evaluation for four held-out benchmarks
 agent_r1/          Shared verifier contract, rewards, rollout, GRPO/PPO, metrics
   config/          Shared Hydra trainer configuration
 recipes/           Domain flows, verifiers, data preparation, domain YAML configs
@@ -13,7 +14,7 @@ scripts/           Training and evaluation entrypoints, grouped by domain
   common/pnp.sh    Shared model adaptation, budgets and dispatch
   extensions/      Optional ToolEnv/A8 experiments and hardware/debug profiles
   patches/         Explicit compatibility patches for the training environment
-tests/             CPU contracts, launcher checks, and runtime-dependent tests
+tests/             Current PNP tasks, AIME evaluation, and shared training checks
 assets/images/     The two plug-and-play verifier figures
 docs/              Implementation notes, writing drafts, and historical records
 verl_patches/      Runtime weight-transfer implementation
@@ -33,10 +34,13 @@ PNP entrypoints use the following naming convention:
 | Model training profile | `scripts/models/Qwen3.5-4B.sh`, `scripts/models/Qwen3.5-9B.sh` |
 | Math smoke check | `scripts/deepscaler/pnp_deepscaler_smoke.sh` |
 | AIME agent evaluation | `scripts/deepscaler/pnp_aime.py` |
+| Shared benchmark evaluation | `run_pnp_eval.sh` |
 
 ## Current documentation
 
 - [Paper implementation contract](paper-contract.md): reward semantics, training profiles, and validation limits.
+- [Shared PNP evaluation](pnp_evaluation.md): four benchmark commands, frozen protocol, and grader limits.
+- [Evaluation LaTeX tables](pnp_evaluation_config.md): generated from the runtime defaults.
 - [Frozen process judge](experiments/llm-process-judge.md): comparison-arm protocol.
 - [Shared launcher settings](../scripts/common/README.md): model adaptation and overrides.
 - [DeepScaleR](../recipes/deepscaler/README.md) and [HotpotQA](../recipes/hotpotqa/README.md): task-specific setup.

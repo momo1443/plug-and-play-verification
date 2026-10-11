@@ -30,12 +30,10 @@ def build_row(row: pd.Series, root: Path, index: int) -> dict:
         "data_source": "mathvision",
         "answer": answer,
         "reward_model": {"style": "rule", "ground_truth": answer},
-        "env_kwargs": {"tools_kwargs": {"ground_truth": answer}},
         "extra_info": {
             "index": index,
             "question_id": question_id,
             "split": "test",
-            "env_kwargs": {"tools_kwargs": {"ground_truth": answer}},
             "level": str(row["level"]),
             "subject": str(row["subject"]),
         },

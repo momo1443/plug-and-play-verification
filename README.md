@@ -58,7 +58,7 @@ result = VerificationResult(
 
 ### Decoupled reward composition
 
-Let `E` be the final outcome reward, and let `p_t` sum the process credits assigned to interaction step `t`. For a terminal-eligible trajectory:
+Let `E` be the final outcome reward (zero without an eligible final submission), and let `p_t` sum the process credits assigned to interaction step `t`:
 
 ```math
 r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
@@ -68,7 +68,8 @@ r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
 - **Updates 1-50:** use outcome-only reward, `w = 1`.
 - **After warmup:** sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by that group's rollouts.
 - **Credit placement:** outcome reward goes to the final policy step; process credits remain at their source steps, even when checked after rollout.
-- **Terminal eligibility:** trajectories that fail the domain submission conditions receive zero composed task reward. Eligibility is separate from final-answer correctness and certificate validity; an eligible but incorrect answer can still receive process credit.
+- **Terminal eligibility:** trajectories that fail the domain submission conditions receive zero outcome reward. Independently verified process credits remain eligible, including for incomplete trajectories and incorrect final answers.
+- **Process normalization:** inapplicable and untriggered checks are excluded from the denominator. Missing or malformed evidence for a triggered, required check and actual verification failures retain their zero-score positions. No applicable checks yield zero process reward.
 - **Validation:** uses outcome-only rewards, with verification audits recorded separately.
 
 GRPO computes undiscounted reward-to-go and normalizes returns within the same prompt and step index. Each step's advantage applies to its generated policy tokens; prompt and environment-observation tokens are masked. PPO can consume the same composed rewards through its critic and GAE path.
@@ -255,19 +256,19 @@ DeepScaleR defaults to at most five reasoning turns with one total completion bu
 
 ## Evaluation
 
-AIME 2025, HotpotQA, LiveCodeBench, and MATH-Vision measure final task correctness. Select the intended checkpoint, benchmark release, and inference budget explicitly. TACO and Vision-R1 training validation are diagnostics; they do not replace LiveCodeBench and MATH-Vision evaluation.
+AIME2026, HotpotQA validation, LiveCodeBench, and MATH-Vision now share a standalone PNP evaluator. Each question receives one greedy agent trajectory through its PNP task interface. Accuracy uses final submissions; missing submissions remain in the denominator, and process verification is recorded separately. TACO and Vision-R1 training validation are diagnostics; they do not replace held-out benchmark evaluation. The manuscript-reported AIME 2025 results above retain their original benchmark identity.
 
-For a checkpoint exported in a format accepted by vLLM, with prepared AIME data:
+For a checkpoint exported in a format accepted by vLLM:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 \
-MODEL_PATH=/path/to/exported-checkpoint \
-AIME2025_DATA_DIR=/path/to/prepared/aime2025 \
-OUTPUT_DIR=logs/aime2025 \
-python scripts/deepscaler/eval_aime2025.py
+bash run_pnp_eval.sh aime2026 \
+  --model /path/to/exported-checkpoint \
+  --dataset data/raw/aime26/aime2026.jsonl \
+  --dataset-version 2026 --dataset-revision LOCAL_AIME2026_SNAPSHOT \
+  --gpus 0,1,2,3 --preflight-only
 ```
 
-For a renamed 9B checkpoint, also set `AGENT_R1_MODEL_SCALE=9b` to select the 9B completion budget. The [evaluation index](scripts/README.md#evaluation) points to the other benchmark utilities.
+Remove `--preflight-only` to allocate GPUs and evaluate. See the [shared evaluation guide](docs/pnp_evaluation.md) for all four commands, dataset requirements, and grader limits, and the [four LaTeX tables](docs/pnp_evaluation_config.md) for defaults. Match budgets explicitly across compared policies; the shared evaluator does not silently change them for 9B. Historical A0/AIME2025 utilities remain in the [evaluation index](scripts/README.md#evaluation).
 
 Manuscript Eq. (8) defines `C_d`: a nonempty set of applicable checks must all pass within one trajectory. Missing required evidence and earlier failed checks remain part of the audit, including when a later revision succeeds.
 
@@ -315,12 +316,7 @@ See the [repository guide](docs/README.md) for the complete directory map and th
 The focused CPU suite checks reward contracts, answer extraction, launcher arguments, and agent-flow wiring with mocked generation/execution boundaries:
 
 ```bash
-python -m pytest -q \
-  tests/test_paper_alignment.py tests/test_paper_launcher_config.py \
-  tests/test_deepscaler_reward.py tests/test_math_continuation.py \
-  tests/test_verifier_reward.py \
-  tests/test_hotpotqa_a9.py tests/test_taco_a9.py \
-  tests/test_cross_domain_llm_judge.py tests/test_process_judge_flows.py
+PYTHONPATH=.:tests python -m pytest -q tests
 ```
 
 These checks do not establish GPU training stability or reproduce the paper's reported scores. Reproduction requires the corresponding model checkpoints, data snapshots, environment, run manifests, and raw evaluation outputs. The current protocols and known implementation limits are recorded in [the paper contract](docs/paper-contract.md).

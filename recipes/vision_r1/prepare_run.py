@@ -48,7 +48,7 @@ def main():
         "scripts/vision_r1/pnp_vision_r1_train.sh",
     ]
     manifest = {
-        "contract_version": "vision-r1-independent-process-outcome-v2", "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "contract_version": "vision-r1-independent-process-outcome-v3", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "arm": args.arm, "model": file_identity(Path(args.model_path) / "config.json"),
         "selection": {"train": file_identity(args.train_path), "validation": file_identity(args.validation_path),
                       "source_rows": rows, "count": args.train_max_samples, "selection": "source_prefix"},
@@ -61,7 +61,7 @@ def main():
         "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "max_agent_steps": 3,
         "actor_lr": 1e-6, "reference_kl_coefficient": 0.001, "terminal_gate": "valid_final_submission",
         "process_requires_terminal_submission": False,
-        "process_denominator": "cited required crops; without a readable certificate, recorded crops plus missing declared evidence slots plus one zero certificate slot",
+        "process_denominator": "cited required crops; without a readable certificate, recorded crops plus missing declared evidence slots and a zero certificate slot only if submission or certificate attempted; untriggered checks excluded",
         "answer_coupling_scope": "audit_only"})
     output = Path(args.output_dir) / "run_manifest.json"
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -177,9 +177,8 @@ def evaluate_one(
 
             observations = []
             for call in calls:
-                candidate = str(call["arguments"].get("answer", "")).strip()
-                correct = _normal(candidate) == _normal(ground_truth)
-                observation = "Candidate answer is correct." if correct else "Candidate answer is not correct. Recheck the derivation."
+                # Test answers are scoring-only data, never an interactive oracle.
+                observation = "Answer checking is unavailable during evaluation. Submit your final answer."
                 if call.get("id"):
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": observation})
                 else:

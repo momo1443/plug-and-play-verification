@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agent_r1.verifier import VerificationCredit, VerificationResult
+from agent_r1.verifier import VerificationCredit, VerificationGroup, VerificationResult, normalize_verification_groups
 from recipes.vision_r1.artifacts import (
     VisualArtifact,
     image_sha256,
@@ -54,49 +54,70 @@ def verify_process(
     artifacts: Mapping[str, VisualArtifact],
     raw_certificate: Any,
     submitted_answer: str,
+    submission_attempted: bool | None = None,
 ) -> VerificationResult:
     """Verify crop evidence independently of final-answer eligibility.
 
     A readable certificate selects its required evidence; missing or invalid
-    certificates fall back to the recorded crops with one zero certificate
-    slot. Missing required crops stay in the denominator. Answer coupling is
-    an audit check and never suppresses independently replayed crop credits.
+    certificates fall back to the recorded crops. A zero certificate slot is
+    retained only when a submission or certificate actually triggers that
+    check. Missing required crops stay in the denominator. Answer coupling
+    is an audit check and never suppresses independently replayed crop credits.
     """
 
     all_crop_checks = [_replay_artifact(artifact, artifacts)[0]
                        for artifact in artifacts.values() if artifact.parent_artifact_id is not None]
+    certificate_applicable = (bool(submission_attempted) or raw_certificate is not None
+                              or bool(submitted_answer.strip()))
     certificate, certificate_errors = parse_visual_certificate(raw_certificate)
     if certificate is None:
         crops = [artifact for artifact in artifacts.values() if artifact.parent_artifact_id is not None]
         artifact_audits = []
-        credits = []
+        crop_scores = []
         crop_ids = {artifact.artifact_id for artifact in crops}
         declared_ids = raw_certificate.get("evidence_artifact_ids", []) if isinstance(raw_certificate, Mapping) else []
         missing_evidence_slots = sum(
             not isinstance(item, str) or item not in crop_ids for item in declared_ids
         ) if isinstance(declared_ids, list) else 1
         # Even malformed declarations retain extractable missing evidence slots.
-        denominator = len(crops) + missing_evidence_slots + 1
+        missing_certificate_slots = int(certificate_applicable)
         for artifact in crops:
             valid, audit = _replay_artifact(artifact, artifacts)
             artifact_audits.append(audit)
-            if valid:
-                credits.append(VerificationCredit(
-                    step_index=artifact.created_step, score=1.0 / denominator,
-                    audit={"kind": "visual_crop_replay", "artifact_id": artifact.artifact_id,
-                           "sha256": artifact.sha256},
-                ))
+            crop_scores.append(float(valid))
+        normalization = normalize_verification_groups(tuple(
+            VerificationGroup(
+                group_id=f"vision:crop:{artifact.artifact_id}", kind="singleton_artifact",
+                scores=(score,),
+            ) for artifact, score in zip(crops, crop_scores, strict=True)
+        ) + tuple(VerificationGroup(
+            group_id=f"vision:missing_evidence:{index}", kind="singleton_artifact", scores=(0.0,),
+        ) for index in range(missing_evidence_slots)) + (VerificationGroup(
+            group_id="vision:submission_certificate", kind="singleton_artifact", scores=(0.0,),
+            applicable=(certificate_applicable,),
+        ),))
+        denominator = normalization["normalizer"]
+        credits = tuple(VerificationCredit(
+            step_index=artifact.created_step, score=group["normalized_credit"],
+            audit={"kind": "visual_crop_replay", "artifact_id": artifact.artifact_id,
+                   "sha256": artifact.sha256, "normalization_group": group},
+        ) for artifact, group in zip(crops, normalization["groups"][:len(crops)], strict=True)
+            if group["group_score"] > 0)
         return VerificationResult(
             credits=tuple(credits),
             audit={
                 "verifier": "vision_r1_visual_replay",
                 "schema_valid": False,
-                "applicable_checks": [0] + [0] * missing_evidence_slots + [int(value) for value in all_crop_checks],
+                "normalization": "mean_over_applicable_crop_and_required_evidence_checks_including_failures",
+                "empty_step_policy": "zero_credit_excluded_from_denominator",
+                "applicable_checks": [0] * (missing_certificate_slots + missing_evidence_slots) + [int(value) for value in all_crop_checks],
+                "certificate_check_applicable": certificate_applicable,
                 "answer_coupled": False,
-                "certificate_errors": list(certificate_errors),
+                "certificate_errors": list(certificate_errors) if certificate_applicable else [],
                 "artifact_audits": artifact_audits,
                 "process_denominator": denominator,
-                "missing_certificate_slots": 1,
+                "normalization_groups": normalization["groups"],
+                "missing_certificate_slots": missing_certificate_slots,
                 "missing_evidence_slots": missing_evidence_slots,
                 "replay_valid_artifact_count": len(credits),
             },
@@ -104,44 +125,54 @@ def verify_process(
 
     answer_coupled = _answer_coupled(submitted_answer, certificate.claim)
     artifact_audits: list[dict[str, Any]] = []
-    valid_artifacts: list[VisualArtifact] = []
+    cited_artifacts: list[VisualArtifact | None] = []
+    cited_scores = []
     for artifact_id in certificate.evidence_artifact_ids:
         artifact = artifacts.get(artifact_id)
+        cited_artifacts.append(artifact)
         if artifact is None or artifact.parent_artifact_id is None:
             artifact_audits.append({"artifact_id": artifact_id, "errors": ["artifact_missing"]})
+            cited_scores.append(0.0)
             continue
         replay_valid, audit = _replay_artifact(artifact, artifacts)
         artifact_audits.append(audit)
-        if replay_valid:
-            valid_artifacts.append(artifact)
+        cited_scores.append(float(replay_valid))
 
-    denominator = len(certificate.evidence_artifact_ids)
-    credits = ()
-    if denominator:
-        credits = tuple(
+    normalization = normalize_verification_groups(tuple(
+        VerificationGroup(group_id=f"vision:cited:{artifact_id}", kind="singleton_artifact", scores=(score,))
+        for artifact_id, score in zip(certificate.evidence_artifact_ids, cited_scores, strict=True)
+    ))
+    denominator = normalization["normalizer"]
+    credits = tuple(
             VerificationCredit(
                 step_index=artifact.created_step,
-                score=1.0 / denominator,
+                score=group["normalized_credit"],
                 audit={
                     "kind": "visual_crop_replay",
                     "artifact_id": artifact.artifact_id,
                     "sha256": artifact.sha256,
+                    "normalization_group": group,
                 },
             )
-            for artifact in valid_artifacts
-        )
+            for artifact, group in zip(cited_artifacts, normalization["groups"], strict=True)
+            if artifact is not None and group["group_score"] > 0
+    )
     return VerificationResult(
         credits=credits,
         audit={
             "verifier": "vision_r1_visual_replay",
             "schema_valid": True,
+            "normalization": "mean_over_applicable_cited_crop_checks_including_failures",
+            "empty_step_policy": "zero_credit_excluded_from_denominator",
+            "certificate_check_applicable": True,
             "applicable_checks": [1, int(answer_coupled)] + [int(not item["errors"]) for item in artifact_audits] + [int(value) for value in all_crop_checks],
             "answer_coupled": answer_coupled,
             "certificate_errors": [],
             "artifact_audits": artifact_audits,
             "cited_artifact_count": denominator,
             "process_denominator": denominator,
+            "normalization_groups": normalization["groups"],
             "missing_certificate_slots": 0,
-            "replay_valid_artifact_count": len(valid_artifacts),
+            "replay_valid_artifact_count": len(credits),
         },
     )

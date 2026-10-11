@@ -15,7 +15,7 @@ from recipes.deepscaler.prompts import build_math_messages, math_continuation_me
 from recipes.deepscaler.submission import FINAL_ANSWER_PREFIX, generate_prefilled_submission, prefilled_final_record, prefilled_box_end
 from verl.utils.tokenizer import normalize_token_ids
 from recipes.deepscaler.trajectory_reward import compute_tool_trajectory_reward, verify_process
-from test_process_judge_flows import FakeJudge, load_source
+from pnp_test_utils import load_source
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTION = [{"role": "user", "content": "Compute the sum of two and three."}]
@@ -68,7 +68,7 @@ class Generator:
 
 
 class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
-    async def run_flow(self, texts, *, mode="uniform_equation_process", turns=5,
+    async def run_flow(self, texts, *, turns=5,
                        budget=4096, sizes=None, context=8192, update=51,
                        validation=False, gold="5", implicit_thinking=False,
                        final_turn_submission=True):
@@ -89,7 +89,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         module.verify_process = verify_after_rollout
         flow.server_manager = generator
         flow.tokenizer = tokenizer
-        flow.reward_mode = mode
+        flow.reward_mode = "uniform_equation_process"
         flow.max_steps = turns
         flow.response_length = budget
         flow.prompt_length = context if turns > 1 else 2048
@@ -98,7 +98,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         flow.em_warmup_steps = 50
         flow.final_turn_submission = final_turn_submission
         flow.apply_chat_template_kwargs = {}
-        flow.judge_server = FakeJudge()
+        flow.judge_server = None
 
         async def template(messages):
             return tokenizer.apply_chat_template(messages, **flow.apply_chat_template_kwargs)
@@ -106,10 +106,10 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         output = await flow.run({"temperature": .7}, raw_prompt=QUESTION,
             reward_model={"ground_truth": gold}, extra_info={"index": 1, "split": "train"},
             _agent_r1_global_step=update, _agent_r1_is_validation=validation)
-        return output, generator, tokenizer, flow.judge_server
+        return output, generator, tokenizer
 
     async def test_open_prompt_thinking_requires_visible_final_submission(self):
-        output, gen, _, _ = await self.run_flow([
+        output, gen, _ = await self.run_flow([
             r"Check $2+3=5$. I should write `\boxed{...}`. The answer is 5.",
             r"Rechecked $2+3=5$.</think>\boxed{5}",
         ], implicit_thinking=True)
@@ -120,7 +120,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(info['verification_checks'], [1, 1])
 
     async def test_five_turns_backfill_source_credits_and_final_outcome(self):
-        output, gen, tokenizer, _ = await self.run_flow([REASONING] * 4 + [r"\boxed{5}"])
+        output, gen, tokenizer = await self.run_flow([REASONING] * 4 + [r"\boxed{5}"])
         self.assertEqual(len(output.steps), 5)
         self.assertEqual([step.num_turns for step in output.steps], [1, 2, 3, 4, 5])
         self.assertEqual([call["sampling_params"]["max_tokens"] for call in gen.calls], [820] * 4 + [64])
@@ -138,7 +138,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("last available", tokenizer.histories[-1][-1]["content"])
 
     async def test_final_submission_turn_closes_thinking_and_keeps_budget(self):
-        output, gen, tokenizer, _ = await self.run_flow(
+        output, gen, tokenizer = await self.run_flow(
             [REASONING] * 4 + [r"\boxed{5}"], implicit_thinking=True,
             sizes=[820] * 5,
         )
@@ -157,7 +157,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Respond ONLY', tokenizer.histories[-1][-1]['content'])
 
     async def test_full_thinking_protocol_remains_selectable(self):
-        output, _, tokenizer, _ = await self.run_flow(
+        output, _, tokenizer = await self.run_flow(
             [REASONING] * 4 + [r"\boxed{5}"], implicit_thinking=True,
             final_turn_submission=False,
         )
@@ -166,7 +166,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_restarted_submission_uses_same_selected_answer_as_replay(self):
         completion = r'I have settled on the result. \boxed{5}'
-        output, gen, _, _ = await self.run_flow([REASONING] * 4 + [completion])
+        output, gen, _ = await self.run_flow([REASONING] * 4 + [completion])
         info = output.steps[-1].extra_fields['reward_extra_info']
         self.assertEqual(len(gen.calls), 5)
         self.assertEqual(info['terminal_em'], 1)
@@ -174,69 +174,44 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prefilled_final_record(completion)['answer'], '5')
         self.assertEqual(info['deterministic_verification']['participating_step_indices'], [1, 2, 3, 4])
 
-    async def test_final_prefill_is_shared_by_all_arms_and_does_not_grade_the_answer_as_process(self):
-        prompts = None
-        for mode in ('terminal_only', 'uniform_equation_process', 'llm_judge'):
-            output, gen, _, judge = await self.run_flow([REASONING] * 4 + ['5}'], mode=mode)
-            current = [call['prompt_ids'] for call in gen.calls]
-            if prompts is None:
-                prompts = current
-            self.assertEqual(current, prompts)
-            info = output.steps[-1].extra_fields['reward_extra_info']
-            self.assertEqual(info['terminal_em'], 1)
-            self.assertEqual(info['deterministic_verification']['participating_step_indices'], [1, 2, 3, 4])
-            self.assertEqual(info['final_answer_prefill'], FINAL_ANSWER_PREFIX)
-            self.assertEqual(output.steps[-1].response_ids, [104])
-            if mode == 'llm_judge':
-                self.assertNotIn(FINAL_ANSWER_PREFIX, judge.calls[0][0])
+    async def test_final_prefill_does_not_grade_the_answer_as_process(self):
+        output, gen, _ = await self.run_flow([REASONING] * 4 + ['5}'])
+        self.assertEqual(len(gen.calls), 5)
+        info = output.steps[-1].extra_fields['reward_extra_info']
+        self.assertEqual(info['terminal_em'], 1)
+        self.assertEqual(info['deterministic_verification']['participating_step_indices'], [1, 2, 3, 4])
+        self.assertEqual(info['final_answer_prefill'], FINAL_ANSWER_PREFIX)
+        self.assertEqual(output.steps[-1].response_ids, [104])
 
-    async def test_all_reward_arms_share_prompts_and_stop_on_wrong_final(self):
-        histories = None
-        for mode in ("terminal_only", "uniform_equation_process", "llm_judge"):
-            output, gen, tokenizer, judge = await self.run_flow([REASONING, r"\boxed{7}"], mode=mode)
-            self.assertEqual(len(gen.calls), 2)
-            if histories is None:
-                histories = tokenizer.histories
-            self.assertEqual(tokenizer.histories, histories)
-            info = output.steps[-1].extra_fields["reward_extra_info"]
-            self.assertTrue(info["terminal_eligible"])
-            self.assertEqual(info["acc"], 0)
-            if mode == "terminal_only":
-                self.assertEqual([step.reward_score for step in output.steps], [0, 0])
-            else:
-                self.assertGreater(output.steps[0].reward_score, 0)
-            if mode == "llm_judge":
-                self.assertEqual(len(judge.calls), 1)
-                self.assertNotIn(r"\boxed{7}", judge.calls[0][0])
-                self.assertNotIn("ground_truth", judge.calls[0][0])
+    async def test_wrong_final_stops_generation_and_preserves_process_credit(self):
+        output, gen, _ = await self.run_flow([REASONING, r"\boxed{7}"])
+        self.assertEqual(len(gen.calls), 2)
+        info = output.steps[-1].extra_fields["reward_extra_info"]
+        self.assertTrue(info["terminal_eligible"])
+        self.assertEqual(info["acc"], 0)
+        self.assertGreater(output.steps[0].reward_score, 0)
+        self.assertEqual(output.steps[-1].reward_score, 0)
 
     async def test_incomplete_retains_process_credits_with_zero_terminal_reward(self):
-        for mode in ("terminal_only", "uniform_equation_process", "llm_judge"):
-            output, gen, _, _ = await self.run_flow([REASONING] * 5, mode=mode)
-            self.assertEqual(len(output.steps), 5)
-            self.assertEqual(len(output.steps), 5)
-            self.assertTrue(all(step.response_ids for step in output.steps))
-            info = output.steps[-1].extra_fields["reward_extra_info"]
-            self.assertFalse(info["terminal_eligible"])
-            self.assertFalse(info["terminal_gate_passed"])
-            self.assertFalse(info["process_requires_terminal_submission"])
-            self.assertEqual(info["terminal_em"], 0)
-            self.assertEqual(info["optimizer_terminal_component"], 0)
-            self.assertEqual(info["verified_success"], 0)
-            self.assertEqual(output.steps[-1].reward_score, 0)
-            if mode == "terminal_only":
-                self.assertTrue(all(step.reward_score == 0 for step in output.steps))
-            else:
-                self.assertTrue(all(step.reward_score > 0 for step in output.steps[:4]))
-                self.assertAlmostEqual(sum(step.reward_score for step in output.steps),
-                                       info["optimizer_process_total"])
-                if mode == "uniform_equation_process":
-                    self.assertAlmostEqual(info["optimizer_process_total"], info["optimizer_process_weight"])
-            self.assertEqual(info["termination_reason"], "max_steps")
-            self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
+        output, _, _ = await self.run_flow([REASONING] * 5)
+        self.assertEqual(len(output.steps), 5)
+        self.assertTrue(all(step.response_ids for step in output.steps))
+        info = output.steps[-1].extra_fields["reward_extra_info"]
+        self.assertFalse(info["terminal_eligible"])
+        self.assertFalse(info["terminal_gate_passed"])
+        self.assertFalse(info["process_requires_terminal_submission"])
+        self.assertEqual(info["terminal_em"], 0)
+        self.assertEqual(info["optimizer_terminal_component"], 0)
+        self.assertEqual(info["verified_success"], 0)
+        self.assertEqual(output.steps[-1].reward_score, 0)
+        self.assertTrue(all(step.reward_score > 0 for step in output.steps[:4]))
+        self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
+        self.assertAlmostEqual(info["optimizer_process_total"], info["optimizer_process_weight"])
+        self.assertEqual(info["termination_reason"], "max_steps")
+        self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
 
     async def test_incomplete_without_verified_progress_earns_no_reward(self):
-        output, _, _, _ = await self.run_flow(["Check $2+3=6$."] * 5)
+        output, _, _ = await self.run_flow(["Check $2+3=6$."] * 5)
         self.assertTrue(all(step.reward_score == 0 for step in output.steps))
         info = output.steps[-1].extra_fields["reward_extra_info"]
         self.assertEqual(info["terminal_em"], 0)
@@ -244,15 +219,14 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_unsubmitted_progress_keeps_outcome_only_warmup_and_evaluation(self):
         for settings in ({"update":50}, {"validation":True}):
-            output, _, _, judge = await self.run_flow([REASONING] * 5, **settings)
+            output, _, _ = await self.run_flow([REASONING] * 5, **settings)
             self.assertTrue(all(step.reward_score == 0 for step in output.steps))
             info = output.steps[-1].extra_fields["reward_extra_info"]
             self.assertEqual(info["optimizer_process_weight"], 0)
             self.assertEqual(info["terminal_em"], 0)
-            self.assertEqual(judge.calls, [])
 
     async def test_corrected_equation_gets_new_credit_without_erasing_failed_history(self):
-        output, _, _, _ = await self.run_flow([
+        output, _, _ = await self.run_flow([
             "Check $2 + 3 = 6$.", "Corrected: $2 + 3 = 5$.", r"\boxed{5}"
         ])
         info = output.steps[-1].extra_fields["reward_extra_info"]
@@ -271,7 +245,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audit["process_segment_audits"][0]["steps"][0]["equation_checks"][0]["source_step"], 1)
 
     async def test_length_capped_equation_tail_is_not_a_failed_assertion(self):
-        output, _, _, _ = await self.run_flow(
+        output, _, _ = await self.run_flow(
             ["Check $2+3=6$.\n$37*40=1", r"\boxed{5}"], sizes=[820, 1],
         )
         info = output.steps[-1].extra_fields['reward_extra_info']
@@ -281,44 +255,41 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_five_full_turns_do_not_multiply_the_total_token_budget(self):
         for budget, cap, last_cap in ((4096, 820, 816), (5120, 1024, 1024)):
-            output, gen, _, _ = await self.run_flow([REASONING] * 5,
+            output, gen, _ = await self.run_flow([REASONING] * 5,
                 budget=budget, sizes=[cap] * 5)
             self.assertEqual([c["sampling_params"]["max_tokens"] for c in gen.calls[:4]], [cap] * 4)
             self.assertEqual(sum(c["sampling_params"]["max_tokens"] for c in gen.calls[4:]), last_cap)
             self.assertEqual(sum(len(step.response_ids) for step in output.steps), budget)
 
     async def test_warmup_and_validation_use_only_final_reward(self):
-        for mode in ("uniform_equation_process", "llm_judge"):
-            for update, validation in ((50, False), (51, True)):
-                output, _, _, judge = await self.run_flow([REASONING, r"\boxed{5}"],
-                    mode=mode, update=update, validation=validation)
-                self.assertEqual([step.reward_score for step in output.steps], [0, 1])
-                info = output.steps[-1].extra_fields["reward_extra_info"]
-                self.assertEqual(info["process_reward"], 0)
-                self.assertEqual(info["deterministic_process_reward"], 1)
-                self.assertEqual(info["verification_passed_check_count"], 1)
-                self.assertEqual(info["verification_failed_check_count"], 0)
-                self.assertFalse(judge.calls)
+        for update, validation in ((50, False), (51, True)):
+            output, _, _ = await self.run_flow([REASONING, r"\boxed{5}"], update=update, validation=validation)
+            self.assertEqual([step.reward_score for step in output.steps], [0, 1])
+            info = output.steps[-1].extra_fields["reward_extra_info"]
+            self.assertEqual(info["process_reward"], 0)
+            self.assertEqual(info["deterministic_process_reward"], 1)
+            self.assertEqual(info["verification_passed_check_count"], 1)
+            self.assertEqual(info["verification_failed_check_count"], 0)
 
     async def test_one_and_eight_turn_limits(self):
-        output, gen, tokenizer, _ = await self.run_flow([r"\boxed{5}"], turns=1)
+        output, gen, tokenizer = await self.run_flow([r"\boxed{5}"], turns=1)
         self.assertEqual(len(output.steps), 1)
         self.assertEqual(gen.calls[0]["sampling_params"]["max_tokens"], 4096)
         self.assertEqual(tokenizer.histories, [QUESTION])
-        output, gen, _, _ = await self.run_flow([REASONING] * 7 + [r"\boxed{5}"], turns=8)
+        output, gen, _ = await self.run_flow([REASONING] * 7 + [r"\boxed{5}"], turns=8)
         self.assertEqual(len(output.steps), 8)
         self.assertTrue(all(c["sampling_params"]["max_tokens"] == 512 for c in gen.calls[:7]))
         self.assertEqual(gen.calls[-1]['sampling_params']['max_tokens'], 64)
 
     async def test_rounded_partition_never_exceeds_whole_trajectory_budget(self):
-        output, gen, _, _ = await self.run_flow([REASONING] * 4, turns=4, budget=10, sizes=[3] * 4)
+        output, gen, _ = await self.run_flow([REASONING] * 4, turns=4, budget=10, sizes=[3] * 4)
         self.assertEqual([c["sampling_params"]["max_tokens"] for c in gen.calls], [3, 3, 3, 1])
         self.assertEqual(sum(len(s.response_ids) for s in output.steps), 10)
         self.assertGreater(sum(s.reward_score for s in output.steps), 0)
         self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["optimizer_terminal_component"], 0)
 
     async def test_context_exhaustion_retains_failed_trajectory(self):
-        output, gen, _, _ = await self.run_flow([REASONING], context=30)
+        output, gen, _ = await self.run_flow([REASONING], context=30)
         self.assertEqual(len(gen.calls), 1)
         self.assertEqual(gen.calls[0]["sampling_params"]["max_tokens"], 10)
         self.assertEqual(output.steps[-1].extra_fields["reward_extra_info"]["termination_reason"], "context_limit")
@@ -328,7 +299,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
     async def test_changing_gold_never_changes_policy_context(self):
         histories = []
         for gold in ("5", "7"):
-            _, _, tokenizer, _ = await self.run_flow([REASONING, r"\boxed{5}"], gold=gold)
+            _, _, tokenizer = await self.run_flow([REASONING, r"\boxed{5}"], gold=gold)
             histories.append(tokenizer.histories)
         self.assertEqual(*histories)
 
