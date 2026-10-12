@@ -1,8 +1,10 @@
 """Evaluation denominator and training-compatible submission boundaries."""
 from types import SimpleNamespace
 import importlib.util
+import io
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "aime_agent_eval", Path(__file__).resolve().parents[1] / "scripts/deepscaler/pnp_aime.py")
@@ -41,6 +43,30 @@ class ScriptedEngine:
 
 
 class AimeAgentEvalTest(unittest.TestCase):
+    def test_compatibility_wrapper_forwards_aime2025_and_frozen_revision(self):
+        command = ["pnp_aime.py", "--model", "/model", "--checkpoint", "/checkpoint",
+                   "--dataset", "/aime2025/test.parquet", "--output", "/run",
+                   "--dataset-name", "MathArena/aime_2025", "--dataset-label", "I + II",
+                   "--dataset-revision", "frozen-snapshot", "--gpus", "0"]
+        with patch("sys.argv", command), patch("agent_r1.evaluation.pnp.main") as evaluate:
+            module.main()
+        forwarded = evaluate.call_args.args[0]
+        self.assertEqual(forwarded[0], "aime2025")
+        self.assertEqual(forwarded[forwarded.index("--dataset-version") + 1], "2025")
+        self.assertEqual(forwarded[forwarded.index("--dataset-revision") + 1], "frozen-snapshot")
+        self.assertEqual(forwarded[forwarded.index("--gpus") + 1], "0")
+
+    def test_compatibility_wrapper_rejects_another_year_before_evaluation(self):
+        command = ["pnp_aime.py", "--model", "/model", "--checkpoint", "/checkpoint",
+                   "--dataset", "/dataset", "--output", "/run", "--dataset-name", "MathArena/aime_2024",
+                   "--dataset-label", "AIME 2024", "--dataset-revision", "frozen-snapshot"]
+        with patch("sys.argv", command), patch("sys.stderr", new=io.StringIO()), \
+             patch("agent_r1.evaluation.pnp.main") as evaluate:
+            with self.assertRaises(SystemExit) as error:
+                module.main()
+        self.assertEqual(error.exception.code, 2)
+        evaluate.assert_not_called()
+
     def test_whole_numeric_answer_is_normalized_without_consulting_gold(self):
         for answer, expected in (("252+25", 277), (r"\frac{554}{2}", 277), ("007", 7),
                                  ("178 - 146", 32), ("x + 277", None), ("277 or 278", None),
