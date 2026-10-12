@@ -43,7 +43,7 @@ class EvaluationProfile:
 
     def record(self):
         return {"protocol_version": PROTOCOL_VERSION, **asdict(self),
-                "prompt_limit_scope": "initial_prompt" if self.benchmark == "aime2026" else "each_policy_step",
+                "prompt_limit_scope": "initial_prompt" if self.benchmark == "aime2025" else "each_policy_step",
                 "output_budget_unit": "all_generated_tokens_across_the_trajectory",
                 "references_visible_to_policy": False, "hidden_test_feedback": False,
                 "accuracy_denominator": "all_selected_questions",
@@ -51,7 +51,7 @@ class EvaluationProfile:
 
 
 PROFILES = {
-    "aime2026": EvaluationProfile("aime2026", 5, 4096, 820, 2048, 8192, "integer_accuracy"),
+    "aime2025": EvaluationProfile("aime2025", 5, 4096, 820, 2048, 8192, "integer_accuracy"),
     "hotpotqa": EvaluationProfile("hotpotqa", 4, 4096, 1024, 8192, 12288, "answer_em"),
     "livecodebench": EvaluationProfile("livecodebench", 5, 10240, 2048, 8192, 12288, "pass_at_1"),
     "mathvision": EvaluationProfile("mathvision", 3, 6144, 2048, 8192, 12288, "answer_accuracy"),

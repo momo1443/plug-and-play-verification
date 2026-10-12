@@ -30,8 +30,8 @@ Tensor parallel size & 1 per replica \\
 Precision / Seed & bfloat16 / 42 \\
 \bottomrule
 \end{tabular}
-\caption{PNP evaluation configuration for AIME2026.}
-\label{tab:pnp_eval_aime2026}
+\caption{PNP evaluation configuration for AIME2025.}
+\label{tab:pnp_eval_aime2025}
 \end{table}
 \newpage
 

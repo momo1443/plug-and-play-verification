@@ -58,12 +58,12 @@ class PnpEvaluationTest(unittest.TestCase):
                  "termination_reason": reason, "generated_output_tokens": 3,
                  "verified_process_reward": 1000}
                 for i, reason in enumerate(("final_submission", "token_budget", "max_steps", "empty_generation"))]
-        result = summarize_records(rows, ["0", "1", "2", "3"], PROFILES["aime2026"])
+        result = summarize_records(rows, ["0", "1", "2", "3"], PROFILES["aime2025"])
         self.assertEqual(result["accuracy"], 0.25)
         self.assertEqual(result["missing_or_invalid_submissions"], 3)
         for invalid in (rows[:-1], rows + rows[:1]):
             with self.assertRaises(ValueError):
-                summarize_records(invalid, ["0", "1", "2", "3"], PROFILES["aime2026"])
+                summarize_records(invalid, ["0", "1", "2", "3"], PROFILES["aime2025"])
 
     def test_qa_em_f1_and_boolean_answers(self):
         self.assertEqual(qa_scores("The Eiffel Tower", ["Eiffel Tower"])["answer_em"], 1)
@@ -121,17 +121,17 @@ class PnpEvaluationTest(unittest.TestCase):
     def test_math_uses_final_submission_and_keeps_unsubmitted_verified_process(self):
         task = EvaluationTask("q1", {"problem": "Compute 1+1."}, {"answer": "2"})
         engine = ScriptedEngine(["1+1=2."] * 4 + ["2}"])
-        record = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])[0]
+        record = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2025"])[0]
         self.assertTrue(record["is_correct"])
         self.assertEqual(record["predicted_integer"], 2)
         record = math_records(ScriptedEngine(["1+1=2."] * 5), CharacterTokenizer(),
-                              SimpleNamespace, [task], PROFILES["aime2026"])[0]
+                              SimpleNamespace, [task], PROFILES["aime2025"])[0]
         self.assertFalse(record["is_correct"])
         self.assertGreater(record["verification"]["verified_process_reward"], 0)
 
     def test_math_initial_prompt_overflow_is_an_incorrect_retained_attempt(self):
         task = EvaluationTask("q1", {"problem": "A very long question"}, {"answer": "2"})
-        profile = replace(PROFILES["aime2026"], prompt_limit=1)
+        profile = replace(PROFILES["aime2025"], prompt_limit=1)
         row = math_records(ScriptedEngine([]), CharacterTokenizer(), SimpleNamespace, [task], profile)[0]
         self.assertFalse(row["is_correct"])
         self.assertEqual(row["termination_reason"], "prompt_limit")
@@ -141,15 +141,47 @@ class PnpEvaluationTest(unittest.TestCase):
         engine = SimpleNamespace(generate=lambda inputs, params, **kwargs: [
             SimpleNamespace(outputs=[SimpleNamespace(token_ids=[1] * (params.max_tokens + 1))])])
         with self.assertRaisesRegex(RuntimeError, "exceeded"):
-            math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])
+            math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2025"])
 
     def test_aime_local_source_preserves_ids_and_isolates_answers(self):
-        root = Path(__file__).resolve().parents[1]
-        tasks, count = load_tasks("aime2026", root / "data/raw/aime26/aime2026.jsonl",
-                                 split="test", version="2026", max_problems=2)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "aime2025.jsonl"
+            path.write_text("".join(json.dumps({"problem_idx": i, "problem": f"Compute {i}+1.", "answer": str(i+1)})
+                                    + "\n" for i in range(1, 31)))
+            tasks, count = load_tasks("aime2025", path, split="test", version="2025", max_problems=2)
         self.assertEqual((count, len(tasks)), (30, 2))
         self.assertEqual(set(tasks[0].actor_inputs), {"problem"})
         self.assertEqual(tasks[0].question_id, "1")
+        self.assertEqual(tasks[0].reference, {"answer": "2"})
+
+    def test_aime_prepared_parquet_preserves_question_ids_and_isolates_references(self):
+        import pandas as pd
+        rows = [{"prompt": [{"role": "user", "content": f"Question {i}"}],
+                 "reward_model": {"ground_truth": "007"},
+                 "extra_info": {"question_id": f"aime2025-{i}", "source": "AIME2025", "answer": "007"}}
+                for i in range(30)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test.parquet"
+            pd.DataFrame(rows).to_parquet(path)
+            tasks, count = load_tasks("aime2025", path, split="test", version="2025", max_problems=2)
+            shard, _ = load_tasks("aime2025", path, split="test", version="2025", task_slice=slice(1, None, 2))
+        self.assertEqual((count, len(tasks)), (30, 2))
+        self.assertEqual(tasks[0].question_id, "aime2025-0")
+        self.assertEqual(tasks[0].actor_inputs, {"problem": "Question 0"})
+        self.assertEqual(tasks[0].reference, {"answer": "007"})
+        self.assertEqual(shard[0].question_id, tasks[1].question_id)
+
+    def test_aime_requires_the_correct_year_and_complete_unique_snapshot_before_selection(self):
+        rows = [{"problem_idx": i, "problem": "Compute 1+1.", "answer": "2"} for i in range(30)]
+        with patch("agent_r1.evaluation.pnp_datasets.raw_rows", return_value=rows):
+            with self.assertRaisesRegex(ValueError, "AIME2025"):
+                load_tasks("aime2025", "/unused", split="test", version="2024", max_problems=1)
+            with patch("agent_r1.evaluation.pnp_datasets.raw_rows", return_value=rows[:-1]):
+                with self.assertRaisesRegex(ValueError, "30 questions"):
+                    load_tasks("aime2025", "/unused", split="test", version="2025", max_problems=1)
+            rows[-1]["problem_idx"] = 0
+            with self.assertRaisesRegex(ValueError, "unique"):
+                load_tasks("aime2025", "/unused", split="test", version="2025", max_problems=1)
 
     def test_mathvision_loader_preserves_options_and_image(self):
         image = Image.new("RGB", (100, 100), "white")
@@ -240,6 +272,8 @@ class PnpEvaluationTest(unittest.TestCase):
             write_tables(path)
             text = path.read_text()
         self.assertEqual(text.count(r"\begin{table}"), 4)
+        self.assertIn("PNP evaluation configuration for AIME2025", text)
+        self.assertIn(r"\label{tab:pnp_eval_aime2025}", text)
         self.assertIn("Total completion budget & 10240 tokens", text)
         self.assertNotIn("32768", text)
         self.assertNotIn("A0", text)

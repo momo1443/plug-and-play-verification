@@ -264,19 +264,17 @@ python scripts/deepscaler/eval_aime2025.py
 Use the same dataset snapshot, interaction protocol, graders, and token budgets for all policies being compared. The [evaluation index](scripts/README.md#evaluation) lists task-specific entrypoints; the [standalone evaluation guide](docs/pnp_evaluation.md) documents model exports, frozen data revisions, and the current shared runner.
 
 <details>
-<summary><strong>Current checkpoint testing: AIME 2026</strong></summary>
+<summary><strong>Shared AIME 2025 evaluator and CPU preflight</strong></summary>
 
-AIME 2026 is used for current checkpoint testing. It is separate from the manuscript's AIME 2025 experiments and does not replace their benchmark or reported scores.
-
-The shared evaluator supports a frozen 30-question AIME 2026 snapshot. To check prerequisites without allocating a GPU:
+The shared evaluator uses the full 30-question AIME 2025 (I + II) snapshot. It accepts raw rows with `problem` and `answer`, or the prepared `prompt` and `reward_model.ground_truth` format used above. To check prerequisites without allocating a GPU:
 
 ```bash
-bash run_pnp_eval.sh aime2026 \
+bash run_pnp_eval.sh aime2025 \
   --model /path/to/exported-checkpoint \
   --checkpoint /path/to/global_step_190 \
-  --dataset data/raw/aime26/aime2026.jsonl \
-  --dataset-version 2026 \
-  --dataset-revision LOCAL_AIME2026_SNAPSHOT \
+  --dataset /path/to/aime2025/test.parquet \
+  --dataset-version 2025 \
+  --dataset-revision LOCAL_AIME2025_SNAPSHOT \
   --gpus 0 --tensor-parallel-size 1 \
   --preflight-only
 ```
