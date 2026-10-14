@@ -157,7 +157,7 @@ S_{i,t}=\sum_{u=t}^{T_i}p_{d,u}(x,\tau_i),\qquad R_{i,t}=wE+(1-w)S_{i,t}.
 Subtracting the group mean cancels the common outcome term. With process returns collected in the vector `S_t`, the normalized advantage becomes:
 
 ```math
-\widehat A_{i,t}=\frac{S_{i,t}-\operatorname{mean}(\mathbf S_t)}{\operatorname{std}(\mathbf S_t)+\epsilon/(1-w)}.
+\widehat A_{i,t}=\frac{S_{i,t}-\mathrm{mean}(\mathbf S_t)}{\mathrm{std}(\mathbf S_t)+\epsilon/(1-w)}.
 ```
 
 Here, `std` is the sample standard deviation and `epsilon > 0` ensures numerical stability. Differences in remaining process returns therefore yield nonzero advantages within the group, allowing refinement of intermediate artifacts even when outcome-only supervision provides no reward differences.
