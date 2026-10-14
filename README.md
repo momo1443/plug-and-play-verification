@@ -22,7 +22,7 @@ The proposed process verifiers use deterministic local checks. Reference answers
 
 | Domain | Training dataset | Reported evaluation benchmark | Verified artifacts |
 | --- | --- | --- | --- |
-| Mathematics | DeepScaleR-Preview-Dataset | **AIME 2025** | Extracted numeric equalities |
+| Mathematics | DeepScaleR-Preview-Dataset | AIME 2025 | Extracted numeric equalities |
 | Multi-hop QA | HotpotQA | HotpotQA validation | Retrieved source spans, provenance, and action/answer coupling |
 | Code | TACO | LiveCodeBench | Code-version lineage, developer tests, and execution replay |
 | Vision | Vision-R1-RL | MATH-Vision | Image-crop replay and answer/claim coupling |
