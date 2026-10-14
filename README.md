@@ -47,6 +47,8 @@ Manuscript Tables 1–3 report the following scores (%). `Avg.` is the unweighte
 
 ![Training accuracy of Qwen3.5-4B with verification and an LLM process judge](assets/images/training-accuracy.png)
 
+**Training accuracy of Qwen3.5-4B with Ours and GRPO with LLM-as-a-judge.**
+
 ### Reuse across policy optimizers
 
 HotpotQA, Qwen3.5-4B (Table 3):
