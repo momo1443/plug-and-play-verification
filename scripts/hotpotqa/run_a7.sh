@@ -17,15 +17,15 @@ WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"
 
 export HOTPOTQA_REWARD_ARM=A7
 export HOTPOTQA_RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HOTPOTQA_MODEL_PATH="${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 
-# A7 uses 6 GPUs: same resource layout as A6 minus the judge GPU.
-# Actor FSDP + rollout on 6 GPUs; no judge server needed.
-export HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-6}"
-export HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-6}"
+# A7 uses all eight A40 GPUs for actor FSDP and rollout.
+IFS=',' read -r -a ACTOR_GPUS <<<"$CUDA_VISIBLE_DEVICES"
+export HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-${#ACTOR_GPUS[@]}}"
+export HOTPOTQA_AGENT_WORKERS="${HOTPOTQA_AGENT_WORKERS:-$HOTPOTQA_NUM_GPUS}"
 export HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.40}"
 
-export RUN_ID="${RUN_ID:-qwen35-4b_a7_weakexec_matched_6gpu_first30k_n4_fusedtriton_vllm040_actor8192_noentropy_refkl001_$(date +%Y%m%d-%H%M%S)}"
+export RUN_ID="${RUN_ID:-qwen35-4b_a7_weakexec_matched_8gpu_first10k_n4_500step_$(date +%Y%m%d-%H%M%S)}"
 
 exec bash "$HERE/pnp_hotpotqa_train.sh"

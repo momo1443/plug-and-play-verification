@@ -67,6 +67,7 @@ if ! [[ "$TOTAL_TRAINING_STEPS" =~ ^[1-9][0-9]*$ ]]; then
     echo "HOTPOTQA_TOTAL_TRAINING_STEPS must be a positive integer" >&2
     exit 2
 fi
+TOTAL_EPOCHS="${DEEPSCALER_TOTAL_EPOCHS:-$(pnp_training_epochs "$TRAIN_MAX_SAMPLES" "$TRAIN_BATCH_SIZE" "$TOTAL_TRAINING_STEPS")}"
 
 VAL_MAX_SAMPLES="${DEEPSCALER_VAL_MAX_SAMPLES:-2015}"
 VAL_BATCH_SIZE="${DEEPSCALER_VAL_BATCH_SIZE:-${HOTPOTQA_VAL_BATCH_SIZE:-8}}"
@@ -304,7 +305,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     trainer.save_freq="$SAVE_FREQ" \
     trainer.max_actor_ckpt_to_keep="$MAX_ACTOR_CKPT_TO_KEEP" \
     trainer.test_freq="${DEEPSCALER_TEST_FREQ:--1}" \
-    trainer.total_epochs=1 \
+    trainer.total_epochs="$TOTAL_EPOCHS" \
     trainer.total_training_steps="$TOTAL_TRAINING_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" \
     trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \

@@ -16,7 +16,7 @@ scripts/           Training and evaluation entrypoints, grouped by domain
   patches/         Explicit compatibility patches for the training environment
 tests/             Current PNP tasks, AIME evaluation, and shared training checks
 assets/images/     The two plug-and-play verifier figures
-docs/              Implementation notes, writing drafts, and historical records
+docs/              Current implementation notes and retained debugging records
 verl_patches/      Runtime weight-transfer implementation
 ```
 
@@ -44,8 +44,7 @@ PNP entrypoints use the following naming convention:
 - [Frozen process judge](experiments/llm-process-judge.md): comparison-arm protocol.
 - [Shared launcher settings](../scripts/common/README.md): model adaptation and overrides.
 - [DeepScaleR](../recipes/deepscaler/README.md) and [HotpotQA](../recipes/hotpotqa/README.md): task-specific setup.
-- [README writing draft](drafts/README.md): preserved draft, separate from the root README.
-- [Historical records](archive/README.md): plans, progress, and old setup notes.
+- [Historical records](archive/README.md): retained debugging notes.
 
 `recipes/hotpotqa_lr/` also supplies parsing, answer normalization, and artifact
 helpers used by the current HotpotQA/TACO flows and validation recorder. It is
@@ -63,8 +62,7 @@ and `recipes/livecodebench_a0/` contain evaluation utilities.
 | `scripts/patch_*.py` | `scripts/patches/` |
 | `scripts/finegrained_eval.py` | `scripts/extensions/hotpotqa_lr/finegrained_eval.py` |
 | `image/` paper figures | `assets/images/` |
-| `README_DRAFT.txt` | `docs/drafts/README.md` |
-| `docs/plan/`, `docs/progress/`, old `CLAUDE.md` | `docs/archive/` |
+| Retained older debugging notes | `docs/archive/progress/` |
 
 The unused GSM8K examples (whose recipe was absent), independent Paper Search
 recipe/examples, upstream Agent-R1 documentation site/results/figures, and two

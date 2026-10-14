@@ -21,7 +21,7 @@ export HOTPOTQA_REWARD_ARM=A0
 export HOTPOTQA_VALIDATION_INTERFACE VALIDATION_ARM
 
 # --- Frozen validation contract knobs ----------------------------------------
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
 export VLLM_USE_V1=1
 export HOTPOTQA_ENABLE_THINKING=false

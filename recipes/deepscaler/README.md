@@ -18,16 +18,17 @@ uv pip install --python "$PYTHON_BIN" \
   -r recipes/deepscaler/requirements-qwen35.txt
 "$PYTHON_BIN" -m recipes.deepscaler.prepare_data
 bash scripts/deepscaler/pnp_deepscaler_smoke.sh
-bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
+bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
 ```
 
 Use the recipe scripts from the activated Conda `pnp` environment:
 
 ```bash
 bash scripts/deepscaler/pnp_deepscaler_smoke.sh
-CUDA_VISIBLE_DEVICES=0,1 DEEPSCALER_FILTER_OVERLONG_PROMPTS=True \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 DEEPSCALER_TOTAL_EPOCHS=2 \
+  DEEPSCALER_FILTER_OVERLONG_PROMPTS=True \
   bash scripts/deepscaler/pnp_deepscaler.sh
-CUDA_VISIBLE_DEVICES=0,1 DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
   bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
@@ -44,16 +45,16 @@ protocol: its answer-checking tool feeds reference-based correctness back to
 the model. The paper mathematics flow here provides fixed continuation
 messages and performs verification after the rollout.
 
-For the local corpus, enable `DEEPSCALER_FILTER_OVERLONG_PROMPTS=True` to skip
-questions exceeding the 2,048-token input limit. veRL selects the sample prefix
-before filtering: one of the first 10,000 training rows exceeds the limit, so
-the default single epoch with batch size 20 completes 499 updates after filtering.
-The 500-update setting remains the upper limit. Rich verifier audits are retained
-in validation JSONL; aggregate validation metrics use numeric scalar fields only.
+The main model profile replaces overlong questions before selecting its 10,000
+training rows. If filtering an unprepared corpus explicitly, veRL selects the
+sample prefix before filtering, which can shorten an epoch. The example above
+allows two epochs so the local filtered corpus still reaches the 500-update
+limit. Rich verifier audits are retained in validation JSONL; aggregate
+validation metrics use numeric scalar fields only.
 
 The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, prepares exactly 10,000 eligible
 training rows, replacing overlong entries with subsequent rows in source order.
-It defaults to GPUs 0–3, batch/mini-batch 20 prompts, four trajectories per prompt,
+It defaults to eight NVIDIA A40 GPUs (0–7), batch/mini-batch 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
 are 2,048 initial tokens, 8,192 context tokens, 4,096 completion tokens across
@@ -63,12 +64,9 @@ warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
 The prepared subset, its source-selection manifest and resolved configuration
 are saved in the run's `logs/` directory.
 
-The same model profile accepts `--gpus 0,1,2` for a three-GPU run, with
-the same optimizer, batch and generation budgets. It uses a vLLM memory fraction
-of 0.30 and maximum concurrent sequences of 32, with eight AgentFlow workers.
-Checkpoints are saved every 10 updates; periodic held-out validation is disabled.
-The previous 0.35 fraction exhausted memory during actor backward. Both vLLM
-settings accept the usual `DEEPSCALER_VLLM_*` overrides.
+The model profile uses a vLLM memory fraction of 0.30, maximum concurrent
+sequences of 32, and 16 AgentFlow workers on eight GPUs. These settings accept
+the usual `DEEPSCALER_VLLM_*` overrides.
 GPU utilization measures kernel activity; GPU memory usage is a separate metric.
 Size the vLLM budget from the complete training peak, including actor backward
 and optimizer states, rather than from generation-phase memory alone.
@@ -162,8 +160,9 @@ Rows missing problems or answers are excluded and recorded in
 and retained without changing labels. This creates a local diagnostic split;
 it does not recreate an unspecified paper split or substitute for AIME 2025.
 
-The smoke launcher uses GPUs 0 and 1, four training examples, two rollouts per
-prompt, two updates, a 512-token trajectory budget, and no checkpoint saving.
+The smoke launcher uses all eight GPUs, a batch of four training examples, two
+rollouts per prompt, 500 updates across 500 epochs, a 512-token trajectory budget,
+and no checkpoint saving.
 Its warmup is zero to exercise the verifier immediately. The main launcher
 retains the 50-update warmup and paper generation budget. Select free GPUs
 explicitly when launching the main profile; its default expects eight GPUs.

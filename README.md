@@ -1,6 +1,6 @@
 # Plug-and-Play Verifier for Decoupling Process Reward in Stabilizing Long-Horizon Agentic Reasoning
 
-**PNP turns verified intermediate work into process rewards for multi-turn agentic reinforcement learning.** A shared verification interface connects domain-specific checks to GRPO and PPO across mathematics, multi-hop QA, code, and vision.
+**A plug-and-play verifier framework for stabilizing long-horizon reasoning through explicit verification of intermediate reasoning artifacts.** A shared verification interface connects domain-specific checks to GRPO and PPO across mathematics, multi-hop QA, code, and vision.
 
 [Results](#results) · [Quick Start](#quick-start) · [Method](#method) · [Evaluation](#evaluation) · [Documentation](#documentation)
 
@@ -128,13 +128,13 @@ Place model weights in `models/Qwen3.5-4B` or `models/Qwen3.5-9B`, or pass `--mo
 
 ### 3. Train with verification
 
-The Qwen3.5-4B mathematics profile uses four GPUs:
+The Qwen3.5-4B mathematics profile uses eight NVIDIA A40 GPUs, matching Appendix C:
 
 ```bash
 bash run_pnp.sh deepscaler \
   --model Qwen3.5-4B \
   --model-path /path/to/Qwen3.5-4B \
-  --gpus 0,1,2,3
+  --gpus 0,1,2,3,4,5,6,7
 ```
 
 The same entrypoint accepts `hotpotqa`, `taco`, and `vision_r1`, and the `Qwen3.5-9B` model profile. GPU requirements and task prerequisites vary by domain; see the [launcher index](scripts/README.md) before selecting a layout.
@@ -224,7 +224,7 @@ r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t,
 
 GRPO computes undiscounted reward-to-go and normalizes returns within the same prompt and step index. Advantages apply to generated policy tokens; prompt and observation tokens are masked. PPO consumes the same rewards through its critic and GAE path.
 
-In GRPO groups with tied outcome rewards, different verified process returns can supply a **last-mile refinement signal**. Strict verification consistency requires every applicable check in a nonempty set to pass; later corrections do not erase earlier failed checks.
+In GRPO groups with tied outcome rewards, different verified process returns can supply a **last-mile refinement signal**. Strict verification consistency requires every applicable check in a nonempty set to pass, independently of final-submission eligibility; later corrections do not erase earlier failed checks. An incomplete but locally consistent trajectory has `C_d=1`, zero outcome reward, and zero verified success.
 
 See [`agent_r1/verifier/reward.py`](agent_r1/verifier/reward.py) for the interface and composer, and the [implementation contract](docs/paper-contract.md) for detailed reward and audit semantics.
 

@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
-import math
-import re
-import string
+from .official import request
 
-PROTOCOL_VERSION = "pnp-agent-evaluation-v1"
+PROTOCOL_VERSION = "pnp-agent-evaluation-v2"
 
 
 @dataclass(frozen=True)
@@ -93,76 +91,26 @@ class TrajectoryBudget:
 
 
 def normalize_qa_answer(value):
-    value = str(value).lower()
-    value = "".join(char for char in value if char not in string.punctuation)
-    return " ".join(re.sub(r"\b(a|an|the)\b", " ", value).split())
+    return request("hotpotqa", {"operation": "normalize", "answer": str(value)})
 
 
 def qa_scores(answer, references):
     """HotpotQA answer EM and token F1; absent submissions score zero."""
     if not isinstance(answer, str) or not answer.strip():
         return {"is_correct": False, "answer_em": 0.0, "answer_f1": 0.0}
-    prediction = normalize_qa_answer(answer)
-    em, f1 = 0.0, 0.0
-    for reference in references:
-        target = normalize_qa_answer(reference)
-        em = max(em, float(prediction == target))
-        if ((prediction in {"yes", "no", "noanswer"} or target in {"yes", "no", "noanswer"})
-                and prediction != target):
-            continue
-        pred_tokens, gold_tokens = prediction.split(), target.split()
-        common = sum((Counter(pred_tokens) & Counter(gold_tokens)).values())
-        if common:
-            f1 = max(f1, 2 * common / (len(pred_tokens) + len(gold_tokens)))
-    return {"is_correct": bool(em), "answer_em": em, "answer_f1": f1}
+    return request("hotpotqa", {"answer": answer, "references": [str(value) for value in references]})
 
 
 def mathvision_equal(left, right):
-    """MATH-V's string / two-decimal numeric convention using bounded arithmetic.
-
-    Mirrors the official is_equal rule for scalar numeric and tuple/list answers
-    without evaluating model-authored Python. Unsupported expressions fail closed.
-    """
-    from recipes.deepscaler.math_expressions import canonical_answer, evaluate, latex_to_python, split_top_level
-    left, right = str(left).strip().lower(), str(right).strip().lower()
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    if left[0] in "([" and right[0] == left[0] and left[-1] == right[-1]:
-        a, b = split_top_level(left[1:-1], ","), split_top_level(right[1:-1], ",")
-        if len(a) > 1 or len(b) > 1:
-            return len(a) == len(b) and all(mathvision_equal(x, y) for x, y in zip(a, b))
-    values = []
-    for text in (left, right):
-        expression = latex_to_python(canonical_answer(text.strip("$ ")))
-        value = evaluate(expression) if expression is not None else None
-        if value is None or not math.isfinite(float(value)):
-            return False
-        values.append(round(float(value), 2))
-    return values[0] == values[1]
+    """Use the pinned MATH-V is_equal implementation without local rules."""
+    return request("mathvision", {"operation": "equal", "left": str(left), "right": str(right)})
 
 
 def mathvision_score(answer, reference, options):
-    """A submitted choice letter or the corresponding option value is valid."""
+    """Run the original MATH-V extraction and equivalence on the submission."""
     if not isinstance(answer, str) or not answer.strip():
         return False
-    candidate = answer.strip()
-    from agent_r1.evaluation.answers import final_answer_record
-    parsed = final_answer_record(candidate)
-    if parsed is not None:
-        candidate = parsed["answer"]
-    match = re.fullmatch(r"(?:\(([A-Za-z])\)|([A-Za-z]))[.]?", candidate)
-    if match:
-        candidate = (match[1] or match[2]).upper()
-    targets = [str(reference)]
-    label = str(reference).strip().upper()
-    if options and len(label) == 1 and "A" <= label <= "Z":
-        index = ord(label) - ord("A")
-        if not 0 <= index < len(options):
-            raise ValueError("MATH-Vision reference choice is outside the options")
-        targets.append(str(options[index]))
-    return any(mathvision_equal(candidate, target) for target in targets)
+    return request("mathvision", {"answer": answer, "reference": str(reference), "options": list(options)})["is_correct"]
 
 
 def summarize_records(records, expected_ids, profile):

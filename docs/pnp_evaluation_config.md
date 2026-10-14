@@ -4,7 +4,7 @@ These are shared evaluator defaults, not measurements from completed runs. All f
 
 Accuracy uses the final submitted answer/program, independent of process reward. Missing or invalid submissions remain in the denominator. References and hidden tests are grading-only.
 
-Total completion budgets count generated tokens across all interaction steps; context limits also account for observations and image tokens. Tensor parallel size defaults to 1 per replica; the selected GPU count determines replica count.
+Total completion budgets count generated tokens across all interaction steps; context limits also account for observations and image tokens. The default node has eight NVIDIA A40 GPUs. Tensor parallel size defaults to 1 per replica; the selected GPU count determines replica count.
 
 ```latex
 % Requires \usepackage{booktabs}
@@ -117,4 +117,4 @@ Precision / Seed & bfloat16 / 42 \\
 
 Frozen dataset identity (version, revision, split, question IDs and file SHA256), checkpoint identity, code hashes, budgets and deployment settings are recorded per run.
 
-HotpotQA uses the prepared validation split aligned with the retrieval evidence sidecar. LiveCodeBench uses release_v6; public tests may be used during interaction, and all public/private tests grade the final submission after generation. MATH-Vision accepts choice letters or option values and uses bounded numeric comparison following MATH-V's two-decimal convention. Unsupported symbolic expressions fail closed; this is not a claim of bit-for-bit equivalence with the upstream latex2sympy checker.
+HotpotQA uses the prepared validation split aligned with the retrieval evidence sidecar. LiveCodeBench uses release_v6; public tests may be used during interaction, and all public/private tests grade the final submission after generation using the original pinned LiveCodeBench checker. MATH-Vision uses the original pinned MATH-V script for answer extraction, choice handling, latex2sympy equivalence, and numeric comparison. Upstream scoring sources remain unchanged.

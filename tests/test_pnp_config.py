@@ -133,6 +133,28 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
     setUp = PnpConfigTest.setUp
     launch = PnpConfigTest.launch
     assert_adaptation = PnpConfigTest.assert_adaptation
+
+    def test_hotpot_a6_reserves_one_of_eight_gpus_for_judge(self):
+        options = self.launch("scripts/hotpotqa/run_a6.sh", CUDA_VISIBLE_DEVICES="")
+        self.assertEqual(options["trainer.n_gpus_per_node"], "7")
+        self.assertEqual(options["trainer.total_training_steps"], "500")
+        self.assertEqual(options["actor_rollout_ref.rollout.agent.default_agent_flow"], "hotpotqa_certificate_agent")
+
+    def test_hotpot_a6_rejects_shared_actor_and_judge_gpu(self):
+        result = subprocess.run(["bash", str(PROJECT_ROOT / "scripts/hotpotqa/run_a6.sh")],
+                                env=dict(self.env, HOTPOTQA_JUDGE_GPU="7"), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be separate", result.stderr)
+        self.assertFalse(self.calls.exists())
+
+    def test_math_smoke_repeats_small_dataset_to_reach_500_updates(self):
+        options = self.launch("scripts/deepscaler/pnp_deepscaler_smoke.sh", CUDA_VISIBLE_DEVICES="")
+        self.assertEqual(options["trainer.n_gpus_per_node"], "8")
+        self.assertEqual(options["trainer.total_training_steps"], "500")
+        self.assertEqual(options["data.train_max_samples"], "4")
+        self.assertEqual(options["data.train_batch_size"], "4")
+        self.assertEqual(options["trainer.total_epochs"], "500")
+
     def test_canonical_training_profiles_have_paper_budget(self):
         for launcher, batch in (("deepscaler/pnp_deepscaler.sh", "20"),
                                 ("hotpotqa/pnp_hotpotqa.sh", "20"),

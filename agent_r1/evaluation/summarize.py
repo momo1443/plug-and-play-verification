@@ -20,9 +20,9 @@ def summarize(entries):
     for row in rows:
         info = row["steps"][-1] if row.get("steps") else row
         if info.get("verification_protocol") != PROTOCOL_VERSION:
-            raise ValueError("Missing/current-protocol audit required; re-evaluate old dumps rather than infer C_d from rewards")
+            raise ValueError(f"Audit requires {PROTOCOL_VERSION}; re-evaluate old dumps rather than infer C_d from rewards")
         checks = info["verification_checks"]
-        consistent = int(bool(info["terminal_eligible"]) and bool(checks) and all(float(v) == 1 for v in checks))
+        consistent = int(bool(checks) and all(float(v) == 1 for v in checks))
         outcome = info.get("acc", info.get("is_correct", info.get("terminal_reward")))
         if outcome not in (0, 1):
             raise ValueError("A binary benchmark outcome is required")

@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Self-contained entrypoint: `bash run_a2.sh` launches A2 with Qwen3.5-4B on the
 # all eight GPUs and the shared first-30k-of-90k contract. Knobs remain overridable, e.g.
-#   HOTPOTQA_TOTAL_TRAINING_STEPS=800 bash run_a2.sh
+#   HOTPOTQA_TOTAL_TRAINING_STEPS=500 bash run_a2.sh
 #   CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash run_a2.sh
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -20,6 +20,22 @@ from recipes.hotpotqa_lr.verifier import artifact_content_sha256
 from pnp_test_utils import load_source, FakeGeneration, call
 
 
+def test_hotpot_a6_uses_warmup_then_prompt_group_random_mixing():
+    def schedule(step, group="train:1", validation=False):
+        return arm_schedule(arm="A6", global_step=step, is_validation=validation,
+                            warmup_steps=50, prompt_group_key=group)
+    for step in (1, 50):
+        assert schedule(step).terminal_weight == 1
+        assert schedule(step).process_weight == 0
+    first, repeated, other = schedule(51), schedule(51), schedule(51, "train:2")
+    assert first == repeated
+    assert first.terminal_weight != other.terminal_weight
+    assert 0 < first.terminal_weight < 1
+    assert first.terminal_weight + first.process_weight == pytest.approx(1)
+    assert schedule(51, validation=True).terminal_weight == 1
+    assert schedule(51, validation=True).process_weight == 0
+
+
 @pytest.mark.parametrize("response,expected", [
     (r"Intermediate result 42; final answer is 7", False),
     (r"Earlier \boxed{42}, corrected final \boxed{7}", False),
@@ -47,8 +63,13 @@ def test_consistency_is_not_normalized_process_reward_and_keeps_old_failures():
     assert consistency_record(short, 1, eligible=True)["verified_success"] == 1
     failed_then_repaired = VerificationResult((VerificationCredit(3, 1, {}),), {"applicable_checks": [0, 1]})
     info = consistency_record(failed_then_repaired, 1, eligible=True)
+    assert info["verification_consistency"] == 0
     assert info["verified_success"] == 0
-    assert consistency_record(short, 1, eligible=False)["verified_success"] == 0
+    incomplete = consistency_record(short, 0, eligible=False)
+    assert incomplete["verification_consistency"] == 1
+    assert incomplete["verified_success"] == 0
+    assert incomplete["terminal_eligible"] is False
+    assert consistency_record(short, 1, eligible=True, extra_checks=[False])["verification_consistency"] == 0
     assert consistency_record(VerificationResult((), {"applicable_checks": []}), 1, eligible=True)["verified_success"] == 0
     with pytest.raises(ValueError, match="applicable_checks"):
         consistency_record(VerificationResult((), {}), 1, eligible=True)
@@ -56,15 +77,25 @@ def test_consistency_is_not_normalized_process_reward_and_keeps_old_failures():
 
 def test_summary_uses_every_trajectory_and_rejects_missing_audits():
     rows = []
-    for checks, correct in (([1], 1), ([0, 1], 1), ([], 0)):
-        info = consistency_record(VerificationResult((), {"applicable_checks": checks}), correct, eligible=True)
+    for checks, correct, eligible in (([1], 1, True), ([0, 1], 1, True), ([], 0, True), ([1], 0, False)):
+        info = consistency_record(VerificationResult((), {"applicable_checks": checks}), correct, eligible=eligible)
         rows.append({"steps": [{"acc": correct, **info}]})
     result = summarize(rows)
-    assert result["trajectory_count"] == 3
-    assert result["accuracy"] == 2/3
-    assert result["M_d"] == result["C_d_mean"] == 1/3
+    assert result["trajectory_count"] == 4
+    assert result["accuracy"] == 1/2
+    assert result["C_d_mean"] == 1/2
+    assert result["M_d"] == 1/4
+    assert result["consistent_count"] == 2
+    assert result["verified_success_count"] == 1
     with pytest.raises(ValueError, match="re-evaluate"):
         summarize([{"process_reward": 1, "acc": 1}])
+    old_audit = {**rows[-1]["steps"][-1], "verification_protocol": "paper-local-consistency-v1",
+                 "verification_consistency": 0}
+    with pytest.raises(ValueError, match="re-evaluate"):
+        summarize([old_audit])
+    stale_consistency = {**rows[-1]["steps"][-1], "verification_consistency": 0}
+    with pytest.raises(ValueError, match="do not match"):
+        summarize([stale_consistency])
 
 
 def test_math_failed_equations_survive_and_incomplete_trace_retains_process_only():

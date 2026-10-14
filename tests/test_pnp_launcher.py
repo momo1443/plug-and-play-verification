@@ -13,22 +13,23 @@ class PnpLauncherTest(unittest.TestCase):
     launch = launcher_harness.PnpConfigTest.launch
     assert_adaptation = launcher_harness.PnpConfigTest.assert_adaptation
 
-    def test_four_gpu_math_profile_matches_current_experiment(self):
+    def test_eight_gpu_math_profile_matches_appendix_c(self):
         options = self.launch(
-            "run_pnp.sh", arguments=("deepscaler", "--model", "Qwen3.5-4B", "--gpus", "0,1,2,3"),
+            "run_pnp.sh", arguments=("deepscaler", "--model", "Qwen3.5-4B"),
+            CUDA_VISIBLE_DEVICES="",
             DEEPSCALER_OUTPUT_DIR=str(self.output), DEEPSCALER_TRAIN_PATH=str(self.root / "train.parquet"),
             DEEPSCALER_VAL_PATH=str(self.root / "validation.parquet"),
         )
         expected = {
-            "trainer.n_gpus_per_node": "4", "trainer.total_training_steps": "500",
+            "trainer.n_gpus_per_node": "8", "trainer.total_training_steps": "500",
             "trainer.resume_mode": "disable", "trainer.test_freq": "-1", "trainer.save_freq": "10",
             "data.train_batch_size": "20", "data.train_max_samples": "10000",
             "data.max_prompt_length": "2048", "data.max_response_length": "4096",
             "actor_rollout_ref.rollout.n": "4", "actor_rollout_ref.rollout.max_model_len": "8192",
             "actor_rollout_ref.rollout.gpu_memory_utilization": "0.30",
-            "actor_rollout_ref.rollout.max_num_seqs": "32", "actor_rollout_ref.rollout.agent.num_workers": "8",
+            "actor_rollout_ref.rollout.max_num_seqs": "32", "actor_rollout_ref.rollout.agent.num_workers": "16",
             "actor_rollout_ref.rollout.agent.max_steps": "5", "actor_rollout_ref.actor.optim.lr": "1e-6",
-            "actor_rollout_ref.actor.kl_loss_coef": "0.001", "ray_kwargs.ray_init.num_cpus": "16",
+            "actor_rollout_ref.actor.kl_loss_coef": "0.001", "ray_kwargs.ray_init.num_cpus": "32",
         }
         for key, value in expected.items():
             with self.subTest(key=key):
@@ -49,6 +50,7 @@ class PnpLauncherTest(unittest.TestCase):
                     self.assert_adaptation(options, rank)
                     self.assertEqual(options["data.train_batch_size"], "20" if rank == 0 else "8")
                     self.assertEqual(options["trainer.total_training_steps"], "500")
+                    self.assertEqual(options["trainer.n_gpus_per_node"], "8")
 
     def test_hotpot_gpu_selection_and_environment_settings_are_forwarded(self):
         options = self.launch("run_pnp.sh", arguments=(

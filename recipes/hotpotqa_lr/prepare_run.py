@@ -166,8 +166,8 @@ def main() -> None:
         raise ValueError("A8-LR main run requires the first 30,000 training rows")
     if args.val_max_samples != 7_405 or validation_rows != 7_405:
         raise ValueError("A8-LR requires all 7,405 validation rows")
-    if args.train_batch_size != 20 or args.total_training_steps != 1_500:
-        raise ValueError("A8-LR requires batch 20 and exactly 1,500 steps")
+    if args.train_batch_size != 20 or args.total_training_steps != 500:
+        raise ValueError("A8-LR requires batch 20 and exactly 500 steps")
     if args.rollout_n != 4 or args.grpo_micro_batch_size not in (1, 2):
         raise ValueError("A8-LR requires rollout n=4 and micro-batch/GPU=1 or 2")
     reward_mode = resolve_reward_mode(args.reward_mode)
@@ -242,7 +242,7 @@ def main() -> None:
         calibration_metadata = {
             "status": "waived_by_user",
             "report": None,
-            "reason": "user_requested_direct_1500_step_launch",
+            "reason": "user_requested_direct_500_step_launch",
         }
     else:
         calibration_report_path = Path(args.calibration_report).resolve()

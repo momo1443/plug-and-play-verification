@@ -1,0 +1,8 @@
+# Isolated CPU dependencies for the pinned, unmodified upstream graders.
+numpy==1.26.4
+sympy==1.12
+antlr4-python3-runtime==4.7.2
+latex2sympy2==1.9.1
+ujson==5.11.0
+tqdm==4.67.1
+fire==0.7.1

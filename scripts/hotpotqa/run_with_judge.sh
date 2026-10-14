@@ -16,7 +16,15 @@ esac
 : "${HOTPOTQA_JUDGE_GPU_MEMORY_UTILIZATION:?HOTPOTQA_JUDGE_GPU_MEMORY_UTILIZATION is required}"
 
 export HOTPOTQA_JUDGE_EXTERNAL=1
-export PYTHON_BIN="${HOTPOTQA_PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+export PYTHON_BIN="${HOTPOTQA_PYTHON_BIN:-${PYTHON_BIN:-$(command -v python)}}"
+
+IFS=',' read -r -a ACTOR_GPUS <<<"${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required}"
+for actor_gpu in "${ACTOR_GPUS[@]}"; do
+    if [[ "$actor_gpu" == "$HOTPOTQA_JUDGE_GPU" ]]; then
+        echo "HOTPOTQA_JUDGE_GPU must be separate from actor CUDA_VISIBLE_DEVICES" >&2
+        exit 2
+    fi
+done
 
 # Config rendering and CPU preflight do not need a live Judge process.
 if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" == "1" || "${HOTPOTQA_PREFLIGHT_ONLY:-0}" == "1" ]]; then

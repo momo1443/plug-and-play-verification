@@ -1,0 +1,27 @@
+{
+  "hotpotqa": {
+    "files_sha256": {
+      "LICENSE.txt": "9c264489d021e5905c0544f75e292c63f78dca56acd2aec395dd36dcc41940c7",
+      "hotpot_evaluate_v1.py": "d35fc91a6db21d791dbdda11daf3856e9359f5701d54e3eefba20d88fecc02c0"
+    },
+    "repository": "https://github.com/hotpotqa/hotpot",
+    "revision": "3635853403a8735609ee997664e1528f4480762a"
+  },
+  "livecodebench": {
+    "files_sha256": {
+      "LICENSE": "104099948b78ebc36f2e951b3a7973b956adfa7d39aaec0d1512f97a2686d15d",
+      "lcb_runner/evaluation/testing_util.py": "b7cb6a8a69807bb868150a61742e25d7bb5328bbe01d514471b6ec43c9fa9ed2"
+    },
+    "repository": "https://github.com/LiveCodeBench/LiveCodeBench",
+    "revision": "28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24"
+  },
+  "mathvision": {
+    "files_sha256": {
+      "LICENSE": "8f6401fb0b1fbfcac17aac8d61e4e1b0d2de9aa190d8aa655fedc5fd783b2ace",
+      "evaluation/evaluate.py": "499b9665932e35e0ac6fe6c423f440b7227a1cffde07f3b7310fe98d53c7e36a",
+      "evaluation/utils.py": "9735268802010d3b5c5fb26b6b39d6684a342e85daf4daa4c20ecbbe6079753d"
+    },
+    "repository": "https://github.com/mathllm/MATH-V",
+    "revision": "a1f5cc3add200c0cd080fad463e500f44ef1fb41"
+  }
+}

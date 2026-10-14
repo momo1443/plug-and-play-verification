@@ -12,12 +12,12 @@ set -euo pipefail
 #   - grpo_micro_batch_size=1
 #   - rollout_n=4
 #   - train_batch_size=20
-#   - total_training_steps=1500
+#   - total_training_steps=500
 #   - save_freq=50
 #   - ref_kl=0.001 (low_var_kl)
 #
 # Self-contained entrypoint: `bash run_a1_6gpu.sh` launches A1 on
-# GPUs 0,1,3,4,5,6 with the shared first-30k-of-90k contract.
+# GPUs 0,1,3,4,5,6 with the shared first-10k training prefix.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../../.." && pwd)"
@@ -38,6 +38,6 @@ export HOTPOTQA_VLLM_ENABLE_SLEEP_MODE=false
 export HOTPOTQA_VLLM_FREE_CACHE_ENGINE=false
 export HOTPOTQA_SAVE_FREQ=50
 
-export RUN_ID="${RUN_ID:-qwen35-4b_a1_${HOTPOTQA_RUN_MODE}_grpo_stepcausal_main30k_n4_1500step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
+export RUN_ID="${RUN_ID:-qwen35-4b_a1_${HOTPOTQA_RUN_MODE}_grpo_stepcausal_main10k_n4_500step_6gpu_vllm025_mlen8192_mseq20_mb1_refkl001_save50_$(date +%Y%m%d-%H%M%S)}"
 
 exec bash "$HERE/../../hotpotqa/pnp_hotpotqa_train.sh"

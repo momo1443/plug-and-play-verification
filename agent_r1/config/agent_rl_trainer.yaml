@@ -12,6 +12,7 @@ hydra:
     - pkg://verl.trainer.config
 
 trainer:
+  total_training_steps: 500
   logger: ["console", "tensorboard"]
   tensorboard_dir: null
   rollout_data_file: null

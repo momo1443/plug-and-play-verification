@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--dataset-name", required=True)
     parser.add_argument("--dataset-revision", required=True)
     parser.add_argument("--dataset-label", required=True)
-    parser.add_argument("--gpus", default="0,1,2,3")
+    parser.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
     args = parser.parse_args()
     dataset_name = args.dataset_name.lower().replace("_", "").replace("-", "")
     if "2025" not in args.dataset_label and not any(name in dataset_name for name in ("aime2025", "aime25")):

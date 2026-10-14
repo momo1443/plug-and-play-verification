@@ -1,16 +1,11 @@
-# Historical records
+# Retained debugging records
 
-`plan/` and `progress/` preserve earlier development records. Paths, hardware
-settings, and experiment claims describe their recorded dates and may no longer
-match the current tree. They are not current launch instructions.
+`progress/2026-08-31.md` and `progress/2026-09-06.md` preserve useful earlier bug
+investigations and runtime failures. Their dated hardware settings describe those
+runs; current experiment defaults are in the [paper contract](../paper-contract.md).
 
-`working-agreement.md` preserves the old server-specific `CLAUDE.md` as historical
-text. It does not define instructions for this repository.
-
-`hotpotqa-legacy.md` preserves the earlier mixed legacy/paper recipe guide.
-Use the [current HotpotQA guide](../../recipes/hotpotqa/README.md) and
+Obsolete HotpotQA/A6 instructions, publication plans and logs, the old server
+working agreement, the README writing draft, and the incomplete DeepMath launcher
+were removed. Their previous contents remain in Git history. Use the
+[current HotpotQA guide](../../recipes/hotpotqa/README.md) and
 [launcher index](../../scripts/README.md) for current entrypoints.
-
-`launchers/run_deepmath.sh` preserves the old DeepMath-103K command as a record.
-Its `recipes/deepmath/reward_fn.py` dependency was absent before cleanup, so it
-is not listed as a runnable experiment.
