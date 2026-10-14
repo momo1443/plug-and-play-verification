@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Model profile for PNP. DeepScaleR uses the local four-GPU training settings.
+# Model profile for PNP on the Appendix C node with eight A40 GPUs.
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PROJECT_DIR/scripts/common/pnp.sh"
 DATASET="${1:?Usage: Qwen3.5-4B.sh DATASET [HYDRA_OVERRIDES...] }"
@@ -11,7 +11,7 @@ export PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 export AGENT_R1_MODEL_SCALE="${AGENT_R1_MODEL_SCALE:-4b}"
 
 if [[ "$DATASET" == deepscaler ]]; then
-    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
     export DEEPSCALER_TRAIN_BATCH_SIZE="${DEEPSCALER_TRAIN_BATCH_SIZE:-20}"
     export DEEPSCALER_ROLLOUT_N="${DEEPSCALER_ROLLOUT_N:-4}"
     export DEEPSCALER_TRAIN_MAX_SAMPLES="${DEEPSCALER_TRAIN_MAX_SAMPLES:-10000}"

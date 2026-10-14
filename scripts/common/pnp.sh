@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # Shared PNP model adaptation, budgets and dataset dispatch.
 
+PNP_DEFAULT_TRAINING_STEPS=500
+
+# Reduced dataset profiles repeat until the requested optimizer step budget.
+pnp_training_epochs() {
+    local samples="$1" batch="$2" steps="$3"
+    if ! [[ "$samples" =~ ^[1-9][0-9]*$ && "$batch" =~ ^[1-9][0-9]*$ && "$steps" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Training samples, batch size, and steps must be positive integers" >&2
+        return 2
+    fi
+    local steps_per_epoch=$((samples / batch))
+    if (( steps_per_epoch == 0 )); then
+        echo "Training samples must cover at least one full batch" >&2
+        return 2
+    fi
+    echo "$(((steps + steps_per_epoch - 1) / steps_per_epoch))"
+}
+
 pnp_model_path() {
     local dataset="$1" model_name="$2"
     local project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -60,7 +77,7 @@ pnp_paper_profile() {
     PAPER_MODEL_SCALE="${AGENT_R1_MODEL_SCALE:-$inferred_scale}"
     case "$PAPER_MODEL_SCALE" in 4b|9b) ;; *) echo "AGENT_R1_MODEL_SCALE must be 4b or 9b" >&2; return 2 ;; esac
     PAPER_TRAIN_SAMPLES=10000
-    PAPER_TRAIN_STEPS=500
+    PAPER_TRAIN_STEPS=$PNP_DEFAULT_TRAINING_STEPS
     PAPER_BATCH_SIZE=20
     [[ "$PAPER_MODEL_SCALE" == 9b ]] && PAPER_BATCH_SIZE=8
     PAPER_PROMPT_LENGTH=8192

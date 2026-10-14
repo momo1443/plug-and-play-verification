@@ -1,0 +1,4 @@
+# Keep pinned official Python sources byte-for-byte, including upstream whitespace.
+third_party/official_graders/hotpotqa/hotpot_evaluate_v1.py -whitespace
+third_party/official_graders/livecodebench/lcb_runner/evaluation/testing_util.py -whitespace
+third_party/official_graders/mathvision/evaluation/*.py -whitespace

@@ -1,4 +1,4 @@
-"""Frozen reward-arm semantics for matched HotpotQA RLVR experiments."""
+"""Legacy raw-completion rewards; paper arms use hotpotqa_a9.reward_sources."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ _TRAINING_REWARD_CONTRACTS = {
 }
 
 def training_reward_contract(arm: RewardArm) -> TrainingRewardContract:
-    """Return the single frozen source of truth for train-time arm semantics."""
+    """Return fixed legacy weights, not the current paper arm schedule."""
 
     return _TRAINING_REWARD_CONTRACTS[arm]
 

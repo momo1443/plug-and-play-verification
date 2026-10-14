@@ -92,16 +92,8 @@ TRAIN_MAX_SAMPLES="${HOTPOTQA_TRAIN_MAX_SAMPLES:-$DEFAULT_TRAIN_MAX_SAMPLES}"
 TRAIN_BATCH_SIZE="${HOTPOTQA_TRAIN_BATCH_SIZE:-$DEFAULT_TRAIN_BATCH_SIZE}"
 ROLLOUT_N="${HOTPOTQA_ROLLOUT_N:-4}"
 GRPO_MICRO_BATCH_SIZE="${HOTPOTQA_GRPO_MICRO_BATCH_SIZE:-2}"
-if [[ -n "${HOTPOTQA_TOTAL_TRAINING_STEPS:-}" ]]; then
-    TOTAL_TRAINING_STEPS="$HOTPOTQA_TOTAL_TRAINING_STEPS"
-elif [[ "$RUN_MODE" == main && "$ARM" != A8_LR* ]]; then
-    TOTAL_TRAINING_STEPS=$PAPER_TRAIN_STEPS
-elif (( TRAIN_MAX_SAMPLES % TRAIN_BATCH_SIZE == 0 )); then
-    TOTAL_TRAINING_STEPS="$((TRAIN_MAX_SAMPLES / TRAIN_BATCH_SIZE))"
-else
-    echo "$RUN_MODE requires HOTPOTQA_TOTAL_TRAINING_STEPS when train samples are not divisible by batch size" >&2
-    exit 2
-fi
+TOTAL_TRAINING_STEPS="${HOTPOTQA_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
+TOTAL_EPOCHS="${HOTPOTQA_TOTAL_EPOCHS:-$(pnp_training_epochs "$TRAIN_MAX_SAMPLES" "$TRAIN_BATCH_SIZE" "$TOTAL_TRAINING_STEPS")}"
 CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
@@ -567,7 +559,7 @@ fi
     trainer.save_freq="$SAVE_FREQ" \
     trainer.max_actor_ckpt_to_keep="$MAX_ACTOR_CKPT_TO_KEEP" \
     trainer.test_freq=-1 \
-    trainer.total_epochs=1 \
+    trainer.total_epochs="$TOTAL_EPOCHS" \
     trainer.total_training_steps="$TOTAL_TRAINING_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" \
     trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \

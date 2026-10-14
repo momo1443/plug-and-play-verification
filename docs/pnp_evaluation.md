@@ -58,7 +58,7 @@ bash run_pnp_eval.sh aime2025 \
   --model models/Qwen3.5-4B \
   --dataset data/corpus/aime2025/test.parquet \
   --dataset-version 2025 --dataset-revision LOCAL_AIME2025_SNAPSHOT \
-  --gpus 0,1,2,3
+  --gpus 0,1,2,3,4,5,6,7
 
 bash run_pnp_eval.sh hotpotqa \
   --model /path/to/exported-hotpotqa-model \
@@ -66,17 +66,17 @@ bash run_pnp_eval.sh hotpotqa \
   --dataset-version distractor --dataset-revision PINNED_HOTPOTQA_SNAPSHOT \
   --corpus-dir /path/to/hotpotqa_corpus \
   --evidence-sidecar /path/to/hotpotqa_evidence_v1.sqlite3 \
-  --embedding-model /path/to/frozen-bge-model --gpus 0,1,2,3
+  --embedding-model /path/to/frozen-bge-model --gpus 0,1,2,3,4,5,6,7
 
 bash run_pnp_eval.sh livecodebench \
   --model /path/to/exported-code-model --dataset /path/to/release_v6 \
   --dataset-version release_v6 --dataset-revision PINNED_LCB_COMMIT \
-  --gpus 0,1,2,3
+  --gpus 0,1,2,3,4,5,6,7
 
 bash run_pnp_eval.sh mathvision \
   --model /path/to/exported-vision-model --dataset /path/to/mathvision/test.parquet \
   --dataset-version full --dataset-revision PINNED_MATHVISION_COMMIT \
-  --gpus 0,1,2,3
+  --gpus 0,1,2,3,4,5,6,7
 ```
 
 AIME2025 requires `--dataset-version 2025` and the full 30-question I + II snapshot
@@ -90,28 +90,41 @@ FAISS and FlagEmbedding. Record any prepared validation subset in its snapshot
 identity. Standard answers and gold supporting facts are excluded from policy
 inputs. Retrieval remains the existing corpus-search interface.
 
+Install the isolated official-grader dependencies before evaluation:
+
+```bash
+bash scripts/evaluation/setup_official_graders.sh
+```
+
+Use `PNP_GRADER_PYTHON` for a custom grader environment. The training environment
+is separate. Original upstream scripts, licenses, commits, and checksums are
+stored in `third_party/official_graders`; the adapters verify their checksums.
+Run manifests record the actual official grader revision and CPU dependency
+versions. The shared evaluation protocol is `pnp-agent-evaluation-v2`.
+
 LiveCodeBench requires a working `bwrap` sandbox; preflight checks a known correct
 program before GPU allocation. Public tests are exposed by the PNP testing tool.
 Hidden tests are supplied only to the final grader after generation. Both stdio
 and functional problems are supported. Final pass@1 requires all public and
-private tests to pass. The repository's frozen local grader is used: its stdio
-comparison strips surrounding whitespace per line, and its functional comparison
-uses the existing runner. This is not a claim of exact parity with every upstream
-LiveCodeBench checker, including numerical tolerance rules.
+private tests to pass. Both stdio and functional grading call the original pinned
+LiveCodeBench `run_test` implementation inside bubblewrap. Its output comparison,
+Decimal handling, tuple conversion, and per-test limits are preserved. Model code
+cannot access the project worktree or retrieval datasets through the sandbox.
 
 MATH-Vision preserves the root image and answer options, and exposes inspection
 and explicit submission tools. Answer checking against the reference is unavailable
 during interaction, including in the legacy ReAct entrypoint. Choice letters or
-corresponding option values are accepted. String and bounded scalar/tuple numeric
-equivalence follow the two-decimal MATH-V convention. Unsupported symbolic
-equivalences fail closed; this local grader is not bit-for-bit identical to the
-upstream latex2sympy checker.
+corresponding option values are accepted by the original pinned MATH-V evaluation
+script. The adapter supplies the selected submission, answer options, and reference
+to that script; its answer extraction, latex2sympy equivalence, and two-decimal
+comparison rules run without local replacements. The legacy ReAct evaluation
+entrypoint and its validation scorer use the same official rules.
 
 ## Deployment and artifacts
 
-The default `--gpus 0,1,2,3 --tensor-parallel-size 1` starts four independent replicas,
+The default `--gpus 0,1,2,3,4,5,6,7 --tensor-parallel-size 1` starts eight independent replicas on the eight-A40 node,
 each evaluating its assigned questions exactly once. `--tensor-parallel-size 2`
-instead starts two replicas, each using two GPUs. The memory fraction defaults to
+instead starts four replicas, each using two GPUs. The memory fraction defaults to
 0.3. Choose available GPUs explicitly when running alongside other experiments.
 
 Each new `logs/pnp_eval_<benchmark>_<timestamp>/` directory contains a frozen
@@ -138,5 +151,8 @@ the [HotpotQA evaluation script](https://github.com/hotpotqa/hotpot/blob/master/
 The benchmark references are the official
 [LiveCodeBench repository](https://github.com/LiveCodeBench/LiveCodeBench) and
 [MATH-V repository](https://github.com/mathllm/MATH-V). Their task metrics remain
-distinct; consistent evaluation here means matched policy interfaces and a fixed
-single-trajectory protocol, with the local grader differences disclosed above.
+distinct; consistent evaluation here means matched policy interfaces, a fixed
+single-trajectory protocol, and original official scoring scripts at pinned
+revisions. AIME compares the independently selected submission with the official
+dataset's integer answer; final-submission selection remains the PNP interaction
+protocol.

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from agent_r1.evaluation.answers import final_answer_record, score_aime
 from agent_r1.evaluation.consistency import consistency_record
+from agent_r1.evaluation.summarize import summarize
 from recipes.deepscaler.prepare_run import build_manifest
 from recipes.deepscaler.prompts import build_math_messages, math_continuation_message
 from recipes.deepscaler.submission import FINAL_ANSWER_PREFIX, generate_prefilled_submission, prefilled_final_record, prefilled_box_end
@@ -209,6 +210,11 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(info["optimizer_process_total"], info["optimizer_process_weight"])
         self.assertEqual(info["termination_reason"], "max_steps")
         self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
+        self.assertEqual(info["verification_consistency"], 1)
+        summary = summarize([{"steps": [info]}])
+        self.assertEqual(summary["C_d_mean"], 1)
+        self.assertEqual(summary["accuracy"], 0)
+        self.assertEqual(summary["M_d"], 0)
 
     async def test_incomplete_without_verified_progress_earns_no_reward(self):
         output, _, _ = await self.run_flow(["Check $2+3=6$."] * 5)
@@ -224,6 +230,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
             info = output.steps[-1].extra_fields["reward_extra_info"]
             self.assertEqual(info["optimizer_process_weight"], 0)
             self.assertEqual(info["terminal_em"], 0)
+            self.assertEqual(info["verification_consistency"], 1)
 
     async def test_corrected_equation_gets_new_credit_without_erasing_failed_history(self):
         output, _, _ = await self.run_flow([

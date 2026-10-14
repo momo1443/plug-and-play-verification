@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from recipes.mathvision.reward_fn import _normal, _prediction
+from agent_r1.evaluation.official import request as official_request
 
 
 TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
@@ -75,7 +75,7 @@ def normalize_row(row: dict[str, Any], index: int) -> dict[str, Any]:
         "prompt": [{"role": "user", "content": question}],
         "images": [{"bytes": decoded_image["bytes"]}],
         "answer": str(row["answer"]),
-        "extra_info": {"question_id": str(row["id"])},
+        "extra_info": {"question_id": str(row["id"]), "options": options},
     }
 
 
@@ -188,16 +188,21 @@ def evaluate_one(
         else:
             final_text = trajectory[-1]["response"] if trajectory else ""
 
-        prediction = _prediction(final_text)
+        grading = official_request("mathvision", {"answer": final_text, "reference": str(ground_truth),
+                                                 "options": row["extra_info"].get("options", [])})
+        prediction = grading["model_answer"]
         return {
             "index": int(row["index"]),
             "question_id": row["extra_info"]["question_id"],
             "ground_truth": ground_truth,
             "prediction": prediction,
-            "correct": prediction == _normal(ground_truth),
+            "correct": grading["is_correct"],
             "num_turns": len(trajectory),
             "trajectory": trajectory,
         }
+    except RuntimeError:
+        # Grader/dependency failures must not become incorrect model answers.
+        raise
     except Exception as error:
         return {
             "index": int(row["index"]),

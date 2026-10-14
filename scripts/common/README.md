@@ -1,5 +1,10 @@
 # Paper launcher configuration
 
+All datasets and experimental arms default to 500 optimizer updates. This also
+applies to extension and pilot/smoke launchers. `pnp.sh` defines the shared step
+default and computes enough epochs for reduced datasets to reach that budget.
+The trainer YAML also defaults to 500 steps for direct Python launches.
+
 The DeepScaleR paper launcher and the multi-turn ToolEnv launcher are different
 experiment protocols. Keep their token allocations separate:
 

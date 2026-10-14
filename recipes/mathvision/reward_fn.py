@@ -1,36 +1,10 @@
-"""A0 exact-answer reward for MATH-Vision validation."""
+"""Official MATH-Vision outcome grading for the legacy validation entrypoint."""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
-
-_BOXED_RE = re.compile(r"\\boxed\s*\{\s*([^{}]+?)\s*\}", re.IGNORECASE)
-_ANSWER_RE = re.compile(
-    r"(?:final\s+answer|answer|option|choice)\s*(?:is|:)?\s*([A-E]|[-+]?\d+(?:\.\d+)?)\b",
-    re.IGNORECASE,
-)
-
-
-def _normal(value: Any) -> str:
-    text = str(value).strip().strip("$ ").replace("\\,", "")
-    return text.casefold()
-
-
-def _prediction(text: str) -> str | None:
-    boxed = _BOXED_RE.findall(text)
-    if boxed:
-        return _normal(boxed[-1])
-    answers = _ANSWER_RE.findall(text)
-    if answers:
-        return _normal(answers[-1])
-    # Permit a bare one-token final response while avoiding matches from long
-    # chain-of-thought text.
-    tail = text.strip().splitlines()[-1].strip(" .:()[]")
-    if re.fullmatch(r"[A-Ea-e]|[-+]?\d+(?:\.\d+)?", tail):
-        return _normal(tail)
-    return None
+from agent_r1.evaluation.pnp_protocol import mathvision_score
 
 
 def compute_score(
@@ -44,4 +18,4 @@ def compute_score(
         return 0.0
     if "<tool_call>" in solution_str or "<tool_response>" in solution_str:
         return 0.0
-    return float(_prediction(solution_str) == _normal(ground_truth))
+    return float(mathvision_score(solution_str, ground_truth, (extra_info or {}).get("options", [])))

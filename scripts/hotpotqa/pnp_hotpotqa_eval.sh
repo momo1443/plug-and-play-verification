@@ -19,7 +19,7 @@ args=(hotpotqa
     --dataset "${HOTPOTQA_VAL_PATH:-$DATA_ROOT/validation.parquet}"
     --dataset-version "${HOTPOTQA_DATASET_VERSION:-distractor}"
     --dataset-revision "${HOTPOTQA_DATASET_REVISION:?Set HOTPOTQA_DATASET_REVISION to the frozen dataset snapshot}"
-    --split validation --gpus "${CUDA_VISIBLE_DEVICES:-0,1,2,3}" --corpus-dir "$CORPUS_ROOT"
+    --split validation --gpus "${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}" --corpus-dir "$CORPUS_ROOT"
     --gpu-memory-utilization "${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.3}")
 [[ -z "${HOTPOTQA_SOURCE_CHECKPOINT:-}" ]] || args+=(--checkpoint "$HOTPOTQA_SOURCE_CHECKPOINT")
 [[ -z "${HOTPOTQA_EVIDENCE_SIDECAR:-}" ]] || args+=(--evidence-sidecar "$HOTPOTQA_EVIDENCE_SIDECAR")

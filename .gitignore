@@ -19,6 +19,7 @@ dist/
 
 # Local environments; do not ignore recipe source directories named env.
 /.venv/
+/.venv-official-graders/
 /venv/
 /env/
 /ENV/

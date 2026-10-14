@@ -157,7 +157,7 @@ def main() -> None:
     expected_rows = {"main": 10_000, "pilot64": 64, "pilot2048": 2048}[args.run_mode]
     scale = os.environ.get("AGENT_R1_MODEL_SCALE", "9b" if model_path.name == "Qwen3.5-9B" else "4b")
     expected_batch = (8 if scale == "9b" else 20) if args.run_mode == "main" else 16
-    expected_steps = 500 if args.run_mode == "main" else expected_rows // expected_batch
+    expected_steps = 500
     if args.train_max_samples != expected_rows or train_rows < args.train_max_samples:
         raise ValueError(f"{args.run_mode} requires the first {expected_rows} available training rows")
     if args.val_max_samples != 7_405 or validation_rows != 7_405:

@@ -5,6 +5,7 @@
 # Note: While the formatter will attempt to format lines such that they remain within the line-length,
 # it isn't a hard upper bound, and formatted lines may exceed the line-length.
 line-length = 120
+extend-exclude = ["third_party/official_graders"]
 
 [tool.ruff.lint]
 isort = {known-first-party = ["agent_r1", "verl"]}

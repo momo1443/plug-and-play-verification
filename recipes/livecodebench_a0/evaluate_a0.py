@@ -10,14 +10,10 @@ import hashlib
 import json
 import pickle
 import shutil
-import subprocess
-import tempfile
 import time
 import zlib
 from pathlib import Path
 from typing import Any
-
-FUNCTIONAL_RUNNER = Path(__file__).with_name("functional_runner.py")
 
 
 SYSTEM_PROMPT = (
@@ -81,191 +77,22 @@ def extract_code(text: str) -> str:
     return "\n".join(lines[fences[-2] + 1 : fences[-1]])
 
 
-def normalize_output(value: str) -> list[str]:
-    return [line.strip() for line in value.strip().splitlines()]
-
-
-def bwrap_command(solution: Path, input_path: Path) -> list[str]:
-    command = [
-        "bwrap",
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-all",
-        "--clearenv",
-        "--setenv",
-        "PATH",
-        "/usr/bin:/bin",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--dir",
-        "/work",
-        "--ro-bind",
-        str(solution),
-        "/work/main.py",
-        "--ro-bind",
-        str(input_path),
-        "/work/input.txt",
-        "--chdir",
-        "/work",
-    ]
-    for root in ("/usr", "/bin", "/lib", "/lib64"):
-        if Path(root).exists():
-            command.extend(["--ro-bind", root, root])
-    command.extend(["/usr/bin/python3", "-I", "/work/main.py"])
-    return command
-
-
-def bwrap_functional_command(
-    solution: Path, tests_path: Path, fn_name: str, timeout_seconds: float
-) -> list[str]:
-    """Run the official call-based protocol inside the existing bubblewrap boundary."""
-    command = [
-        "bwrap",
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-all",
-        "--clearenv",
-        "--setenv",
-        "PATH",
-        "/usr/bin:/bin",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--dir",
-        "/work",
-        "--ro-bind",
-        str(solution),
-        "/work/main.py",
-        "--ro-bind",
-        str(tests_path),
-        "/work/tests.json",
-        "--ro-bind",
-        str(FUNCTIONAL_RUNNER),
-        "/work/functional_runner.py",
-        "--chdir",
-        "/work",
-    ]
-    for root in ("/usr", "/bin", "/lib", "/lib64"):
-        if Path(root).exists():
-            command.extend(["--ro-bind", root, root])
-    command.extend(
-        [
-            "/usr/bin/python3",
-            "-I",
-            "/work/functional_runner.py",
-            "--solution",
-            "/work/main.py",
-            "--tests",
-            "/work/tests.json",
-            "--fn-name",
-            fn_name,
-            "--timeout-seconds",
-            str(timeout_seconds),
-        ]
-    )
-    return command
-
-
 def grade_stdio(code: str, tests: list[dict[str, Any]], timeout_seconds: float) -> dict[str, Any]:
-    if not code:
-        return {"passed": False, "reason": "no_code_block", "passed_cases": 0, "total_cases": len(tests)}
-    with tempfile.TemporaryDirectory(prefix="lcb-a0-") as temporary:
-        root = Path(temporary)
-        solution = root / "solution.py"
-        solution.write_text(code, encoding="utf-8")
-        for index, test in enumerate(tests):
-            input_path = root / f"input-{index}.txt"
-            input_path.write_text(test["input"], encoding="utf-8")
-            try:
-                completed = subprocess.run(
-                    bwrap_command(solution, input_path),
-                    input=test["input"], text=True, capture_output=True,
-                    timeout=timeout_seconds, check=False, env={},
-                )
-            except subprocess.TimeoutExpired:
-                return {"passed": False, "reason": "timeout", "passed_cases": index, "total_cases": len(tests)}
-            if completed.returncode != 0:
-                return {"passed": False, "reason": "runtime_error", "passed_cases": index, "total_cases": len(tests)}
-            if normalize_output(completed.stdout) != normalize_output(test["output"]):
-                return {"passed": False, "reason": "wrong_answer", "passed_cases": index, "total_cases": len(tests)}
-    return {"passed": True, "reason": "accepted", "passed_cases": len(tests), "total_cases": len(tests)}
+    """Delegate to the original official checker inside bubblewrap."""
+    from agent_r1.evaluation.official import grade_code
+
+    return grade_code(code, tests, None, timeout_seconds)
 
 
 def grade_functional(
     code: str, tests: list[dict[str, Any]], fn_name: str | None, timeout_seconds: float
 ) -> dict[str, Any]:
-    """Grade a LeetCode-style Solution method using LiveCodeBench's call protocol."""
-    if not code:
-        return {
-            "passed": False,
-            "reason": "no_code_block",
-            "passed_cases": 0,
-            "total_cases": len(tests),
-        }
+    """Delegate call-based grading to the same unmodified official checker."""
     if not fn_name:
-        return {
-            "passed": False,
-            "reason": "missing_function_name",
-            "passed_cases": 0,
-            "total_cases": len(tests),
-        }
+        return {"passed": False, "reason": "missing_function_name", "passed_cases": 0, "total_cases": len(tests)}
+    from agent_r1.evaluation.official import grade_code
 
-    with tempfile.TemporaryDirectory(prefix="lcb-functional-") as temporary:
-        root = Path(temporary)
-        solution = root / "solution.py"
-        tests_path = root / "tests.json"
-        solution.write_text(code, encoding="utf-8")
-        tests_path.write_text(json.dumps(tests, ensure_ascii=False), encoding="utf-8")
-        try:
-            completed = subprocess.run(
-                bwrap_functional_command(
-                    solution, tests_path, fn_name, timeout_seconds
-                ),
-                capture_output=True,
-                text=True,
-                timeout=(timeout_seconds + 1) * len(tests) + 5,
-                check=False,
-                env={},
-            )
-        except subprocess.TimeoutExpired:
-            return {
-                "passed": False,
-                "reason": "timeout",
-                "passed_cases": 0,
-                "total_cases": len(tests),
-            }
-
-        if completed.returncode != 0:
-            return {
-                "passed": False,
-                "reason": "runtime_error",
-                "passed_cases": 0,
-                "total_cases": len(tests),
-            }
-        try:
-            result = json.loads(completed.stdout)
-        except json.JSONDecodeError:
-            return {
-                "passed": False,
-                "reason": "runtime_error",
-                "passed_cases": 0,
-                "total_cases": len(tests),
-            }
-
-    reason = str(result.get("reason", "runtime_error"))
-    return {
-        "passed": reason == "accepted",
-        "reason": reason,
-        "passed_cases": int(result.get("passed_cases", 0)),
-        "total_cases": len(tests),
-    }
+    return grade_code(code, tests, fn_name, timeout_seconds)
 
 
 def grade_problem(record: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:

@@ -3,13 +3,15 @@
 The paper arms share the certificate flow in `recipes/hotpotqa_a9/`: four turns,
 10,000 selected training rows, and 500 updates. A1 uses outcome reward; A9 uses
 the deterministic verifier; A6 uses a frozen causal process judge without gold
-answers. A2/A3 are explicitly privileged gold-evidence ablations. See the
+answers or gold supporting facts. A6 uses 50 outcome-only warmup updates, then
+a prompt-group-shared random outcome/process mixture. A2/A3 are explicitly
+privileged gold-evidence ablations. See the
 [paper contract](../../docs/paper-contract.md).
 
 This package supplies retrieval, evidence preprocessing, and judge services.
 `recipes/hotpotqa_lr/` retains shared parsing/artifact helpers and the optional
 A8 experiment. The earlier raw-answer loop is retained for legacy configurations;
-its [historical guide](../../docs/archive/hotpotqa-legacy.md) is archived.
+its obsolete mixed legacy/paper guide has been removed.
 
 ## Current entrypoints
 

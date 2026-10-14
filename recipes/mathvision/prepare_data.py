@@ -33,6 +33,7 @@ def build_row(row: pd.Series, root: Path, index: int) -> dict:
         "extra_info": {
             "index": index,
             "question_id": question_id,
+            "options": options,
             "split": "test",
             "level": str(row["level"]),
             "subject": str(row["subject"]),

@@ -18,6 +18,10 @@ CUDA_VISIBLE_DEVICES= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests \
   execute production flows using mocked generation/execution boundaries.
 - `test_pnp_evaluation.py` checks shared budgets, complete denominators, hidden
   reference isolation, separate final grading, and evaluation wrappers.
+- `test_official_graders.py` checks pinned upstream checksums, official answer
+  extraction and equality, Decimal stdio comparison, functional results, and
+  sandbox forwarding. Install `scripts/evaluation/setup_official_graders.sh`
+  before running these tests.
 - `pnp_test_utils.py` loads production definitions while replacing heavy runtime
   imports. It is a shared fixture module, not a test suite.
 - Domain verifier tests preserve regressions for missing submissions, failed

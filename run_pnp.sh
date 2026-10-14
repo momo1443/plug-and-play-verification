@@ -11,9 +11,9 @@ Datasets: deepscaler, hotpotqa, taco, vision_r1
 Models:   Qwen3.5-4B (default), Qwen3.5-9B
 
 Examples:
-  bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
+  bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
   bash run_pnp.sh hotpotqa --model Qwen3.5-9B --gpus 0,1,2,3,4,5,6,7
-  bash run_pnp.sh deepscaler --model-path /path/to/Qwen3.5-4B -- trainer.total_training_steps=10
+  bash run_pnp.sh deepscaler --model-path /path/to/Qwen3.5-4B -- trainer.total_training_steps=500
 
 Uses Python from the active environment unless PYTHON_BIN is set.
 EOF

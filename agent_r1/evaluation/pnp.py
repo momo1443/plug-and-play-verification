@@ -17,6 +17,7 @@ import time
 
 from agent_r1.evaluation.pnp_datasets import dataset_hashes, load_tasks
 from agent_r1.evaluation.pnp_protocol import PROFILES, evaluation_profile, mathvision_score, qa_scores, summarize_records
+from agent_r1.evaluation.official import grader_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,7 +47,7 @@ def parser():
     result.add_argument("--dataset-revision", help="Pinned source commit or local snapshot identifier (file hashes are also recorded)")
     result.add_argument("--split", choices=("test", "validation"), help="HotpotQA: validation; other benchmarks: test")
     result.add_argument("--output", type=Path, help="New run directory; defaults to logs/pnp_eval_<benchmark>_<timestamp>")
-    result.add_argument("--gpus", default="0,1,2,3")
+    result.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
     result.add_argument("--tensor-parallel-size", type=int, default=1)
     result.add_argument("--gpu-memory-utilization", type=float, default=0.3)
     result.add_argument("--total-output-tokens", type=int)
@@ -95,6 +96,7 @@ def preflight(args):
         missing.append("exported model safetensors (FSDP shards must be merged before evaluation)")
     if missing:
         raise RuntimeError("Evaluation prerequisites missing: " + ", ".join(missing))
+    grader_identity(args.benchmark)
     if args.benchmark == "livecodebench":
         from agent_r1.evaluation.pnp_code import grade_submission
         # An installed executable can still be unusable in containers. Detect
@@ -200,7 +202,8 @@ def write_tables(path):
              "Missing or invalid submissions remain in the denominator. References and hidden tests are grading-only.",
              "", "Total completion budgets count generated tokens across all interaction steps; "
              "context limits also account for observations and image tokens. "
-             "Tensor parallel size defaults to 1 per replica; the selected GPU count determines replica count.",
+             "The default node has eight NVIDIA A40 GPUs. Tensor parallel size defaults to 1 per replica; "
+             "the selected GPU count determines replica count.",
              "", chr(96) * 3 + "latex", r"% Requires \usepackage{booktabs}", ""]
     names = {"aime2025": "AIME2025", "hotpotqa": "HotpotQA",
              "livecodebench": "LiveCodeBench", "mathvision": "MATH-Vision"}
@@ -226,10 +229,9 @@ def write_tables(path):
               "checkpoint identity, code hashes, budgets and deployment settings are recorded per run.",
               "", "HotpotQA uses the prepared validation split aligned with the retrieval evidence sidecar. "
               "LiveCodeBench uses release_v6; public tests may be used during interaction, and all public/private "
-              "tests grade the final submission after generation. MATH-Vision accepts choice letters or option "
-              "values and uses bounded numeric comparison following MATH-V's two-decimal convention. "
-              "Unsupported symbolic expressions fail closed; this is not a claim of bit-for-bit equivalence "
-              "with the upstream latex2sympy checker.", ""]
+              "tests grade the final submission after generation using the original pinned LiveCodeBench checker. "
+              "MATH-Vision uses the original pinned MATH-V script for answer extraction, choice handling, "
+              "latex2sympy equivalence, and numeric comparison. Upstream scoring sources remain unchanged.", ""]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -280,7 +282,12 @@ def main(argv=None):
         raise FileExistsError("Choose a new output directory; evaluation results are never overwritten")
     args.output.mkdir(parents=True, exist_ok=True)
     source_paths = ["agent_r1/evaluation/" + name for name in
-                    ("pnp.py", "pnp_protocol.py", "pnp_datasets.py", "pnp_runtime.py", "pnp_code.py", "pnp_math.py")]
+                    ("pnp.py", "pnp_protocol.py", "pnp_datasets.py", "pnp_runtime.py", "pnp_code.py", "pnp_math.py",
+                     "official.py", "official_worker.py")]
+    source_paths.append("third_party/official_graders/manifest.json")
+    official_grader = grader_identity(args.benchmark)
+    source_paths.extend("third_party/official_graders/" + args.benchmark + "/" + relative
+                        for relative in official_grader.get("files_sha256", {}))
     source_paths += ["scripts/deepscaler/pnp_aime.py", "recipes/deepscaler/prompts.py",
                      "recipes/deepscaler/submission.py", "recipes/hotpotqa_a9/agent_flow.py",
                      "recipes/taco_a9/agent_flow.py", "recipes/vision_r1/agent_flow.py"]
@@ -307,6 +314,7 @@ def main(argv=None):
                                "gpu_memory_utilization": args.gpu_memory_utilization},
                 "resources": resources_from_args(args),
                 "package_versions": package_versions,
+                "official_grader": official_grader,
                 "model_file_sha256": {str(path.relative_to(args.model)): next(iter(dataset_hashes(path).values()))
                                       for path in sorted(args.model.glob("*"))
                                       if path.is_file() and path.suffix in {".json", ".safetensors", ".py"}},

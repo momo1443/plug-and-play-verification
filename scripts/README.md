@@ -10,16 +10,17 @@ files, prepared datasets, and each task's services available. See the
 PNP has a common entrypoint at the repository root:
 
 ```bash
-bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3
+bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
 bash run_pnp.sh hotpotqa --model Qwen3.5-9B --gpus 0,1,2,3,4,5,6,7
 ```
 
 Dataset launchers and agent configurations are named `pnp_<dataset>.sh` and
 `pnp_<dataset>.yaml`. Model profiles are `models/Qwen3.5-4B.sh` and
 `models/Qwen3.5-9B.sh`; shared settings are in `common/pnp.sh`.
-The 4B mathematics profile defaults to four GPUs, vLLM memory fraction 0.30,
+The formal training node uses eight NVIDIA A40 GPUs for both model scales.
+The 4B mathematics profile defaults to all eight GPUs, vLLM memory fraction 0.30,
 32 concurrent sequences, checkpointing every 10 updates, and no periodic evaluation.
-Other task profiles retain their existing GPU requirements; TACO requires eight GPUs.
+Frozen-judge comparisons allocate seven actor GPUs and one judge GPU on this node.
 
 | Domain | Outcome-only GRPO | Verifier GRPO |
 | --- | --- | --- |
@@ -74,11 +75,12 @@ separate protocols.
 
 ## Extensions and environment patches
 
-- `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments. The incomplete DeepMath-103K launcher is preserved under `docs/archive/launchers/`; its `recipes/deepmath/` dependency was absent.
+- `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments. The incomplete DeepMath-103K launcher was removed because its recipe dependency was absent.
 - `extensions/hotpotqa_lr/`: A8 local-reasoning training, calibration, validation, and diagnostics.
 - `extensions/hotpotqa/`: old GPU/resume/storage-specific profiles. `run_a9_fixed.sh` still names a historical resume checkpoint; it is not a fresh-run default.
-- `extensions/taco/`: one-step smoke tests and separated actor/rollout profiles.
+- `extensions/taco/`: reduced-data smoke tests and separated actor/rollout profiles.
 - `patches/`: explicit environment patch scripts. Inspect their expected installed source/version before applying; moving them does not apply any patch.
 
-Extensions retain their own budgets and runtime settings. Use the paper table
-above for the matched experiments.
+All training entrypoints default to 500 optimizer updates, including extensions
+and pilot/smoke profiles. Reduced datasets repeat for enough epochs to reach
+this budget. Extensions retain their interaction budgets and runtime settings.
