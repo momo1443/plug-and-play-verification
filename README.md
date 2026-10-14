@@ -1,6 +1,6 @@
 # Plug-and-Play Verifier for Decoupling Process Reward in Stabilizing Long-Horizon Agentic Reasoning
 
-**PNP adds verified process rewards to multi-turn reinforcement learning.** A shared interface connects domain verifiers to GRPO and PPO across mathematics, QA, code, and vision.
+**A plug-and-play verifier framework for stabilizing long-horizon reasoning through explicit verification of intermediate reasoning artifacts.** A shared interface connects domain verifiers to GRPO and PPO across mathematics, QA, code, and vision.
 
 [Results](#results) · [Quick Start](#quick-start) · [Method](#method) · [Evaluation](#evaluation) · [Documentation](#documentation)
 
@@ -10,7 +10,7 @@ Built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.
 
 ## Overview
 
-PNP checks numeric equalities, retrieved evidence, code executions, and image crops. Verified work receives credit at its source step, even when the final answer is incorrect or missing. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
+Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. Verified work receives credit at its source step, even when the final answer is incorrect or missing. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
 
 | Domain | Training dataset | Reported evaluation benchmark |
 | --- | --- | --- |
@@ -40,7 +40,6 @@ Manuscript Tables 1–3 report the following scores (%). `Avg.` is the unweighte
 | GRPO | 43.33 | 63.20 | 56.59 | 83.19 | 61.58 |
 | **Ours (verification)** | **46.67** | **66.67** | **58.48** | **84.80** | **64.16** |
 
-Verification improves average accuracy over outcome-only GRPO by **3.11 percentage points at 4B** and **2.58 at 9B**.
 
 ### Training dynamics
 
@@ -145,7 +144,29 @@ r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t.
 
 Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by its rollouts. Missing submissions receive zero outcome reward while retaining verified process credits. GRPO and PPO consume the composed step rewards; policy loss applies only to generated tokens.
 
-Local consistency `C_d=1` requires at least one applicable check and all applicable checks to pass, independently of final submission. Later corrections do not erase earlier failures. Reward and audit definitions are detailed in the [paper contract](docs/paper-contract.md).
+### Last-Mile Refinement
+
+Trajectories with identical outcome rewards can differ in the validity of their intermediate reasoning artifacts. Process rewards distinguish these trajectories and provide a **last-mile refinement signal**, including when every final answer in a rollout group is correct.
+
+**Differentiate rewards for policy refinement.** Outcome-only GRPO yields zero group-relative advantages in both all-incorrect and all-correct groups. For a fixed prompt and interaction step `t`, consider a group of at least two rollouts with the same outcome reward `E` and a shared weight `0 <= w < 1`. Let the remaining process return and composed return be:
+
+```math
+S_{i,t}=\sum_{u=t}^{T_i}p_{d,u}(x,\tau_i),\qquad R_{i,t}=wE+(1-w)S_{i,t}.
+```
+
+Subtracting the group mean cancels the common outcome term. With process returns collected in the vector `S_t`, the normalized advantage becomes:
+
+```math
+\widehat A_{i,t}=\frac{S_{i,t}-\operatorname{mean}(\mathbf S_t)}{\operatorname{std}(\mathbf S_t)+\epsilon/(1-w)}.
+```
+
+Here, `std` is the sample standard deviation and `epsilon > 0` ensures numerical stability. Differences in remaining process returns therefore yield nonzero advantages within the group, allowing refinement of intermediate artifacts even when outcome-only supervision provides no reward differences.
+
+**Verification-privileged self-consistency.** External verifiers check intermediate artifacts against explicit recorded evidence. Under a fixed evaluation protocol, local consistency `C_d=1` requires at least one applicable check and every applicable check to pass; missing required evidence counts as a failure. This measures consistency within a single trajectory. Majority-vote self-consistency instead selects the most frequent answer across sampled trajectories. `C_d` is recorded independently of the final outcome and submission, and does not directly enter the training reward.
+
+**Verifier-induced self-reflection.** After trajectory generation, verifiers assign process rewards to the source steps of checked artifacts. An earlier failed check keeps `C_d=0` even if the policy later corrects the error, while later artifacts can still earn positive process credits when they pass verification. This step-level supervision can encourage the policy to check and revise intermediate reasoning in future trajectories, potentially reducing error propagation across reasoning steps and tool interactions.
+
+Reward and audit definitions are detailed in the [paper contract](docs/paper-contract.md).
 
 <details>
 <summary><strong>Example: verification on HotpotQA</strong></summary>
