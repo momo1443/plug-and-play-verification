@@ -8,6 +8,8 @@ Built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.
 
 ![Overview of the plug-and-play verifier](assets/images/plug-and-play-verifier.png)
 
+**Overview of the plug-and-play verifier.** *Left:* Artifacts are extracted at each interaction step. *Middle:* A unified interface routes them to domain-specific verifiers, which return verification scores assigned to the source steps. *Right:* These scores are aggregated into process rewards and combined with the outcome reward. *Bottom:* Verifiers connect to RL post-training through the shared interface and can be used independently across agents.
+
 ## Overview
 
 Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. Verified work receives credit at its source step, even when the final answer is incorrect or missing. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
