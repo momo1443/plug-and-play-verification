@@ -146,25 +146,11 @@ Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `
 
 ### Last-Mile Refinement
 
-Trajectories with identical outcome rewards can differ in the validity of their intermediate reasoning artifacts. Process rewards distinguish these trajectories and provide a **last-mile refinement signal**, including when every final answer in a rollout group is correct.
+**Policy refinement.** Outcome-only GRPO yields zero group-relative advantages when all rollouts receive the same outcome reward, including all-correct groups. Differences in verified process returns provide a **last-mile refinement signal** for improving intermediate reasoning artifacts.
 
-**Differentiate rewards for policy refinement.** Outcome-only GRPO yields zero group-relative advantages in both all-incorrect and all-correct groups. For a fixed prompt and interaction step `t`, consider a group of at least two rollouts with the same outcome reward `E` and a shared weight `0 <= w < 1`. Let the remaining process return and composed return be:
+**Verification-privileged self-consistency.** A trajectory is locally consistent (`C_d=1`) only when at least one check applies and every applicable check passes. Missing required evidence counts as a failure. This measures consistency within one trajectory, independently of its final outcome, rather than majority agreement across sampled answers.
 
-```math
-S_{i,t}=\sum_{u=t}^{T_i}p_{d,u}(x,\tau_i),\qquad R_{i,t}=wE+(1-w)S_{i,t}.
-```
-
-Subtracting the group mean cancels the common outcome term. With process returns collected in the vector `S_t`, the normalized advantage becomes:
-
-```math
-\widehat A_{i,t}=\frac{S_{i,t}-\mathrm{mean}(\mathbf S_t)}{\mathrm{std}(\mathbf S_t)+\epsilon/(1-w)}.
-```
-
-Here, `std` is the sample standard deviation and `epsilon > 0` ensures numerical stability. Differences in remaining process returns therefore yield nonzero advantages within the group, allowing refinement of intermediate artifacts even when outcome-only supervision provides no reward differences.
-
-**Verification-privileged self-consistency.** External verifiers check intermediate artifacts against explicit recorded evidence. Under a fixed evaluation protocol, local consistency `C_d=1` requires at least one applicable check and every applicable check to pass; missing required evidence counts as a failure. This measures consistency within a single trajectory. Majority-vote self-consistency instead selects the most frequent answer across sampled trajectories. `C_d` is recorded independently of the final outcome and submission, and does not directly enter the training reward.
-
-**Verifier-induced self-reflection.** After trajectory generation, verifiers assign process rewards to the source steps of checked artifacts. An earlier failed check keeps `C_d=0` even if the policy later corrects the error, while later artifacts can still earn positive process credits when they pass verification. This step-level supervision can encourage the policy to check and revise intermediate reasoning in future trajectories, potentially reducing error propagation across reasoning steps and tool interactions.
+**Verifier-induced self-reflection.** Later corrections do not erase earlier failures, but verified revisions can still earn process credits at their source steps. This supervision can encourage checking and revising intermediate reasoning, potentially reducing error propagation.
 
 Reward and audit definitions are detailed in the [paper contract](docs/paper-contract.md).
 
