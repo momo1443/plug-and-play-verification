@@ -136,6 +136,8 @@ See the [launcher index](scripts/README.md) for comparison commands and the [pap
 
 ![The plug-and-play process verification method](assets/images/method-overview.png)
 
+**The plug-and-play process verification.** *(a)* Identical outcome rewards can mask differences in verification results. *(b)* Local checks are decoupled from policy reasoning and return weighted sums of verification scores assigned to source steps through a common interface. These are aggregated into process rewards and combined with outcome rewards for GRPO or PPO training.
+
 Domain adapters return source-step credits and audit records through [`VerificationResult`](agent_r1/verifier/reward.py). Credits are nonnegative and sum to at most one. Failed applicable checks remain in normalization; inapplicable checks are excluded.
 
 For final outcome reward `E` and process credit `p_t`, the composer assigns:
