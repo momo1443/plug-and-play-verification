@@ -19,19 +19,19 @@ Sampling temperature & 0.0 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Integer accuracy \\
-Total completion budget & 4096 tokens \\
-Per-step generation cap & 820 tokens \\
+Total completion budget & 32768 tokens \\
+Per-step generation cap & 6554 tokens \\
 Maximum interaction steps & 5 \\
 Initial prompt limit & 2048 tokens \\
-Context limit & 8192 tokens \\
+Context limit & 40960 tokens \\
 Inference engine & vLLM \\
 Mode & Offline Python API \\
 Tensor parallel size & 1 per replica \\
 Precision / Seed & bfloat16 / 42 \\
 \bottomrule
 \end{tabular}
-\caption{PNP evaluation configuration for AIME2025.}
-\label{tab:pnp_eval_aime2025}
+\caption{PNP evaluation configuration for AIME2026.}
+\label{tab:pnp_eval_aime2026}
 \end{table}
 \newpage
 

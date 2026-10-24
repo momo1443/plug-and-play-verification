@@ -33,7 +33,7 @@ PNP entrypoints use the following naming convention:
 | Dataset agent configuration | `recipes/<recipe>/pnp_<dataset>.yaml` |
 | Model training profile | `scripts/models/Qwen3.5-4B.sh`, `scripts/models/Qwen3.5-9B.sh` |
 | Math smoke check | `scripts/deepscaler/pnp_deepscaler_smoke.sh` |
-| AIME 2025 agent evaluation | `scripts/deepscaler/pnp_aime.py` |
+| AIME 2026 agent evaluation | `scripts/deepscaler/pnp_aime.py` |
 | Shared benchmark evaluation | `run_pnp_eval.sh` |
 
 ## Current documentation

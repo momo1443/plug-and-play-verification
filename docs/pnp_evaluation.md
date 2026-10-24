@@ -23,7 +23,7 @@ errors abort the evaluation instead of publishing an incomplete accuracy.
 
 | Benchmark | Final metric | Steps | Total generated tokens | Per step | Prompt limit | Context limit |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| AIME2025 | Integer accuracy | 5 | 4096 | 820 | 2048 initial | 8192 |
+| AIME2026 | Integer accuracy | 5 | 32768 | 6554 | 2048 initial | 40960 |
 | HotpotQA validation | Answer EM; F1 auxiliary | 4 | 4096 | 1024 | 8192 each step | 12288 |
 | LiveCodeBench release_v6 | Pass@1 | 5 | 10240 | 2048 | 8192 each step | 12288 |
 | MATH-Vision | Answer accuracy | 3 | 6144 | 2048 | 8192 each step | 12288 |
@@ -54,10 +54,10 @@ snapshot identifiers with the actual sources; these are not claims of completed 
 
 ```bash
 # Add --preflight-only to any command to validate prerequisites without GPUs.
-bash run_pnp_eval.sh aime2025 \
+bash run_pnp_eval.sh aime2026 \
   --model models/Qwen3.5-4B \
-  --dataset data/corpus/aime2025/test.parquet \
-  --dataset-version 2025 --dataset-revision LOCAL_AIME2025_SNAPSHOT \
+  --dataset data/corpus/aime2026/test.parquet \
+  --dataset-version 2026 --dataset-revision LOCAL_AIME2026_SNAPSHOT \
   --gpus 0,1,2,3,4,5,6,7
 
 bash run_pnp_eval.sh hotpotqa \
@@ -79,10 +79,10 @@ bash run_pnp_eval.sh mathvision \
   --gpus 0,1,2,3,4,5,6,7
 ```
 
-AIME2025 requires `--dataset-version 2025` and the full 30-question I + II snapshot
+AIME2026 requires `--dataset-version 2026` and the full 30-question I + II snapshot
 before optional subset selection. It accepts raw `problem` / `answer` rows or
 prepared `prompt` / `reward_model.ground_truth` rows, with references kept out of
-policy inputs. Supply an AIME2025 snapshot and record its pinned revision.
+policy inputs. Supply an AIME2026 snapshot and record its pinned revision.
 
 LiveCodeBench requires the full 1055-question release_v6 snapshot. HotpotQA uses
 prepared validation rows aligned with the retrieval evidence sidecar and requires

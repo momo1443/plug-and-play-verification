@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Standalone AIME 2025 evaluation with pure vLLM inference — no training framework needed.
+"""Standalone AIME 2026 evaluation with pure vLLM inference — no training framework needed.
 
 Runs the same bounded reasoning-continuation protocol as math training. Only
 the submitted final response is scored; the reference is never model feedback.
 
 Usage:
-    CUDA_VISIBLE_DEVICES=2 python eval_aime2025.py
+    CUDA_VISIBLE_DEVICES=2 python eval_aime2026.py
 
-Computes exact-match accuracy on AIME 2025 (I+II, 30 problems) using greedy decoding.
+Computes exact-match accuracy on AIME 2026 (I+II, 30 problems) using greedy decoding.
 """
 
 import json
@@ -112,22 +112,21 @@ def main():
     workspace_dir = Path(os.environ.get("WORKSPACE_DIR", str(project_dir.parent)))
     model_path = os.environ.get("MODEL_PATH", str(workspace_dir / "models/Qwen3.5-4B"))
     data_dir = os.environ.get(
-        "AIME2025_DATA_DIR",
-        str(project_dir / "data/corpus/aime2025"),
+        "AIME2026_DATA_DIR",
+        str(project_dir / "data/corpus/aime2026"),
     )
     output_dir = os.environ.get(
         "OUTPUT_DIR",
-        str(workspace_dir / "logs" / f"{Path(model_path).name}_a0_aime2025_v3"),
+        str(workspace_dir / "logs" / f"{Path(model_path).name}_a0_aime2026_v3"),
     )
     max_samples = int(os.environ.get("MAX_SAMPLES", "-1"))  # -1 = all
     tensor_parallel_size = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
-    scale = os.environ.get("AGENT_R1_MODEL_SCALE", "9b" if Path(model_path).name == "Qwen3.5-9B" else "4b")
-    max_tokens = int(os.environ.get("DEEPSCALER_MAX_RESPONSE_LENGTH",
-        os.environ.get("MAX_RESPONSE_LENGTH", "5120" if scale == "9b" else "4096")))
+    # AIME2026 evaluation budget: 32768 total tokens over 5 turns (6554 per turn),
+    # independent of the DeepScaleR training response length.
+    max_tokens = int(os.environ.get("AIME2026_MAX_RESPONSE_LENGTH", "32768"))
     max_steps = int(os.environ.get("DEEPSCALER_MAX_STEPS", "5"))
     final_turn_submission = os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true"
-    max_model_length = int(os.environ.get("DEEPSCALER_MAX_MODEL_LENGTH",
-        str(max(8192, 2048 + max_tokens + 1024))))
+    max_model_length = int(os.environ.get("AIME2026_MAX_MODEL_LENGTH", "40960"))
 
     # Load dataset from processed parquet
     import pandas as pd
@@ -144,7 +143,7 @@ def main():
         sources = sources[:max_samples]
 
     model_name = Path(model_path).name
-    print(f"=== AIME 2025 A0 Baseline Evaluation (v3 — final answer only) ===")
+    print(f"=== AIME 2026 A0 Baseline Evaluation (v3 — final answer only) ===")
     print(f"Model:    {model_name}")
     print(f"Samples:  {len(questions)}")
     print(f"Output:   {output_dir}")
@@ -231,7 +230,7 @@ def main():
         "verification_timing": "after_rollout",
         "model": model_name,
         "model_path": model_path,
-        "dataset": "AIME2025",
+        "dataset": "AIME2026",
         "arm": "A0",
         "extraction_version": AIME_EXTRACTION_VERSION,
         "total": total,

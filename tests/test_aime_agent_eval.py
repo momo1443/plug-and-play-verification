@@ -43,16 +43,16 @@ class ScriptedEngine:
 
 
 class AimeAgentEvalTest(unittest.TestCase):
-    def test_compatibility_wrapper_forwards_aime2025_and_frozen_revision(self):
+    def test_compatibility_wrapper_forwards_aime2026_and_frozen_revision(self):
         command = ["pnp_aime.py", "--model", "/model", "--checkpoint", "/checkpoint",
-                   "--dataset", "/aime2025/test.parquet", "--output", "/run",
-                   "--dataset-name", "MathArena/aime_2025", "--dataset-label", "I + II",
+                   "--dataset", "/aime2026/test.parquet", "--output", "/run",
+                   "--dataset-name", "MathArena/aime_2026", "--dataset-label", "I + II",
                    "--dataset-revision", "frozen-snapshot", "--gpus", "0"]
         with patch("sys.argv", command), patch("agent_r1.evaluation.pnp.main") as evaluate:
             module.main()
         forwarded = evaluate.call_args.args[0]
-        self.assertEqual(forwarded[0], "aime2025")
-        self.assertEqual(forwarded[forwarded.index("--dataset-version") + 1], "2025")
+        self.assertEqual(forwarded[0], "aime2026")
+        self.assertEqual(forwarded[forwarded.index("--dataset-version") + 1], "2026")
         self.assertEqual(forwarded[forwarded.index("--dataset-revision") + 1], "frozen-snapshot")
         self.assertEqual(forwarded[forwarded.index("--gpus") + 1], "0")
 

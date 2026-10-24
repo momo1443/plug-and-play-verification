@@ -33,7 +33,7 @@ CODE_PATHS = (
     "run_pnp.sh",
     "scripts/models/Qwen3.5-4B.sh",
     "scripts/models/Qwen3.5-9B.sh",
-    "scripts/deepscaler/eval_aime2025.py",
+    "scripts/deepscaler/eval_aime2026.py",
     "scripts/deepscaler/pnp_aime.py",
     "scripts/deepscaler/pnp_deepscaler_smoke.sh",
     "recipes/deepscaler/reward_fn.py",

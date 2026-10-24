@@ -313,7 +313,7 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
 
 class MathEvaluationTest(unittest.TestCase):
     def setUp(self):
-        self.module = load_source("scripts/deepscaler/eval_aime2025.py",
+        self.module = load_source("scripts/deepscaler/eval_aime2026.py",
             final_answer_record=final_answer_record, build_math_messages=build_math_messages,
             math_continuation_message=math_continuation_message, AIME_EXTRACTION_VERSION="test",
             FINAL_ANSWER_PREFIX=FINAL_ANSWER_PREFIX, prefilled_final_record=prefilled_final_record,
