@@ -14,12 +14,14 @@ Built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.
 
 Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. Verified work receives credit at its source step, even when the final answer is incorrect or missing. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
 
-| Domain | Training dataset | Reported evaluation benchmark |
+| Domain | Training dataset | Evaluation benchmark |
 | --- | --- | --- |
-| Mathematics | DeepScaleR-Preview-Dataset | AIME 2025 |
+| Mathematics | DeepScaleR-Preview-Dataset | AIME 2026 |
 | Multi-hop QA | HotpotQA | HotpotQA validation |
 | Code | TACO | LiveCodeBench |
 | Vision | Vision-R1-RL | MATH-Vision |
+
+This local checkout uses AIME 2026 for mathematics evaluation. The manuscript results below remain the original AIME 2025 results; AIME 2026 has not been evaluated in this checkout.
 
 ## Results
 
@@ -184,11 +186,11 @@ Install the isolated grader environment, then check evaluation prerequisites:
 
 ```bash
 bash scripts/evaluation/setup_official_graders.sh
-bash run_pnp_eval.sh aime2025 \
+bash run_pnp_eval.sh aime2026 \
   --model /path/to/exported-checkpoint \
-  --dataset /path/to/aime2025/test.parquet \
-  --dataset-version 2025 \
-  --dataset-revision LOCAL_AIME2025_SNAPSHOT \
+  --dataset /path/to/aime2026/test.parquet \
+  --dataset-version 2026 \
+  --dataset-revision LOCAL_AIME2026_SNAPSHOT \
   --preflight-only
 ```
 

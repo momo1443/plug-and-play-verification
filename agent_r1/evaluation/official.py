@@ -89,7 +89,7 @@ def close_workers():
 
 @lru_cache
 def grader_identity(benchmark):
-    if benchmark == "aime2025":
+    if benchmark == "aime2026":
         return {"metric": "exact_integer_equality", "reference": "official dataset integer answer"}
     identity = json.loads((VENDOR / "manifest.json").read_text())[benchmark]
     if benchmark == "livecodebench":

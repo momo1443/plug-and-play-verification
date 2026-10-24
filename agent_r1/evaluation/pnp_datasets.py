@@ -74,10 +74,10 @@ def _image(value, root):
 
 def load_tasks(benchmark, path, *, split, version, max_problems=None, load_images=True, task_slice=None):
     rows = raw_rows(path)
-    if benchmark not in {"aime2025", "hotpotqa", "livecodebench", "mathvision"}:
+    if benchmark not in {"aime2026", "hotpotqa", "livecodebench", "mathvision"}:
         raise ValueError("Unknown evaluation benchmark")
-    if benchmark == "aime2025" and (version != "2025" or len(rows) != 30):
-        raise ValueError("AIME2025 requires version 2025 and all 30 questions before optional smoke-test selection")
+    if benchmark == "aime2026" and (version != "2026" or len(rows) != 30):
+        raise ValueError("AIME2026 requires version 2026 and all 30 questions before optional smoke-test selection")
     if benchmark == "livecodebench":
         if version != "release_v6" or len(rows) != 1055:
             raise ValueError("LiveCodeBench adapter requires frozen release_v6 (1055 questions)")
@@ -85,7 +85,7 @@ def load_tasks(benchmark, path, *, split, version, max_problems=None, load_image
     # Duplicates outside a smoke test must not turn into an apparently valid run.
     def question_id(index, row):
         extra = row.get("extra_info") or {}
-        if benchmark == "aime2025":
+        if benchmark == "aime2026":
             return str(row.get("problem_idx", row.get("id", extra.get("question_id", index))))
         if benchmark == "hotpotqa":
             return str(extra["question_id"])
@@ -106,20 +106,20 @@ def load_tasks(benchmark, path, *, split, version, max_problems=None, load_image
         selection = selection[task_slice]
     for index, row in selection:
         extra = row.get("extra_info") or {}
-        if benchmark == "aime2025":
+        if benchmark == "aime2026":
             from agent_r1.evaluation.answers import aime_integer
             question = row.get("problem")
             if question is None:
                 prompt = row.get("prompt")
                 if prompt is None:
-                    raise ValueError("AIME2025 question is missing")
+                    raise ValueError("AIME2026 question is missing")
                 messages = _list(prompt)
                 user_contents = [message.get("content") for message in messages if message.get("role") == "user"]
                 if len(user_contents) != 1:
-                    raise ValueError("Prepared AIME2025 rows require exactly one user question")
+                    raise ValueError("Prepared AIME2026 rows require exactly one user question")
                 question = user_contents[0]
             if not isinstance(question, str) or not question.strip():
-                raise ValueError("AIME2025 question is missing")
+                raise ValueError("AIME2026 question is missing")
             reference = row.get("answer")
             if reference is None:
                 reference = (row.get("reward_model") or {}).get("ground_truth")
