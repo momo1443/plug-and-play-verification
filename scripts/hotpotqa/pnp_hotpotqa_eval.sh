@@ -6,10 +6,10 @@ if (( $# != 0 )); then
     echo "Configure this wrapper with environment variables, or use run_pnp_eval.sh hotpotqa" >&2
     exit 2
 fi
-[[ "${HOTPOTQA_VAL_N:-1}" == 1 && "${HOTPOTQA_VAL_TEMPERATURE:-0}" =~ ^0([.]0+)?$ &&
+[[ "${HOTPOTQA_VAL_N:-1}" == 1 && "${HOTPOTQA_VAL_TEMPERATURE:-0.6}" =~ ^0[.]60*$ &&
    "${HOTPOTQA_VAL_TOP_P:-1}" =~ ^1([.]0+)?$ && "${HOTPOTQA_VAL_TOP_K:--1}" == -1 &&
-   "${HOTPOTQA_VAL_DO_SAMPLE:-false}" =~ ^([Ff][Aa][Ll][Ss][Ee]|0)$ ]] || {
-    echo "PNP main evaluation requires n=1, temperature=0, top-p=1, top-k=-1 and do_sample=false" >&2
+   "${HOTPOTQA_VAL_DO_SAMPLE:-true}" =~ ^([Tt][Rr][Uu][Ee]|1)$ ]] || {
+    echo "PNP main evaluation requires n=1, temperature=0.6, top-p=1, top-k=-1 and do_sample=true" >&2
     exit 2
 }
 DATA_ROOT="${HOTPOTQA_DATA_ROOT:-$PROJECT_DIR/data/corpus/hotpotqa}"

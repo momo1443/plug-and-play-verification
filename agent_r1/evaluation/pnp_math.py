@@ -31,7 +31,7 @@ def selected_aime_integer(answer):
 
 def generate_trajectories(engine, tokenizer, sampling_factory, problems, *, max_steps=5,
                           total_tokens=4096, context_limit=8192, initial_limit=2048,
-                          per_step_tokens=None):
+                          per_step_tokens=None, temperature=0.0):
     """Match the training continuation protocol without rewards or gold feedback."""
     states = []
     if min(max_steps, total_tokens, context_limit, initial_limit) < 1:
@@ -81,7 +81,7 @@ def generate_trajectories(engine, tokenizer, sampling_factory, problems, *, max_
                     cap_groups.setdefault(cap, []).append((index, prompt_ids))
                 next_pending = []
                 for cap, batch in cap_groups.items():
-                    params = sampling_factory(temperature=0.0, top_p=1.0, top_k=-1,
+                    params = sampling_factory(temperature=temperature, top_p=1.0, top_k=-1,
                                               n=1, max_tokens=cap)
                     inputs = [{"prompt_token_ids": prompt_ids + partial[index]["ids"]}
                               for index, prompt_ids in batch]
