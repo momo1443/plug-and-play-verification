@@ -23,7 +23,7 @@ Our framework checks numeric equalities, retrieved evidence, code executions, an
 
 ## Results
 
-Scores are percentages. The Qwen3.5-4B table includes updated AIME 2026 results; the Qwen3.5-9B table retains the previously reported AIME 2025 results. `Avg.` is the unweighted mean across the four benchmarks in each table. AIME evaluation uses at most five policy generations.
+Scores are percentages. Both the Qwen3.5-4B and Qwen3.5-9B tables include updated AIME 2026 results. `Avg.` is the unweighted mean across the four benchmarks in each table. AIME evaluation uses at most five policy generations.
 
 ### Qwen3.5-4B
 
@@ -36,11 +36,11 @@ Scores are percentages. The Qwen3.5-4B table includes updated AIME 2026 results;
 
 ### Qwen3.5-9B
 
-| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 36.67 | 52.56 | 49.00 | 79.47 | 54.43 |
-| GRPO | 43.33 | 63.20 | 56.59 | 83.19 | 61.58 |
-| **Ours (verification)** | **46.67** | **66.67** | **58.48** | **84.80** | **64.16** |
+| ReAct | 83.33 | 52.56 | 49.00 | 79.47 | 66.09 |
+| GRPO | 90.00 | 63.20 | 56.59 | 83.19 | 73.25 |
+| **Ours (plug-and-play verifier)** | **93.33** | **66.67** | **58.48** | **84.80** | **75.82** |
 
 
 ### Training dynamics
