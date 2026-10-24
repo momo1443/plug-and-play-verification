@@ -15,7 +15,7 @@ Total completion budgets count generated tokens across all interaction steps; co
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Sampling temperature & 0.0 \\
+Sampling temperature & 0.6 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Integer accuracy \\
@@ -41,7 +41,7 @@ Precision / Seed & bfloat16 / 42 \\
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Sampling temperature & 0.0 \\
+Sampling temperature & 0.6 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Answer EM (F1 auxiliary) \\
@@ -67,7 +67,7 @@ Precision / Seed & bfloat16 / 42 \\
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Sampling temperature & 0.0 \\
+Sampling temperature & 0.6 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Pass@1 \\
@@ -93,7 +93,7 @@ Precision / Seed & bfloat16 / 42 \\
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Sampling temperature & 0.0 \\
+Sampling temperature & 0.6 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Answer accuracy \\

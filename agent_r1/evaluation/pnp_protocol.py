@@ -17,7 +17,7 @@ class EvaluationProfile:
     prompt_limit: int
     context_limit: int
     metric: str
-    temperature: float = 0.0
+    temperature: float = 0.6
     top_p: float = 1.0
     top_k: int = -1
     trajectories_per_problem: int = 1
@@ -32,8 +32,8 @@ class EvaluationProfile:
             raise ValueError("Evaluation budgets must be positive")
         if self.prompt_limit >= self.context_limit:
             raise ValueError("Context limit must leave room after the prompt limit")
-        if (self.temperature, self.top_p, self.top_k, self.trajectories_per_problem) != (0.0, 1.0, -1, 1):
-            raise ValueError("Main evaluation requires greedy decoding and one trajectory per problem")
+        if self.temperature < 0 or (self.top_p, self.top_k, self.trajectories_per_problem) != (1.0, -1, 1):
+            raise ValueError("Main evaluation requires top_p=1, top_k=-1 and one trajectory per problem")
 
     def sampling(self):
         return {"temperature": self.temperature, "top_p": self.top_p,

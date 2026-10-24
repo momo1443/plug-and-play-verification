@@ -8,8 +8,8 @@ a trainer, launch Ray, or modify training runs. The generated
 
 ## Main protocol
 
-Every selected question receives one complete agent trajectory with greedy
-decoding (`temperature=0`, `top_p=1`, `top_k=-1`, `n=1`), bfloat16, and seed 42.
+Every selected question receives one complete agent trajectory sampled at
+`temperature=0.6` (`top_p=1`, `top_k=-1`, `n=1`), bfloat16, and seed 42.
 The agent retains its task's PNP prompts, tools, immutable artifacts, and submission
 protocol. Code and vision evaluation use the corresponding PNP flows rather than
 their historical A0 evaluators. Mathematics uses the training flow's bounded

@@ -129,7 +129,7 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
         engine, tokenizer, sampling_factory, [task.actor_inputs["problem"] for task in tasks],
         max_steps=profile.max_steps, total_tokens=profile.total_output_tokens,
         initial_limit=profile.prompt_limit, context_limit=profile.context_limit,
-        per_step_tokens=profile.per_step_tokens)
+        per_step_tokens=profile.per_step_tokens, temperature=profile.temperature)
     records = []
     for task, state in zip(tasks, states, strict=True):
         integer = selected_aime_integer(state["selected_answer"])
@@ -212,7 +212,7 @@ def write_tables(path):
     for benchmark, profile in PROFILES.items():
         lines += [r"\begin{table}[!ht]", r"\centering", r"\begin{tabular}{@{}ll@{}}",
                   r"\toprule", r"\textbf{Parameter} & \textbf{Value} \\", r"\midrule"]
-        rows = [("Sampling temperature", "0.0"), ("Top-$p$ / Top-$k$", "1.0 / -1"),
+        rows = [("Sampling temperature", str(profile.temperature)), ("Top-$p$ / Top-$k$", "1.0 / -1"),
                 ("Trajectories per problem $n$", "1"), ("Evaluation metric", metrics[benchmark]),
                 ("Total completion budget", f"{profile.total_output_tokens} tokens"),
                 ("Per-step generation cap", f"{profile.per_step_tokens} tokens"),

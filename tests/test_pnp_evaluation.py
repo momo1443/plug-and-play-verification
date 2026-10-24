@@ -34,9 +34,13 @@ class PnpEvaluationTest(unittest.TestCase):
         self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 3])
         for profile in PROFILES.values():
             self.assertEqual(profile.sampling()["n"], 1)
-            self.assertEqual((profile.temperature, profile.top_p, profile.top_k), (0.0, 1.0, -1))
+            self.assertEqual((profile.top_p, profile.top_k), (1.0, -1))
             with self.assertRaises(ValueError):
-                replace(profile, temperature=0.7)
+                replace(profile, top_p=0.95)
+            with self.assertRaises(ValueError):
+                replace(profile, temperature=-0.1)
+        self.assertEqual({name: p.temperature for name, p in PROFILES.items()},
+                         {"aime2026": 0.6, "hotpotqa": 0.6, "livecodebench": 0.6, "mathvision": 0.6})
         self.assertEqual(PROFILES["mathvision"].total_output_tokens, 6144)
         aime = PROFILES["aime2026"]
         self.assertEqual((aime.total_output_tokens, aime.per_step_tokens, aime.context_limit),
@@ -124,7 +128,12 @@ class PnpEvaluationTest(unittest.TestCase):
     def test_math_uses_final_submission_and_keeps_unsubmitted_verified_process(self):
         task = EvaluationTask("q1", {"problem": "Compute 1+1."}, {"answer": "2"})
         engine = ScriptedEngine(["1+1=2."] * 4 + ["2}"])
-        record = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])[0]
+        sampled = []
+        def sampling(**params):
+            sampled.append(params)
+            return SimpleNamespace(**params)
+        record = math_records(engine, CharacterTokenizer(), sampling, [task], PROFILES["aime2026"])[0]
+        self.assertEqual({params["temperature"] for params in sampled}, {0.6})
         self.assertTrue(record["is_correct"])
         self.assertEqual(record["predicted_integer"], 2)
         record = math_records(ScriptedEngine(["1+1=2."] * 5), CharacterTokenizer(),
@@ -255,8 +264,8 @@ class PnpEvaluationTest(unittest.TestCase):
             stub.chmod(0o755)
             env = {**os.environ, "PYTHON_BIN": str(stub), "PNP_CAPTURE": str(captured),
                    "HOTPOTQA_MODEL_PATH": "/model", "HOTPOTQA_DATASET_REVISION": "frozen-snapshot",
-                   "HOTPOTQA_VAL_TEMPERATURE": "0.0", "HOTPOTQA_VAL_TOP_P": "1.0",
-                   "HOTPOTQA_VAL_DO_SAMPLE": "False", "CUDA_VISIBLE_DEVICES": "0,1,2,3"}
+                   "HOTPOTQA_VAL_TEMPERATURE": "0.6", "HOTPOTQA_VAL_TOP_P": "1.0",
+                   "HOTPOTQA_VAL_DO_SAMPLE": "True", "CUDA_VISIBLE_DEVICES": "0,1,2,3"}
             result = subprocess.run(["bash", str(root / "scripts/hotpotqa/pnp_hotpotqa_eval.sh")],
                                     env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
