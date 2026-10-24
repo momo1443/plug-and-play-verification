@@ -49,7 +49,7 @@ class EvaluationProfile:
 
 
 PROFILES = {
-    "aime2026": EvaluationProfile("aime2026", 5, 32768, 6554, 2048, 40960, "integer_accuracy"),
+    "aime2026": EvaluationProfile("aime2026", 5, 10240, 2048, 2048, 13312, "integer_accuracy"),
     "hotpotqa": EvaluationProfile("hotpotqa", 4, 4096, 1024, 8192, 12288, "answer_em"),
     "livecodebench": EvaluationProfile("livecodebench", 5, 10240, 2048, 8192, 12288, "pass_at_1"),
     "mathvision": EvaluationProfile("mathvision", 3, 6144, 2048, 8192, 12288, "answer_accuracy"),

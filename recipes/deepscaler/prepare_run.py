@@ -224,7 +224,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--rollout-n", type=int, required=True)
     parser.add_argument("--max-prompt-length", type=int, default=2048)
-    parser.add_argument("--max-response-length", type=int, default=4096)
+    parser.add_argument("--max-response-length", type=int, default=10240)
     parser.add_argument("--max-agent-steps", type=int, default=5)
     parser.add_argument("--rollout-prompt-length", type=int)
     parser.add_argument("--total-training-steps", type=int, required=True)

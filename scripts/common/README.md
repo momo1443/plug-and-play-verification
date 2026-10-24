@@ -10,7 +10,7 @@ experiment protocols. Keep their token allocations separate:
 
 | Entry point | Profile | Prompt tokens | Response tokens |
 | --- | --- | ---: | ---: |
-| `scripts/deepscaler/pnp_deepscaler.sh` | `deepscaler_paper` | 2048 initial; 8192 history | 4096 (4B) / 5120 (9B) total per trajectory |
+| `scripts/deepscaler/pnp_deepscaler.sh` | `deepscaler_paper` | 2048 initial; 13312 history | 10240 total per trajectory (2048 per turn) |
 | `scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` | `deepscaler_toolenv` | 4096 | 2048 per interaction step |
 
 The main math flow defaults to `DEEPSCALER_MAX_STEPS=5`, matching the reported

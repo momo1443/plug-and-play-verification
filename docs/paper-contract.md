@@ -16,7 +16,7 @@ GPU on the same eight-GPU node.
 
 | Domain | 4B batch | 9B batch | Prompt tokens | Completion tokens | Policy steps |
 |---|---:|---:|---:|---:|---:|
-| DeepScaleR | 20 | 8 | 2048 initial; 8192 history | 4096 (4B), 5120 (9B), total per trajectory | 5 |
+| DeepScaleR | 20 | 8 | 2048 initial; 13312 history | 10240 total per trajectory (2048 per turn) | 5 |
 | HotpotQA | 20 | 8 | 8192 | 1024 | 4 |
 | TACO | 20 | 8 | 8192 | 2048 | 5 |
 | Vision-R1 | 20 | 8 | 8192 | 2048 | 3 |

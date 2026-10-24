@@ -121,12 +121,12 @@ def main():
     )
     max_samples = int(os.environ.get("MAX_SAMPLES", "-1"))  # -1 = all
     tensor_parallel_size = int(os.environ.get("TENSOR_PARALLEL_SIZE", "1"))
-    # AIME2026 evaluation budget: 32768 total tokens over 5 turns (6554 per turn),
-    # independent of the DeepScaleR training response length.
-    max_tokens = int(os.environ.get("AIME2026_MAX_RESPONSE_LENGTH", "32768"))
+    # AIME2026 evaluation budget matches DeepScaleR training: 10240 total tokens
+    # over 5 turns (2048 per turn), 13312 context.
+    max_tokens = int(os.environ.get("AIME2026_MAX_RESPONSE_LENGTH", "10240"))
     max_steps = int(os.environ.get("DEEPSCALER_MAX_STEPS", "5"))
     final_turn_submission = os.environ.get("DEEPSCALER_FINAL_TURN_SUBMISSION", "True").lower() == "true"
-    max_model_length = int(os.environ.get("AIME2026_MAX_MODEL_LENGTH", "40960"))
+    max_model_length = int(os.environ.get("AIME2026_MAX_MODEL_LENGTH", "13312"))
 
     # Load dataset from processed parquet
     import pandas as pd

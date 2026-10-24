@@ -85,8 +85,7 @@ pnp_paper_profile() {
     case "$domain" in
         deepscaler)
             PAPER_PROMPT_LENGTH=2048
-            PAPER_RESPONSE_LENGTH=4096
-            [[ "$PAPER_MODEL_SCALE" == 9b ]] && PAPER_RESPONSE_LENGTH=5120
+            PAPER_RESPONSE_LENGTH=10240
             PAPER_MAX_STEPS=5 ;;
         hotpotqa)
             PAPER_RESPONSE_LENGTH=1024

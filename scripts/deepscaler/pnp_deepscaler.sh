@@ -3,7 +3,7 @@ set -euo pipefail
 
 # DeepScaleR GRPO with bounded reasoning turns and retrospective verification.
 # DEEPSCALER_MAX_STEPS defaults to 5; set 1 for the previous single-turn protocol.
-# Initial input: 2048 tokens; total generated tokens: 4096 (4B) / 5120 (9B).
+# Initial input: 2048 tokens; total generated tokens: 10240 (5 turns x 2048), 4B and 9B.
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
 #   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # 8-GPU configuration with Qwen3.5-4B:
 #   - vllm_gpu_memory_utilization=0.25
-#   - max_model_len=8192
+#   - max_model_len=13312
 #   - max_num_seqs=20
 #   - grpo_micro_batch_size=1
 #   - rollout_n=4

@@ -44,7 +44,7 @@ class PnpEvaluationTest(unittest.TestCase):
         self.assertEqual(PROFILES["mathvision"].total_output_tokens, 6144)
         aime = PROFILES["aime2026"]
         self.assertEqual((aime.total_output_tokens, aime.per_step_tokens, aime.context_limit),
-                         (32768, 6554, 40960))
+                         (10240, 2048, 13312))
 
     def test_budget_is_cumulative_and_keeps_observations_out_of_output_count(self):
         budget = TrajectoryBudget(replace(PROFILES["hotpotqa"], total_output_tokens=5, per_step_tokens=3))
@@ -287,8 +287,8 @@ class PnpEvaluationTest(unittest.TestCase):
         self.assertIn("PNP evaluation configuration for AIME2026", text)
         self.assertIn(r"\label{tab:pnp_eval_aime2026}", text)
         self.assertIn("Total completion budget & 10240 tokens", text)
-        self.assertIn("Total completion budget & 32768 tokens \\\\\nPer-step generation cap & 6554 tokens", text)
-        self.assertIn("Context limit & 40960 tokens", text)
+        self.assertIn("Total completion budget & 10240 tokens \\\\\nPer-step generation cap & 2048 tokens", text)
+        self.assertIn("Context limit & 13312 tokens", text)
         self.assertNotIn("A0", text)
 
     def test_replica_groups_and_invalid_gpu_specification(self):
