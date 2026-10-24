@@ -57,8 +57,8 @@ training rows, replacing overlong entries with subsequent rows in source order.
 It defaults to eight NVIDIA A40 GPUs (0–7), batch/mini-batch 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
-are 2,048 initial tokens, 8,192 context tokens, 4,096 completion tokens across
-five turns, capped at 820 tokens per turn. Checkpoints run every 10 updates;
+are 2,048 initial tokens, 13,312 context tokens, 10,240 completion tokens across
+five turns, capped at 2,048 tokens per turn. Checkpoints run every 10 updates;
 periodic held-out validation is disabled. The default A9 EM-only reward phase is separate from LR
 warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
 The prepared subset, its source-selection manifest and resolved configuration
@@ -109,8 +109,8 @@ Qwen generation prompt opens `<think>`, a closing `</think>` is required before
 a submitted answer. Reasoning turns use the model's default thinking mode.
 The last available turn is a concise visible answer submission with
 `enable_thinking=False`, using the same remaining completion budget (normally
-816 tokens after four 820-token turns). Standalone AIME2026 evaluation uses the
-same turn protocol with a 32768-token budget (6554 per turn, 40960 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
+2,048 tokens after four 2,048-token turns). Standalone AIME2026 evaluation uses the
+same turn protocol and the same 10,240-token budget (2,048 per turn, 13,312 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
 to reproduce the full-thinking protocol. All token budgets remain unchanged.
 The final submission prompt prefills `\boxed{` as prompt tokens, then the model
 generates the answer and its closing brace. Nested and escaped math braces are
@@ -119,7 +119,7 @@ in chunks of at most 64 tokens and stops requesting chunks once a complete box
 is available; transport chunks still constitute one policy turn. Original
 sampled token IDs and log probabilities are retained through the closing box,
 and any generated suffix discarded from policy training still counts against
-the 4096-token budget. `final_answer_prefill_step` records the turn for offline
+the 10,240-token budget. `final_answer_prefill_step` records the turn for offline
 replay; rollout output contains the generated suffix, with the prefix in its
 input. Submission-only output does not receive process credit.
 Earlier continuation prompts advance the existing solution and request a
@@ -213,10 +213,10 @@ from `prompts.py`. It contains no verifier results or reference-answer signal.
 Both deterministic and frozen-judge verification run after rollout completion;
 outcome scoring uses the reference only after a final answer has been selected.
 
-The original input limit is 2048 tokens. Multi-turn history uses an 8192-token
-context by default. **The total generated-token budget per trajectory** remains
-4096 for 4B or 5120 for 9B, with a per-turn cap of `ceil(total / max_steps)`.
-For five turns, these caps are 820 and 1024; each generation is also capped by
+The original input limit is 2048 tokens. Multi-turn history uses a 13,312-token
+context by default. **The total generated-token budget per trajectory** is
+10,240 for both 4B and 9B, with a per-turn cap of `ceil(total / max_steps)`.
+For five turns, this cap is 2,048; each generation is also capped by
 the remaining trajectory budget and context space.
 Unused tokens from an early-stopped turn are not added to a later turn's cap.
 These caps bound generation; they do not guarantee that every trajectory uses

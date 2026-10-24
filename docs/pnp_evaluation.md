@@ -23,7 +23,7 @@ errors abort the evaluation instead of publishing an incomplete accuracy.
 
 | Benchmark | Final metric | Steps | Total generated tokens | Per step | Prompt limit | Context limit |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| AIME2026 | Integer accuracy | 5 | 32768 | 6554 | 2048 initial | 40960 |
+| AIME2026 | Integer accuracy | 5 | 10240 | 2048 | 2048 initial | 13312 |
 | HotpotQA validation | Answer EM; F1 auxiliary | 4 | 4096 | 1024 | 8192 each step | 12288 |
 | LiveCodeBench release_v6 | Pass@1 | 5 | 10240 | 2048 | 8192 each step | 12288 |
 | MATH-Vision | Answer accuracy | 3 | 6144 | 2048 | 8192 each step | 12288 |
