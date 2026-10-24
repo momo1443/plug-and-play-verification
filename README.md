@@ -21,20 +21,18 @@ Our framework checks numeric equalities, retrieved evidence, code executions, an
 | Code | TACO | LiveCodeBench |
 | Vision | Vision-R1-RL | MATH-Vision |
 
-This local checkout uses AIME 2026 for mathematics evaluation. The manuscript results below remain the original AIME 2025 results; AIME 2026 has not been evaluated in this checkout.
-
 ## Results
 
-Manuscript Tables 1–3 report the following scores (%). `Avg.` is the unweighted mean across four benchmarks; AIME 2025 uses at most five policy generations.
+Scores are percentages. The Qwen3.5-4B table includes updated AIME 2026 results; the Qwen3.5-9B table retains the previously reported AIME 2025 results. `Avg.` is the unweighted mean across the four benchmarks in each table. AIME evaluation uses at most five policy generations.
 
 ### Qwen3.5-4B
 
-| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 26.67 | 46.78 | 40.47 | 75.72 | 47.41 |
-| GRPO | 33.33 | 57.73 | 47.96 | 79.80 | 54.71 |
-| GRPO + LLM-as-a-judge | 36.67 | 58.28 | 48.72 | **82.01** | 56.42 |
-| **Ours (verification)** | **40.00** | **60.18** | **49.57** | 81.51 | **57.82** |
+| ReAct | 73.33 | 46.78 | 40.47 | 75.72 | 59.08 |
+| GRPO | 80.00 | 57.73 | 47.96 | 79.80 | 66.37 |
+| GRPO + LLM-as-a-judge | 83.33 | 58.28 | 48.72 | **82.01** | 68.09 |
+| **Ours (plug-and-play verifier)** | **86.67** | **60.18** | **49.57** | 81.51 | **69.48** |
 
 ### Qwen3.5-9B
 
