@@ -9,7 +9,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
@@ -51,7 +51,7 @@ MAX_RESPONSE_LENGTH="${TACO_A9_MAX_RESPONSE_LENGTH:-2048}"
 MAX_MODEL_LENGTH="${TACO_A9_MAX_MODEL_LENGTH:-12288}"
 MAX_BATCHED_TOKENS="${TACO_A9_MAX_BATCHED_TOKENS:-12288}"
 MAX_NUM_SEQS="${TACO_A9_MAX_NUM_SEQS:-80}"
-VLLM_MEMORY_UTILIZATION="${TACO_A9_VLLM_MEMORY_UTILIZATION:-0.90}"
+VLLM_MEMORY_UTILIZATION="${TACO_A9_VLLM_MEMORY_UTILIZATION:-0.30}"
 VLLM_KV_CACHE_BYTES="${TACO_A9_VLLM_KV_CACHE_BYTES:-8589934592}"
 ACTOR_PARAM_OFFLOAD="${TACO_A9_ACTOR_PARAM_OFFLOAD:-true}"
 ACTOR_OPTIMIZER_OFFLOAD="${TACO_A9_ACTOR_OPTIMIZER_OFFLOAD:-true}"
@@ -140,4 +140,4 @@ cd "$PROJECT_DIR"
     trainer.val_before_train=false trainer.resume_mode=disable trainer.save_freq="$SAVE_FREQ" \
     trainer.max_actor_ckpt_to_keep=2 trainer.test_freq=-1 trainer.total_epochs="$TOTAL_EPOCHS" trainer.total_training_steps="$TOTAL_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \
-    trainer.validation_data_dir="$OUTPUT_DIR/validation" trainer.log_val_generations=0 2>&1 | tee "$OUTPUT_DIR/train.log"
+    trainer.validation_data_dir="$OUTPUT_DIR/validation" trainer.log_val_generations=0 "$@" 2>&1 | tee "$OUTPUT_DIR/train.log"

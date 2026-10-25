@@ -120,47 +120,6 @@ def get_valid_data(data: DataProto) -> tuple[DataProto, torch.Tensor]:
     return valid_data, valid_mask
 
 
-def assign_global_mini_batch_ids(batch: DataProto, mini_batch_size: int, dp_size: int) -> None:
-    """Assign global PPO mini-batch ids while preserving the existing DP dispatch layout."""
-    if dp_size <= 0:
-        raise ValueError(f"dp_size must be positive, got {dp_size}")
-    if mini_batch_size % dp_size != 0:
-        raise ValueError(f"mini_batch_size ({mini_batch_size}) must be divisible by dp_size ({dp_size})")
-
-    batch_size = len(batch)
-    if batch_size % dp_size != 0:
-        raise ValueError(f"batch_size ({batch_size}) must be divisible by dp_size ({dp_size})")
-
-    local_batch_size = batch_size // dp_size
-    local_mini_batch_size = mini_batch_size // dp_size
-    if local_mini_batch_size == 0:
-        raise ValueError(f"local_mini_batch_size must be positive, got {local_mini_batch_size}")
-
-    num_mini_batches = math.ceil(local_batch_size / local_mini_batch_size)
-    device = batch.batch["prompts"].device
-    local_ids = torch.arange(num_mini_batches, dtype=torch.long, device=device).repeat_interleave(local_mini_batch_size)
-    local_ids = local_ids[:local_batch_size]
-    mini_batch_ids = local_ids.repeat(dp_size)
-    batch.batch["mini_batch_id"] = mini_batch_ids
-
-    response_mask = batch.batch.get("response_mask", None)
-    if response_mask is None:
-        seq_mask = torch.ones(batch_size, dtype=torch.long, device=device)
-    else:
-        seq_mask = response_mask.any(dim=-1).to(dtype=torch.long)
-    mini_batch_sizes = torch.zeros(num_mini_batches, dtype=torch.long, device=device)
-    mini_batch_sizes.scatter_add_(0, mini_batch_ids, seq_mask)
-    batch.batch["mini_batch_global_size"] = mini_batch_sizes[mini_batch_ids]
-
-    token_counts = batch.batch["attention_mask"].sum(dim=-1).to(dtype=torch.long)
-    mini_batch_token_nums = torch.zeros((batch_size, mini_batch_size), dtype=torch.long, device=device)
-    for mini_batch_id in range(num_mini_batches):
-        indices = torch.nonzero(mini_batch_ids == mini_batch_id, as_tuple=False).flatten()
-        token_nums = token_counts[indices]
-        mini_batch_token_nums[indices, : token_nums.numel()] = token_nums.unsqueeze(0).expand(indices.numel(), -1)
-    batch.batch["mini_batch_global_token_num"] = mini_batch_token_nums
-
-
 def make_json_safe(value):
     if isinstance(value, np.generic):
         return value.item()

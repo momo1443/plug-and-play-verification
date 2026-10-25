@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# != 0 )); then
-    echo "Formal HotpotQA RLVR does not accept trailing Hydra overrides; use documented environment variables" >&2
-    exit 2
-fi
-
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 source "$PROJECT_DIR/scripts/common/pnp.sh"
 
 ARM="${HOTPOTQA_REWARD_ARM:?HOTPOTQA_REWARD_ARM must identify a supported formal arm}"
@@ -52,14 +47,10 @@ if [[ "$ARM" == A8_LR* ]]; then
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_lr/base.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_local_reasoning_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_lr/reward_fn.py"
-elif [[ "$ARM" != A8_LR* ]]; then
+else
     AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa_a9/pnp_hotpotqa.yaml"
     DEFAULT_AGENT_FLOW=hotpotqa_certificate_agent
     REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa_a9/reward_fn.py"
-else
-    AGENT_FLOW_CONFIG="$PROJECT_DIR/recipes/hotpotqa/base.yaml"
-    DEFAULT_AGENT_FLOW=hotpotqa_agent
-    REWARD_FUNCTION_PATH="$PROJECT_DIR/recipes/hotpotqa/reward_fn.py"
 fi
 
 pnp_paper_profile hotpotqa "${HOTPOTQA_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
@@ -100,11 +91,8 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
 export VLLM_USE_V1=1
 export TOKENIZERS_PARALLELISM=false
-export HOTPOTQA_FORMAL_A0=0
 export HOTPOTQA_FORMAL_EXPERIMENT=1
 export HOTPOTQA_REWARD_ARM="$ARM"
-export HOTPOTQA_ENABLE_THINKING=false
-export HOTPOTQA_FORCE_FIRST_SEARCH=false
 # All paper arms share the certificate interaction interface.
 export HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE=true
 export HOTPOTQA_EMBEDDING_PER_WORKER_GPU=0
@@ -147,7 +135,8 @@ MAX_RESPONSE_LENGTH=1024
 MAX_MODEL_LENGTH="${HOTPOTQA_VLLM_MAX_MODEL_LEN:-12288}"
 MAX_NUM_BATCHED_TOKENS="${HOTPOTQA_VLLM_MAX_NUM_BATCHED_TOKENS:-$MAX_MODEL_LENGTH}"
 MAX_NUM_SEQS="${HOTPOTQA_VLLM_MAX_NUM_SEQS:-$((TRAIN_BATCH_SIZE * ROLLOUT_N))}"
-VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.40}"
+VLLM_GPU_MEMORY_UTILIZATION="${HOTPOTQA_VLLM_GPU_MEMORY_UTILIZATION:-0.30}"
+ROLLOUT_TP_SIZE="${HOTPOTQA_TENSOR_PARALLEL_SIZE:-1}"
 VLLM_ENABLE_SLEEP_MODE="${HOTPOTQA_VLLM_ENABLE_SLEEP_MODE:-false}"
 VLLM_FREE_CACHE_ENGINE="${HOTPOTQA_VLLM_FREE_CACHE_ENGINE:-false}"
 VLLM_KV_CACHE_MEMORY_BYTES="${HOTPOTQA_VLLM_KV_CACHE_MEMORY_BYTES:-}"
@@ -349,7 +338,7 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --calibration-report "$CALIBRATION_REPORT" \
         --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
         --seed "$EXPERIMENT_SEED"
-    elif [[ "$ARM" != A8_LR* ]]; then
+    else
         "$PYTHON_BIN" -m recipes.hotpotqa_a9.prepare_run \
         --run-mode "$RUN_MODE" \
         --project-dir "$PROJECT_DIR" \
@@ -385,47 +374,6 @@ if [[ "${HOTPOTQA_HYDRA_CONFIG_ONLY:-0}" != "1" && "$SKIP_PREFLIGHT" != "1" ]]; 
         --gamma "$GRPO_GAMMA" \
         --allow-uncalibrated-launch "$ALLOW_UNCALIBRATED_LAUNCH" \
         --seed "$EXPERIMENT_SEED"
-    else
-        "$PYTHON_BIN" -m recipes.hotpotqa.prepare_formal_rlvr_run \
-        --project_dir "$PROJECT_DIR" \
-        --arm "$ARM" \
-        --run_mode "$RUN_MODE" \
-        --train_path "$TRAIN_PATH" \
-        --validation_path "$VAL_PATH" \
-        --corpus_dir "$HOTPOTQA_CORPUS_DATA_ROOT" \
-        --evidence_sidecar_path "$HOTPOTQA_EVIDENCE_SIDECAR" \
-        --model_path "$HOTPOTQA_MODEL_PATH" \
-        --output_dir "$OUTPUT_DIR" \
-        --train_max_samples "$TRAIN_MAX_SAMPLES" \
-        --val_max_samples "$VAL_MAX_SAMPLES" \
-        --train_batch_size "$TRAIN_BATCH_SIZE" \
-        --rollout_n "$ROLLOUT_N" \
-        --total_training_steps "$TOTAL_TRAINING_STEPS" \
-        --grpo_micro_batch_size "$GRPO_MICRO_BATCH_SIZE" \
-        --data_shuffle "$DATA_SHUFFLE" \
-        --actor_use_dynamic_bsz "$ACTOR_USE_DYNAMIC_BSZ" \
-        --actor_max_token_len_per_gpu "$ACTOR_MAX_TOKEN_LEN_PER_GPU" \
-        --entropy_chunk_rows "$ENTROPY_CHUNK_ROWS" \
-        --calculate_entropy "$CALCULATE_ENTROPY" \
-        --reference_kl_enabled "$REFERENCE_KL_ENABLED" \
-        --reference_kl_loss_coef "$REFERENCE_KL_LOSS_COEF" \
-        --reference_kl_loss_type "$REFERENCE_KL_LOSS_TYPE" \
-        --kl_in_reward "$KL_IN_REWARD" \
-        --use_fused_kernels "$USE_FUSED_KERNELS" \
-        --fused_kernel_backend "$FUSED_KERNEL_BACKEND" \
-        --actor_param_offload "$ACTOR_PARAM_OFFLOAD" \
-        --actor_optimizer_offload "$ACTOR_OPTIMIZER_OFFLOAD" \
-        --enable_gradient_checkpointing "$MODEL_ENABLE_GRADIENT_CHECKPOINTING" \
-        --vllm_gpu_memory_utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
-        --vllm_enable_sleep_mode "$VLLM_ENABLE_SLEEP_MODE" \
-        --vllm_free_cache_engine "$VLLM_FREE_CACHE_ENGINE" \
-        --save_freq "$SAVE_FREQ" \
-        --max_actor_ckpt_to_keep "$MAX_ACTOR_CKPT_TO_KEEP" \
-        --resume_mode "$RESUME_MODE" \
-        --resume_from_path "$RESUME_FROM_CONFIG" \
-        --num_gpus "$NUM_GPUS" \
-        --agent_workers "$AGENT_WORKERS" \
-        --gamma "$GRPO_GAMMA"
     fi
 fi
 
@@ -510,7 +458,7 @@ fi
     actor_rollout_ref.actor.checkpoint.load_contents="$CHECKPOINT_SAVE_CONTENTS" \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size="$ROLLOUT_TP_SIZE" \
     actor_rollout_ref.rollout.n="$ROLLOUT_N" \
     actor_rollout_ref.rollout.do_sample=True \
     actor_rollout_ref.rollout.temperature=1.0 \
@@ -564,4 +512,4 @@ fi
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" \
     trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \
     trainer.validation_data_dir="$OUTPUT_DIR/validation" \
-    trainer.log_val_generations=0 2>&1 | tee "$OUTPUT_DIR/train.log"
+    trainer.log_val_generations=0 "$@" 2>&1 | tee "$OUTPUT_DIR/train.log"

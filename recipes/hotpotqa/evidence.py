@@ -85,22 +85,6 @@ def sentence_evidence_records(
     ]
 
 
-def is_sentence_evidence_record(record: Any) -> bool:
-    """Return whether one runtime sentence record has a valid official ID."""
-
-    if not isinstance(record, dict):
-        return False
-    try:
-        expected = make_evidence_id(record.get("pid"), record.get("sentence_id"))
-    except (TypeError, ValueError):
-        return False
-    return (
-        record.get("evidence_id") == expected
-        and record.get("normalized_title") == normalize_title(record.get("title"))
-        and isinstance(record.get("text"), str)
-    )
-
-
 @dataclass(frozen=True)
 class SampleEvidence:
     """Verifier/evaluation identity for one parquet row."""

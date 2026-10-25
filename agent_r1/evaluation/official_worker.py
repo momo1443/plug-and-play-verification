@@ -48,15 +48,11 @@ def grade(benchmark, module, job):
         packages = ("numpy", "sympy", "antlr4-python3-runtime", "latex2sympy2", "ujson", "tqdm", "fire")
         return {"packages": {name: version(name) for name in packages}}
     if benchmark == "hotpotqa":
-        if job.get("operation") == "normalize":
-            return module.normalize_answer(job["answer"])
         answer, references = job["answer"], job["references"]
         em = max((float(module.exact_match_score(answer, gold)) for gold in references), default=0.0)
         f1 = max((float(module.f1_score(answer, gold)[0]) for gold in references), default=0.0)
         return {"is_correct": bool(em), "answer_em": em, "answer_f1": f1}
     if benchmark == "mathvision":
-        if job.get("operation") == "equal":
-            return bool(module.is_equal(job["left"], job["right"]))
         module.id_raw = {"pnp": {"id": "pnp", "answer": job["reference"], "options": job["options"]}}
         answer_file = Path("answer.jsonl")
         answer_file.write_text(json.dumps({"id": "pnp", "response": job["answer"]}) + "\n")

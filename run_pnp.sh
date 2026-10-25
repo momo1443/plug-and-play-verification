@@ -5,14 +5,16 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat <<'EOF'
-Usage: bash run_pnp.sh DATASET [--model MODEL] [--model-path PATH] [--gpus IDS] [-- HYDRA_OVERRIDES...]
+Usage: bash run_pnp.sh DATASET [--arm ARM] [--model MODEL] [--model-path PATH] [--gpus IDS] [-- HYDRA_OVERRIDES...]
 
 Datasets: deepscaler, hotpotqa, taco, vision_r1
 Models:   Qwen3.5-4B (default), Qwen3.5-9B
+Arms:     verifier (default, PNP verifier GRPO), outcome (outcome-only GRPO)
 
 Examples:
   bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
   bash run_pnp.sh hotpotqa --model Qwen3.5-9B --gpus 0,1,2,3,4,5,6,7
+  bash run_pnp.sh taco --arm outcome --model Qwen3.5-9B
   bash run_pnp.sh deepscaler --model-path /path/to/Qwen3.5-4B -- trainer.total_training_steps=500
 
 Uses Python from the active environment unless PYTHON_BIN is set.
@@ -32,11 +34,17 @@ esac
 MODEL=Qwen3.5-4B
 while (( $# > 0 )); do
     case "$1" in
-        --model|--model-path|--gpus)
+        --arm|--model|--model-path|--gpus)
             (( $# >= 2 )) && [[ -n "$2" && "$2" != --* ]] || {
                 echo "Missing value for $1" >&2; exit 2;
             }
             case "$1" in
+                --arm)
+                    [[ "$2" == verifier || "$2" == outcome ]] || {
+                        echo "Unknown PNP arm: $2 (expected verifier or outcome)" >&2; exit 2;
+                    }
+                    export PNP_ARM="$2"
+                    ;;
                 --model) MODEL="$2" ;;
                 --model-path) export PNP_MODEL_PATH="$2" ;;
                 --gpus)

@@ -75,7 +75,7 @@ and the run manifest when preparing the final paper tables.
 Run `python3 -m unittest discover -s tests -p test_pnp_config.py -v`
 from the repository root. These tests run the actual shell launchers with a
 Python stub, exercise model/length overrides, and capture trainer arguments.
-They do not load models or run distributed optimization. The recorded earlier
-FSDP2/offload/LoRA synchronization failure in `docs/archive/progress/2026-09-06.md` still
+They do not load models or run distributed optimization. An earlier
+FSDP2/offload/LoRA synchronization failure was observed, so LoRA training still
 requires a GPU smoke test on the intended runtime before claiming stable LoRA
 training. This change does not alter advantage, clipping, KL, or loss code.

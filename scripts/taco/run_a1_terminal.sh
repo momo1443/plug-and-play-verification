@@ -6,7 +6,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
@@ -26,7 +26,7 @@ command -v bwrap >/dev/null || { echo "bubblewrap is required for TACO A1" >&2; 
 
 IFS=',' read -r -a VISIBLE_GPUS <<<"$CUDA_VISIBLE_DEVICES"
 NUM_GPUS="${#VISIBLE_GPUS[@]}"
-(( NUM_GPUS == 6 || NUM_GPUS == 8 )) || { echo "TACO A1 requires six or eight visible GPUs" >&2; exit 2; }
+(( NUM_GPUS == 8 )) || { echo "TACO A1 requires eight visible GPUs" >&2; exit 2; }
 TRAINER_GPUS="${TACO_A1_TRAINER_GPUS:-$NUM_GPUS}"
 MODEL_PATH="${TACO_A1_MODEL_PATH:-$WORKSPACE_DIR/models/Qwen3.5-4B}"
 source "$PROJECT_DIR/scripts/common/pnp.sh"
@@ -38,13 +38,13 @@ ROLLOUT_N="${TACO_A1_ROLLOUT_N:-4}"
 TOTAL_STEPS="${TACO_A1_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
 SAVE_FREQ="${TACO_A1_SAVE_FREQ:-50}"
 SEED="${TACO_A1_SEED:-42}"
-TP_SIZE="${TACO_A1_TENSOR_PARALLEL_SIZE:-$NUM_GPUS}"
+TP_SIZE="${TACO_A1_TENSOR_PARALLEL_SIZE:-8}"
 MAX_PROMPT_LENGTH="${TACO_A1_MAX_PROMPT_LENGTH:-8192}"
 MAX_RESPONSE_LENGTH="${TACO_A1_MAX_RESPONSE_LENGTH:-2048}"
 MAX_MODEL_LENGTH="${TACO_A1_MAX_MODEL_LENGTH:-12288}"
 MAX_BATCHED_TOKENS="${TACO_A1_MAX_BATCHED_TOKENS:-12288}"
 MAX_NUM_SEQS="${TACO_A1_MAX_NUM_SEQS:-80}"
-VLLM_MEMORY_UTILIZATION="${TACO_A1_VLLM_MEMORY_UTILIZATION:-0.90}"
+VLLM_MEMORY_UTILIZATION="${TACO_A1_VLLM_MEMORY_UTILIZATION:-0.30}"
 VLLM_KV_CACHE_BYTES="${TACO_A1_VLLM_KV_CACHE_BYTES:-8589934592}"
 ACTOR_PARAM_OFFLOAD="${TACO_A1_ACTOR_PARAM_OFFLOAD:-true}"
 ACTOR_OPTIMIZER_OFFLOAD="${TACO_A1_ACTOR_OPTIMIZER_OFFLOAD:-true}"
@@ -131,4 +131,4 @@ fi
     trainer.val_before_train=false trainer.resume_mode=disable trainer.save_freq="$SAVE_FREQ" \
     trainer.max_actor_ckpt_to_keep=1 trainer.test_freq=-1 trainer.total_epochs="$TOTAL_EPOCHS" trainer.total_training_steps="$TOTAL_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \
-    trainer.validation_data_dir="$OUTPUT_DIR/validation" trainer.log_val_generations=0 2>&1 | tee "$OUTPUT_DIR/train.log"
+    trainer.validation_data_dir="$OUTPUT_DIR/validation" trainer.log_val_generations=0 "$@" 2>&1 | tee "$OUTPUT_DIR/train.log"

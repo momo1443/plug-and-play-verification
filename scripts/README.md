@@ -22,12 +22,17 @@ The 4B mathematics profile defaults to all eight GPUs, vLLM memory fraction 0.30
 32 concurrent sequences, checkpointing every 10 updates, and no periodic evaluation.
 Frozen-judge comparisons allocate seven actor GPUs and one judge GPU on this node.
 
+Both arms of a domain go through the same model profile, so 4B/9B adaptation, data
+preparation and memory settings are identical; only the reward differs. Add
+`--model Qwen3.5-9B` for the 9B (LoRA) profile. Trailing `-- KEY=VALUE` Hydra overrides
+reach the trainer in every domain.
+
 | Domain | Outcome-only GRPO | Verifier GRPO |
 | --- | --- | --- |
-| DeepScaleR | `bash scripts/deepscaler/run_deepscaler_a1.sh` | `bash scripts/deepscaler/pnp_deepscaler.sh` |
-| HotpotQA | `bash scripts/hotpotqa/run_a1.sh` | `bash scripts/hotpotqa/pnp_hotpotqa.sh` |
-| TACO | `bash scripts/taco/run_a1_terminal.sh` | `bash scripts/taco/pnp_taco.sh` |
-| Vision-R1 | `bash scripts/vision_r1/run_a1_terminal.sh` | `bash scripts/vision_r1/pnp_vision_r1.sh` |
+| DeepScaleR | `bash run_pnp.sh deepscaler --arm outcome` | `bash run_pnp.sh deepscaler` |
+| HotpotQA | `bash run_pnp.sh hotpotqa --arm outcome` | `bash run_pnp.sh hotpotqa` |
+| TACO | `bash run_pnp.sh taco --arm outcome` | `bash run_pnp.sh taco` |
+| Vision-R1 | `bash run_pnp.sh vision_r1 --arm outcome` | `bash run_pnp.sh vision_r1` |
 
 ```bash
 # Frozen process judge; domain: deepscaler, hotpotqa, taco, or vision.
@@ -42,7 +47,7 @@ bash scripts/hotpotqa/run_a3.sh
 Math defaults to at most five reasoning turns, shared by A1, A9, Judge, PPO
 and AIME evaluation. Use `DEEPSCALER_MAX_STEPS=8` for more turns or `=1` for
 an optional single-generation setting. The total generated-token budget
-remains 4096 (4B) or 5120 (9B); no correctness feedback enters this flow.
+is 10240 (2048 per turn) for both 4B and 9B; no correctness feedback enters this flow.
 The reported mathematics results use the default five-generation protocol.
 
 The shared `models/Qwen3.5-9B.sh DATASET` profile includes the previous HotpotQA
@@ -77,8 +82,6 @@ separate protocols.
 
 - `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments. The incomplete DeepMath-103K launcher was removed because its recipe dependency was absent.
 - `extensions/hotpotqa_lr/`: A8 local-reasoning training, calibration, validation, and diagnostics.
-- `extensions/hotpotqa/`: old GPU/resume/storage-specific profiles. `run_a9_fixed.sh` still names a historical resume checkpoint; it is not a fresh-run default.
-- `extensions/taco/`: reduced-data smoke tests and separated actor/rollout profiles.
 - `patches/`: explicit environment patch scripts. Inspect their expected installed source/version before applying; moving them does not apply any patch.
 
 All training entrypoints default to 500 optimizer updates, including extensions

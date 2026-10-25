@@ -71,9 +71,9 @@ def main() -> None:
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"Required artifact missing: {missing}")
-    allowed_batch_sizes = {4, 20} if args.smoke else {20}
-    if args.num_gpus not in {4, 6, 8} or args.train_batch_size not in allowed_batch_sizes or args.rollout_n != 4 or args.seed != 42:
-        raise ValueError("TACO A1 requires four, six, or eight actor GPUs, batch 20, rollout n=4, and seed 42")
+    allowed_batch_sizes = {4, 8, 20} if args.smoke else {8, 20}
+    if args.num_gpus != 8 or args.train_batch_size not in allowed_batch_sizes or args.rollout_n != 4 or args.seed != 42:
+        raise ValueError("TACO A1 requires eight actor GPUs, batch 20 (4B) or 8 (9B), rollout n=4, and seed 42")
     if args.total_training_steps <= 0 or args.total_epochs <= 0 or args.save_freq <= 0:
         raise ValueError("TACO A1 training parameters must be positive")
     missing_code = [relative for relative in CODE_PATHS if not (project_dir / relative).is_file()]

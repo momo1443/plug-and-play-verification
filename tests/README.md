@@ -9,7 +9,7 @@ Run from the repository root in the `pnp` environment:
 
 ```bash
 CUDA_VISIBLE_DEVICES= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests \
-  /home/jovyan/miniforge/envs/pnp/bin/python -m pytest -q tests
+  python -m pytest -q tests
 ```
 
 - `test_pnp_launcher.py` and `test_pnp_config.py` exercise real shell argument

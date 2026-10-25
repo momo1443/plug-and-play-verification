@@ -16,7 +16,7 @@ its obsolete mixed legacy/paper guide has been removed.
 ## Current entrypoints
 
 ```bash
-bash scripts/hotpotqa/run_a1.sh          # outcome-only GRPO
+bash run_pnp.sh hotpotqa --arm outcome   # outcome-only GRPO (same wrapper, A1 reward)
 bash scripts/hotpotqa/pnp_hotpotqa.sh  # verifier GRPO
 bash scripts/hotpotqa/run_a6.sh          # frozen process judge
 bash scripts/hotpotqa/run_a2.sh          # gold process-only ablation
@@ -86,7 +86,7 @@ python -m recipes.hotpotqa.build_evidence_sidecar \
   --output_path data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3
 ```
 
-Fail-closed artifact check (also invoked by formal launchers):
+Fail-closed artifact check:
 
 ```bash
 python -m recipes.hotpotqa.validate_formal_a0_artifacts \

@@ -90,20 +90,11 @@ class TrajectoryBudget:
             raise EvaluationStop("empty_generation")
 
 
-def normalize_qa_answer(value):
-    return request("hotpotqa", {"operation": "normalize", "answer": str(value)})
-
-
 def qa_scores(answer, references):
     """HotpotQA answer EM and token F1; absent submissions score zero."""
     if not isinstance(answer, str) or not answer.strip():
         return {"is_correct": False, "answer_em": 0.0, "answer_f1": 0.0}
     return request("hotpotqa", {"answer": answer, "references": [str(value) for value in references]})
-
-
-def mathvision_equal(left, right):
-    """Use the pinned MATH-V is_equal implementation without local rules."""
-    return request("mathvision", {"operation": "equal", "left": str(left), "right": str(right)})
 
 
 def mathvision_score(answer, reference, options):

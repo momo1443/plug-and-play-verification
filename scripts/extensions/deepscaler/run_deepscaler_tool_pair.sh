@@ -6,7 +6,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 ARM="${DEEPSCALER_TOOL_ARM:-}"
 case "$ARM" in

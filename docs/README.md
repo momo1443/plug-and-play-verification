@@ -15,9 +15,9 @@ scripts/           Training and evaluation entrypoints, grouped by domain
   extensions/      Optional ToolEnv/A8 experiments and hardware/debug profiles
   patches/         Explicit compatibility patches for the training environment
 tests/             Current PNP tasks, AIME evaluation, and shared training checks
-assets/images/     The two plug-and-play verifier figures
+assets/images/     README and paper figures
 docs/              Current implementation notes and retained debugging records
-verl_patches/      Runtime weight-transfer implementation
+verl_patches/      Attention-padding patch loaded by the trainer
 ```
 
 Domain YAML files stay beside the code that consumes them; shared trainer config
@@ -44,7 +44,6 @@ PNP entrypoints use the following naming convention:
 - [Frozen process judge](experiments/llm-process-judge.md): comparison-arm protocol.
 - [Shared launcher settings](../scripts/common/README.md): model adaptation and overrides.
 - [DeepScaleR](../recipes/deepscaler/README.md) and [HotpotQA](../recipes/hotpotqa/README.md): task-specific setup.
-- [Historical records](archive/README.md): retained debugging notes.
 
 `recipes/hotpotqa_lr/` also supplies parsing, answer normalization, and artifact
 helpers used by the current HotpotQA/TACO flows and validation recorder. It is
@@ -62,7 +61,6 @@ and `recipes/livecodebench_a0/` contain evaluation utilities.
 | `scripts/patch_*.py` | `scripts/patches/` |
 | `scripts/finegrained_eval.py` | `scripts/extensions/hotpotqa_lr/finegrained_eval.py` |
 | `image/` paper figures | `assets/images/` |
-| Retained older debugging notes | `docs/archive/progress/` |
 
 The unused GSM8K examples (whose recipe was absent), independent Paper Search
 recipe/examples, upstream Agent-R1 documentation site/results/figures, and two
@@ -70,12 +68,8 @@ obsolete DeepScaleR aliases were removed. Use `pnp_deepscaler.sh`
 instead of `run_deepscaler_a9_fixed73.sh`, and the extension's
 `run_deepscaler_tool_a1.sh` instead of `run_deepscaler_tool.sh`.
 
-Their last pre-cleanup versions remain in Git commit
-`2fb3962a61c6aafb962dbe66c958b00e7149bd87`. For example:
-
-```bash
-git show 2fb3962:recipes/paper_search/README.md
-```
+The repository history was later rewritten, so these removed files are no
+longer recoverable from this repository's Git history.
 
 Model checkpoints, datasets, and experiment outputs are external or ignored.
 The cleanup does not migrate or remove them. Existing external job scripts must

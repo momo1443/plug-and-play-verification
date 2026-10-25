@@ -26,7 +26,9 @@ pnp_model_path() {
     case "$dataset" in
         deepscaler) export DEEPSCALER_MODEL_PATH="${PNP_MODEL_PATH:-${DEEPSCALER_MODEL_PATH:-$default_path}}" ;;
         hotpotqa) export HOTPOTQA_MODEL_PATH="${PNP_MODEL_PATH:-${HOTPOTQA_MODEL_PATH:-$default_path}}" ;;
-        taco) export TACO_A9_MODEL_PATH="${PNP_MODEL_PATH:-${TACO_A9_MODEL_PATH:-$default_path}}" ;;
+        taco)
+            export TACO_A9_MODEL_PATH="${PNP_MODEL_PATH:-${TACO_A9_MODEL_PATH:-$default_path}}"
+            export TACO_A1_MODEL_PATH="${PNP_MODEL_PATH:-${TACO_A1_MODEL_PATH:-$default_path}}" ;;
         vision_r1) export VISION_R1_MODEL_PATH="${PNP_MODEL_PATH:-${VISION_R1_MODEL_PATH:-$default_path}}" ;;
         *) echo "Unknown PNP dataset: $dataset" >&2; return 2 ;;
     esac
@@ -37,7 +39,18 @@ pnp_launch_dataset() {
     shift
     case "$dataset" in deepscaler|hotpotqa|taco|vision_r1) ;; *) echo "Unknown PNP dataset: $dataset" >&2; return 2 ;; esac
     local project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    exec bash "$project_dir/scripts/$dataset/pnp_$dataset.sh" "$@"
+    local launcher="pnp_$dataset.sh"
+    case "${PNP_ARM:-verifier}" in
+        verifier) ;;
+        outcome)
+            case "$dataset" in
+                deepscaler) launcher=run_deepscaler_a1.sh ;;
+                hotpotqa) launcher=run_a1.sh ;;
+                taco|vision_r1) launcher=run_a1_terminal.sh ;;
+            esac ;;
+        *) echo "PNP_ARM must be verifier or outcome" >&2; return 2 ;;
+    esac
+    exec bash "$project_dir/scripts/$dataset/$launcher" "$@"
 }
 
 pnp_model_overrides() {

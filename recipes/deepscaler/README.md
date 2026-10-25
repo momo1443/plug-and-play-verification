@@ -1,7 +1,7 @@
 # DeepScaleR paper profile and ToolEnv extension
 
-The main entrypoints are `scripts/deepscaler/run_deepscaler_a1.sh` and
-`pnp_deepscaler.sh`. Both use 10,000 selected rows, 500 updates,
+The main entrypoints are `bash run_pnp.sh deepscaler --arm outcome` and
+`bash run_pnp.sh deepscaler`. Both prepare the same cleaned 10,000-row subset, 500 updates,
 prompt batch 20 (4B) or 8 (9B), four rollouts, and the common `VerificationResult` composer.
 The frozen-judge and PPO launchers use the same flow and generation limits.
 See [the implementation contract](../../docs/paper-contract.md).
@@ -233,8 +233,9 @@ DEEPSCALER_MAX_STEPS=1 bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
 Optional budget/context overrides are `DEEPSCALER_MAX_RESPONSE_LENGTH` and
-`DEEPSCALER_MAX_MODEL_LENGTH`; use identical values in all comparison arms and
-in `scripts/deepscaler/eval_aime2026.py`. Run manifests record the effective
+`DEEPSCALER_MAX_MODEL_LENGTH`; use identical values in all comparison arms, and
+pass the same values to evaluation (`--total-output-tokens`/`--context-limit`, or
+`AIME2026_MAX_RESPONSE_LENGTH`/`AIME2026_MAX_MODEL_LENGTH` for `eval_aime2026.py`). Run manifests record the effective
 turn cap, total/per-turn budgets, context length, and prompt code hashes.
 The single-generation and eight-generation settings are optional alternatives
 to the five-generation protocol used for the reported mathematics results.
