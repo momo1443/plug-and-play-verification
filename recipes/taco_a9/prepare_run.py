@@ -94,8 +94,8 @@ def main() -> None:
     for path in (train_path, validation_path, sidecar_path, model_path / "config.json"):
         if not path.is_file():
             raise FileNotFoundError(path)
-    if args.train_batch_size != 20 or args.rollout_n != 4:
-        raise ValueError("TACO A9 main run requires batch 20 and rollout n=4")
+    if args.train_batch_size not in {8, 20} or args.rollout_n != 4:
+        raise ValueError("TACO A9 main run requires batch 20 (4B) or 8 (9B) and rollout n=4")
     if args.total_training_steps <= 0 or args.total_epochs <= 0:
         raise ValueError("TACO A9 total steps and epochs must both be positive")
     if args.terminal_warmup_steps < 0 or args.terminal_warmup_steps >= args.total_training_steps:

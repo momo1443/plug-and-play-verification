@@ -181,7 +181,7 @@ class HotpotQASearchToolLegacy:
     - If `encode_queries` returns torch.Tensor, converts via `.cpu().numpy()` for FAISS CPU index I/O
 
     Upstream often uses `FlagAutoModel.from_finetuned(..., devices="cpu")`; CPU encode is recommended
-    for training. If `HOTPOTQA_EMBEDDING_DEVICE=cuda:*`, call from the same thread (see hotpotqa_agent_flow).
+    for training. If `HOTPOTQA_EMBEDDING_DEVICE=cuda:*`, call from the same thread (see recipes/hotpotqa_a9/agent_flow.py).
     """
 
     _shared_lock = threading.RLock()

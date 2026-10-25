@@ -1,7 +1,7 @@
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class OpenAIFunctionPropertySchema(BaseModel):
@@ -106,16 +106,3 @@ def normalize_parameters_schema(parameters: dict[str, Any] | None) -> OpenAIFunc
     return OpenAIFunctionParametersSchema.model_validate(parameters)
 
 
-def is_tool_schema(tool_like: dict[str, Any]) -> bool:
-    """Return True if `tool_like` can be represented as an OpenAI tool schema."""
-
-    try:
-        function = OpenAIFunctionSchema(
-            name=tool_like.get("name", ""),
-            description=tool_like.get("description", "") or "",
-            parameters=normalize_parameters_schema(tool_like.get("parameters")),
-        )
-        OpenAIFunctionToolSchema(function=function)
-        return True
-    except (ValidationError, ValueError):
-        return False

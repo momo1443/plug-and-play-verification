@@ -9,7 +9,7 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 EVAL_MODE="${HOTPOTQA_LR_EVAL_MODE:-validation}"
 case "$EVAL_MODE" in
     validation|calibration) ;;
@@ -21,7 +21,6 @@ esac
     exit 2
 }
 
-export HOTPOTQA_FORMAL_A0=0
 export HOTPOTQA_FORMAL_EXPERIMENT=1
 export HOTPOTQA_LR_REWARD_MODE=lr30
 export HOTPOTQA_LR_REASON_STEP_FORMAT="${HOTPOTQA_LR_REASON_STEP_FORMAT:-dsl}"
@@ -38,8 +37,6 @@ case "$HOTPOTQA_LR_REASON_STEP_FORMAT" in
         ;;
 esac
 export HOTPOTQA_VALIDATION_INTERFACE=lr
-export HOTPOTQA_ENABLE_THINKING=false
-export HOTPOTQA_FORCE_FIRST_SEARCH=false
 export HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE=true
 export HOTPOTQA_EMBEDDING_PER_WORKER_GPU=0
 export HOTPOTQA_EMBEDDING_DEVICE=cpu
@@ -193,7 +190,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from recipes.hotpotqa.prepare_formal_rlvr_run import _model_identity, _package_versions
+from recipes.hotpotqa_a9.prepare_run import _model_identity, _package_versions
 from recipes.hotpotqa_lr.dsl import DSL_VERSION, REASON_STEP_FORMAT
 from recipes.hotpotqa_lr.protocol import LR_FINISH_PROTOCOL
 from recipes.hotpotqa_lr.reward_contract import LR_CONTRACT_VERSION, LR_REWARD_ARM

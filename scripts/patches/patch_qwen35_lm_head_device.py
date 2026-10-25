@@ -13,9 +13,13 @@ This patch:
 Applied to: verl/models/transformers/qwen3_5.py
 """
 
+import importlib.util
+import os
 import sys
 
-TARGET_FILE = "/nas/deepresearch/conda/envs/agenticrl/lib/python3.10/site-packages/verl/models/transformers/qwen3_5.py"
+# Patch the verl installed in the active environment.
+TARGET_FILE = os.path.join(os.path.dirname(importlib.util.find_spec("verl").origin),
+                           "models", "transformers", "qwen3_5.py")
 
 # Patch 1: forward_with_triton_backend
 OLD_TRITON = """    vocab_weights = self.lm_head.weight

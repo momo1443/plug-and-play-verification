@@ -32,6 +32,9 @@ class PnpConfigTest(unittest.TestCase):
             "import json, os, sys\n"
             "with open(os.environ['LAUNCHER_TEST_CALLS'], 'a') as f:\n"
             "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "arm_keys = ('DEEPSCALER_REWARD_MODE', 'HOTPOTQA_REWARD_ARM', 'VISION_R1_ARM')\n"
+            "with open(os.environ['LAUNCHER_TEST_CALLS'] + '.env', 'a') as f:\n"
+            "    f.write(json.dumps({k: os.environ.get(k) for k in arm_keys}) + '\\n')\n"
             "if sys.argv[1] == '-': print(12000)\n"
         )
         fake_python.chmod(0o755)
@@ -92,6 +95,76 @@ class PnpConfigTest(unittest.TestCase):
                          "vision_r1/pnp_vision_r1.sh", "deepscaler/pnp_deepscaler.sh"):
             with self.subTest(launcher=launcher):
                 self.assert_adaptation(self.launch("scripts/" + launcher), 0)
+
+    def run_pnp(self, dataset, *arguments, **overrides):
+        overrides = dict(TACO_A1_DATA_ROOT=str(self.root), TACO_A1_OUTPUT_DIR=str(self.output), **overrides)
+        env_log = Path(str(self.calls) + ".env")
+        env_log.write_text("")
+        options = self.launch("run_pnp.sh", arguments=(dataset, "--model-path", str(self.model), *arguments),
+                              **overrides)
+        return options, json.loads(env_log.read_text().splitlines()[-1])
+
+    def test_run_pnp_outcome_arm_shares_the_model_profile(self):
+        flow = "actor_rollout_ref.rollout.agent.default_agent_flow"
+        for model, rank in (("Qwen3.5-4B", 0), ("Qwen3.5-9B", 64)):
+            for dataset in ("deepscaler", "hotpotqa", "taco", "vision_r1"):
+                with self.subTest(model=model, dataset=dataset):
+                    options, arms = self.run_pnp(dataset, "--arm", "outcome", "--model", model)
+                    self.assert_adaptation(options, rank)
+                    self.assertEqual(options["data.train_batch_size"], "8" if rank else "20")
+                    if dataset == "deepscaler":
+                        self.assertEqual(arms["DEEPSCALER_REWARD_MODE"], "terminal_only")
+                    elif dataset == "hotpotqa":
+                        self.assertEqual(arms["HOTPOTQA_REWARD_ARM"], "A1")
+                    elif dataset == "taco":
+                        self.assertEqual(options[flow], "taco_a1_terminal_code_agent")
+                    else:
+                        self.assertEqual(arms["VISION_R1_ARM"], "A1")
+        options, _ = self.run_pnp("hotpotqa", "--arm", "outcome", "--model", "Qwen3.5-9B")
+        self.assertEqual(options["actor_rollout_ref.rollout.tensor_model_parallel_size"], "2")
+        options, _ = self.run_pnp("taco", "--arm", "outcome", "--model", "Qwen3.5-9B")
+        self.assertEqual(options["actor_rollout_ref.actor.fsdp_config.param_offload"], "true")
+        self.assertEqual(options["actor_rollout_ref.rollout.max_num_seqs"], "40")
+
+    def test_trailing_hydra_overrides_reach_every_trainer(self):
+        for dataset in ("deepscaler", "hotpotqa", "taco", "vision_r1"):
+            for arm in ("verifier", "outcome"):
+                with self.subTest(dataset=dataset, arm=arm):
+                    options, _ = self.run_pnp(dataset, "--arm", arm, "--", "+trainer.pnp_override_probe=1")
+                    self.assertEqual(options["+trainer.pnp_override_probe"], "1")
+
+    def test_every_math_entry_prepares_the_same_training_subset(self):
+        for relative, arguments in (("scripts/deepscaler/pnp_deepscaler.sh", ()),
+                                    ("scripts/deepscaler/run_deepscaler_a1.sh", ()),
+                                    ("scripts/models/Qwen3.5-9B.sh", ("deepscaler",))):
+            with self.subTest(entry=relative):
+                options = self.launch(relative, arguments=arguments, DEEPSCALER_TRAIN_PATH="", DEEPSCALER_VAL_PATH="")
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                modules = [args[1] for args in calls if len(args) > 1 and args[0] == "-m"]
+                self.assertIn("recipes.deepscaler.clean_data", modules)
+                subset = next(args for args in calls if args[1:2] == ["recipes.deepscaler.prepare_training_subset"])
+                self.assertEqual(subset[subset.index("--samples") + 1], options["data.train_max_samples"])
+                self.assertEqual(subset[subset.index("--max-prompt-length") + 1], "2048")
+                self.assertEqual(options["data.train_files"], subset[subset.index("--output") + 1])
+                self.assertEqual(options["data.filter_overlong_prompts"], "True")
+
+    def test_every_policy_rollout_uses_thirty_percent_vllm_memory(self):
+        memory = "actor_rollout_ref.rollout.gpu_memory_utilization"
+        tensor_parallel = "actor_rollout_ref.rollout.tensor_model_parallel_size"
+        for launcher in ("deepscaler/pnp_deepscaler.sh", "deepscaler/run_deepscaler_a1.sh",
+                         "hotpotqa/pnp_hotpotqa.sh", "hotpotqa/run_a1.sh",
+                         "taco/pnp_taco.sh", "taco/run_a1_terminal.sh",
+                         "vision_r1/pnp_vision_r1.sh", "vision_r1/run_a1_terminal.sh"):
+            with self.subTest(launcher=launcher):
+                options = self.launch("scripts/" + launcher, TACO_A1_DATA_ROOT=str(self.root),
+                                      TACO_A1_MODEL_PATH=str(self.model), TACO_A1_OUTPUT_DIR=str(self.output))
+                self.assertEqual(float(options[memory]), 0.3)
+        # 9B bf16 weights do not fit in 0.30 x 48 GB with one vLLM shard per GPU.
+        for domain, expected_tp in (("deepscaler", "2"), ("hotpotqa", "2"), ("taco", "8")):
+            with self.subTest(model="Qwen3.5-9B", domain=domain):
+                options = self.launch("scripts/models/Qwen3.5-9B.sh", arguments=(domain,))
+                self.assertEqual(float(options[memory]), 0.3)
+                self.assertEqual(options[tensor_parallel], expected_tp)
 
     def test_deepscaler_model_profiles_keep_their_completion_budgets(self):
         for scale, expected_response in (("4b", "10240"), ("9b", "10240")):

@@ -11,7 +11,7 @@ Additional diagnostics:
 
 Usage:
   python finegrained_eval.py \
-    /nas/deepresearch/zsb/corhort/project/agenticrl/logs/.../eval_step200/0.jsonl
+    <run_dir>/eval_step200/0.jsonl
 """
 import sys
 import json

@@ -56,11 +56,3 @@ def contract_for_mode(reward_mode: str) -> LocalReasoningRewardContract:
     return BASE_CONTRACT if resolve_reward_mode(reward_mode) == REWARD_MODE_TERMINAL_ONLY else PRIMARY_CONTRACT
 
 
-def compose_reward(terminal_em: float, local_reward: float) -> float:
-    """Compose independent terminal and process signals without EM gating."""
-
-    if not 0.0 <= float(terminal_em) <= 1.0:
-        raise ValueError("terminal_em must be in [0, 1]")
-    if not 0.0 <= float(local_reward) <= 1.0:
-        raise ValueError("local_reward must be in [0, 1]")
-    return PRIMARY_CONTRACT.terminal_weight * float(terminal_em) + PRIMARY_CONTRACT.process_weight * float(local_reward)

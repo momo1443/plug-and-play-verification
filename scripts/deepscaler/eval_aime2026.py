@@ -69,7 +69,7 @@ def generate_math_rollouts(llm, tokenizer, sampling_params_factory, questions, *
             groups.setdefault(limit, []).append((index, prompt))
         next_active = []
         for limit, requests in groups.items():
-            params = sampling_params_factory(temperature=0, top_p=1.0, max_tokens=limit,
+            params = sampling_params_factory(temperature=0.6, top_p=1.0, max_tokens=limit,
                                             stop=["<|im_end|>"])
             outputs = llm.generate([prompt for _, prompt in requests], params)
             if len(outputs) != len(requests):

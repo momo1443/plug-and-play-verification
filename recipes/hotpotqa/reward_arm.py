@@ -56,16 +56,6 @@ def parse_reward_arm(value: Any) -> RewardArm:
         raise ValueError(f"Unsupported HotpotQA reward arm {value!r}; expected one of {supported}") from exc
 
 
-def resolve_reward_arm(value: Any | None, *, formal_a0: bool) -> RewardArm:
-    """Resolve the explicit arm while preserving the formal-A0 entrypoint."""
-
-    if formal_a0:
-        if value is not None and parse_reward_arm(value) is not RewardArm.A0:
-            raise ValueError("HOTPOTQA_FORMAL_A0=1 is only compatible with HOTPOTQA_REWARD_ARM=A0")
-        return RewardArm.A0
-    return parse_reward_arm(RewardArm.A1.value if value is None else value)
-
-
 def search_step_reward(
     arm: RewardArm,
     process_reward: float | None,
@@ -80,35 +70,3 @@ def search_step_reward(
     return training_reward_contract(arm).process_weight * reward
 
 
-def final_step_reward(arm: RewardArm, *, is_validation: bool) -> float | None:
-    """Return ``None`` when terminal EM must be computed, otherwise zero."""
-
-    if is_validation or training_reward_contract(arm).terminal_weight > 0.0:
-        return None
-    return 0.0
-
-
-def scale_terminal_reward(
-    arm: RewardArm,
-    terminal_reward: float,
-    *,
-    is_validation: bool,
-) -> float:
-    """Scale a computed terminal EM for training without changing validation EM."""
-
-    if is_validation:
-        return float(terminal_reward)
-    return training_reward_contract(arm).terminal_weight * float(terminal_reward)
-
-
-def final_step_response_mask(
-    arm: RewardArm,
-    response_length: int,
-    *,
-    is_validation: bool,
-) -> list[int] | None:
-    """Apply the frozen final-token loss mask; validation always scores all tokens."""
-
-    if not is_validation and training_reward_contract(arm).final_response_mask == 0:
-        return [0] * int(response_length)
-    return None

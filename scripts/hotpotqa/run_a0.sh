@@ -11,11 +11,10 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 VALIDATION_INTERFACE=certificate
 VALIDATION_ARM=A0
-export HOTPOTQA_FORMAL_A0=1
 export HOTPOTQA_FORMAL_EXPERIMENT=1
 export HOTPOTQA_REWARD_ARM=A0
 export HOTPOTQA_VALIDATION_INTERFACE VALIDATION_ARM
@@ -24,8 +23,6 @@ export HOTPOTQA_VALIDATION_INTERFACE VALIDATION_ARM
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export HYDRA_FULL_ERROR=1
 export VLLM_USE_V1=1
-export HOTPOTQA_ENABLE_THINKING=false
-export HOTPOTQA_FORCE_FIRST_SEARCH=false
 export HOTPOTQA_REQUIRE_SENTENCE_EVIDENCE=true
 export HOTPOTQA_EMBEDDING_PER_WORKER_GPU=0
 export HOTPOTQA_EMBEDDING_DEVICE=cpu
@@ -130,7 +127,7 @@ import pyarrow.parquet as pq
 
 from recipes.hotpotqa.evidence import EVIDENCE_SCHEMA_VERSION
 from recipes.hotpotqa_a9.protocol import A9_FINISH_PROTOCOL
-from recipes.hotpotqa.prepare_formal_rlvr_run import (
+from recipes.hotpotqa_a9.prepare_run import (
     _model_identity,
     _package_versions,
 )

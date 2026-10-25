@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 ARM="${VISION_R1_ARM:-A9}"
 case "$ARM" in
@@ -51,7 +51,7 @@ MAX_PROMPT_LENGTH="${VISION_R1_MAX_PROMPT_LENGTH:-8192}"
 MAX_RESPONSE_LENGTH="${VISION_R1_MAX_RESPONSE_LENGTH:-2048}"
 MAX_MODEL_LENGTH="${VISION_R1_MAX_MODEL_LENGTH:-12288}"
 MAX_NUM_SEQS="${VISION_R1_MAX_NUM_SEQS:-32}"
-VLLM_MEMORY_UTILIZATION="${VISION_R1_VLLM_MEMORY_UTILIZATION:-0.85}"
+VLLM_MEMORY_UTILIZATION="${VISION_R1_VLLM_MEMORY_UTILIZATION:-0.30}"
 
 IFS=',' read -r -a VISIBLE_GPUS <<<"$CUDA_VISIBLE_DEVICES"
 NUM_GPUS="${#VISIBLE_GPUS[@]}"
@@ -120,4 +120,4 @@ cd "$PROJECT_DIR"
     trainer.total_epochs="$TOTAL_EPOCHS" trainer.total_training_steps="$TOTAL_STEPS" \
     trainer.default_local_dir="$OUTPUT_DIR/checkpoints" trainer.rollout_data_file="$OUTPUT_DIR/rollouts.jsonl" \
     trainer.validation_data_dir="$OUTPUT_DIR/validation" trainer.log_val_generations=0 \
-    2>&1 | tee "$OUTPUT_DIR/train.log"
+    "$@" 2>&1 | tee "$OUTPUT_DIR/train.log"

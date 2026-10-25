@@ -8,7 +8,7 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$HERE/../../.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/nas/deepresearch/conda/envs/agenticrl/bin/python}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 
 export AGENT_R1_LLM_JUDGE_ENABLED=1
 export AGENT_R1_JUDGE_MODEL="${AGENT_R1_JUDGE_MODEL:-$WORKSPACE_DIR/models/Qwen3.5-9B}"
