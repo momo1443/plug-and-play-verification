@@ -3,4 +3,4 @@
   env_type: tool
   tools:
     - check_deepscaler_answer
-  tool_format: hermes
+  tool_format: qwen35

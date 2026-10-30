@@ -20,6 +20,9 @@ SYSTEM_PROMPT = (
     "You are an expert Python programmer. You will be given a problem "
     "specification and must return a correct Python program that passes all tests."
 )
+# Same decoding as the shared PNP evaluator (agent_r1.evaluation.pnp_protocol).
+SAMPLING = {"n": 1, "temperature": 0.6, "top_p": 1.0, "top_k": -1}
+SEED = 42
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,7 +158,7 @@ def main() -> None:
             for path in sorted(args.dataset_dir.glob("test*.jsonl"))
         },
         "model_path": str(args.model_path),
-        "generation": {"n": 1, "temperature": 0, "top_p": 1.0, "max_tokens": args.max_tokens, "enable_thinking": False},
+        "generation": {**SAMPLING, "seed": SEED, "max_tokens": args.max_tokens, "enable_thinking": False},
         "tensor_parallel_size": args.tensor_parallel_size,
         "executor": {"name": "bubblewrap", "timeout_seconds": args.timeout_seconds},
         "problem_count": len(problems),
@@ -179,11 +182,9 @@ def main() -> None:
         enforce_eager=True,
         disable_custom_all_reduce=True,
         trust_remote_code=True,
+        seed=SEED,
     )
-    outputs = llm.generate(
-        prompts,
-        SamplingParams(n=1, temperature=0, top_p=1.0, max_tokens=args.max_tokens),
-    )
+    outputs = llm.generate(prompts, SamplingParams(**SAMPLING, max_tokens=args.max_tokens))
     generation_seconds = time.monotonic() - started
     records = [
         {"problem": row, "output": output.outputs[0].text, "code": extract_code(output.outputs[0].text)}

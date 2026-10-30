@@ -104,7 +104,7 @@ pnp_paper_profile() {
             PAPER_RESPONSE_LENGTH=1024
             PAPER_MAX_STEPS=4 ;;
         taco) PAPER_MAX_STEPS=5 ;;
-        vision_r1) PAPER_MAX_STEPS=3 ;;
+        vision_r1) PAPER_MAX_STEPS=5 ;;
         *) echo "Unknown paper domain: $domain" >&2; return 2 ;;
     esac
     return 0

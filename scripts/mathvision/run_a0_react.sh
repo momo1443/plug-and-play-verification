@@ -41,8 +41,9 @@ run_one() {
     actor_rollout_ref.rollout.agent.agent_flow_config_path="$AGENT_DIR/recipes/mathvision/base.yaml" \
     actor_rollout_ref.rollout.agent.default_agent_flow=mathvision_react \
     actor_rollout_ref.rollout.agent.num_workers=4 \
-    actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=false \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0 actor_rollout_ref.rollout.val_kwargs.top_p=1 \
+    actor_rollout_ref.rollout.val_kwargs.n=1 actor_rollout_ref.rollout.val_kwargs.do_sample=true \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.6 actor_rollout_ref.rollout.val_kwargs.top_p=1 \
+    actor_rollout_ref.rollout.val_kwargs.top_k=-1 \
     critic.enable=false reward_model.enable=false \
     custom_reward_function.path="$AGENT_DIR/recipes/mathvision/reward_fn.py" \
     custom_reward_function.name=compute_score \

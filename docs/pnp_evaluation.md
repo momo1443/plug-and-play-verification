@@ -8,8 +8,15 @@ a trainer, launch Ray, or modify training runs. The generated
 
 ## Main protocol
 
-Every selected question receives one complete agent trajectory sampled at
-`temperature=0.6` (`top_p=1`, `top_k=-1`, `n=1`), bfloat16, and seed 42.
+Agent trajectories are sampled at `temperature=0.6` (`top_p=1`, `top_k=-1`),
+bfloat16, seed 42. AIME2026 and LiveCodeBench sample four complete trajectories per
+question, each with its own budget, and report avg@4, the mean accuracy (pass@1) over
+all trajectories; the summary also lists the four per-sample accuracies, their standard
+deviation and the standard error of avg@4, and pass@4. HotpotQA and MATH-Vision use one
+trajectory (avg@1).
+MATH-Vision lets the policy reason briefly before each tool call;
+`VISION_R1_ALLOW_REASONING=0` selects the tool-call-only ablation. The run manifest
+records the variant under `policy_prompt`, and it must match the checkpoint's training run.
 The agent retains its task's PNP prompts, tools, immutable artifacts, and submission
 protocol. Code and vision evaluation use the corresponding PNP flows rather than
 their historical A0 evaluators. Mathematics uses the training flow's bounded
@@ -26,7 +33,7 @@ errors abort the evaluation instead of publishing an incomplete accuracy.
 | AIME2026 | Integer accuracy | 5 | 10240 | 2048 | 2048 initial | 13312 |
 | HotpotQA validation | Answer EM; F1 auxiliary | 4 | 4096 | 1024 | 8192 each step | 12288 |
 | LiveCodeBench release_v6 | Pass@1 | 5 | 10240 | 2048 | 8192 each step | 12288 |
-| MATH-Vision | Answer accuracy | 3 | 6144 | 2048 | 8192 each step | 12288 |
+| MATH-Vision | Answer accuracy | 5 | 10240 | 2048 | 12288 each step | 16384 |
 
 Total output budgets count every token generated across the trajectory, including
 reasoning and tool-call syntax. Observations and visual tokens consume context,
@@ -100,7 +107,9 @@ Use `PNP_GRADER_PYTHON` for a custom grader environment. The training environmen
 is separate. Original upstream scripts, licenses, commits, and checksums are
 stored in `third_party/official_graders`; the adapters verify their checksums.
 Run manifests record the actual official grader revision and CPU dependency
-versions. The shared evaluation protocol is `pnp-agent-evaluation-v2`.
+versions. The shared evaluation protocol is `pnp-agent-evaluation-v3` (avg@k sampling
+and the five-step MATH-Vision budget); `v2` summaries are single-trajectory and are not
+comparable.
 
 LiveCodeBench requires a working `bwrap` sandbox; preflight checks a known correct
 program before GPU allocation. Public tests are exposed by the PNP testing tool.
@@ -123,7 +132,7 @@ entrypoint and its validation scorer use the same official rules.
 ## Deployment and artifacts
 
 The default `--gpus 0,1,2,3,4,5,6,7 --tensor-parallel-size 1` starts eight independent replicas on the eight-A40 node,
-each evaluating its assigned questions exactly once. `--tensor-parallel-size 2`
+each running every trajectory of its assigned questions. `--tensor-parallel-size 2`
 instead starts four replicas, each using two GPUs. The memory fraction defaults to
 0.3. Choose available GPUs explicitly when running alongside other experiments.
 

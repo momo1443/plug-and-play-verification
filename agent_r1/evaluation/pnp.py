@@ -50,6 +50,9 @@ def parser():
     result.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
     result.add_argument("--tensor-parallel-size", type=int, default=1)
     result.add_argument("--gpu-memory-utilization", type=float, default=0.3)
+    result.add_argument("--max-num-seqs", type=int, default=16,
+                        help="vLLM concurrent sequences for AIME2026's batched generation; the agent "
+                             "benchmarks submit one request at a time. Not part of the evaluation protocol")
     result.add_argument("--total-output-tokens", type=int)
     result.add_argument("--per-step-tokens", type=int)
     result.add_argument("--prompt-limit", type=int)
@@ -75,6 +78,14 @@ def resources_from_args(args):
     return {"corpus_dir": str(args.corpus_dir.resolve()),
             "evidence_sidecar": str((args.evidence_sidecar or args.corpus_dir / "hotpotqa_evidence_v1.sqlite3").resolve()),
             "embedding_model": args.embedding_model, "timeout_seconds": args.timeout_seconds}
+
+
+def policy_prompt_record(benchmark):
+    """Prompt variants selected by environment variables; workers inherit the same environment."""
+    if benchmark != "mathvision":
+        return {}
+    from recipes.vision_r1.prompts import allow_reasoning
+    return {"vision_r1_allow_reasoning": allow_reasoning()}
 
 
 def preflight(args):
@@ -125,13 +136,14 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
     from agent_r1.evaluation.pnp_math import generate_trajectories, selected_aime_integer
     from agent_r1.evaluation.answers import aime_integer, final_answer_record
     from recipes.deepscaler.trajectory_reward import verify_process
+    runs = [(task, sample) for task in tasks for sample in range(profile.trajectories_per_problem)]
     states = generate_trajectories(
-        engine, tokenizer, sampling_factory, [task.actor_inputs["problem"] for task in tasks],
+        engine, tokenizer, sampling_factory, [task.actor_inputs["problem"] for task, _ in runs],
         max_steps=profile.max_steps, total_tokens=profile.total_output_tokens,
         initial_limit=profile.prompt_limit, context_limit=profile.context_limit,
         per_step_tokens=profile.per_step_tokens, temperature=profile.temperature)
     records = []
-    for task, state in zip(tasks, states, strict=True):
+    for (task, sample), state in zip(runs, states, strict=True):
         integer = selected_aime_integer(state["selected_answer"])
         segments = []
         for step in state["steps"]:
@@ -140,7 +152,8 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
             segments.append((step["turn"], reasoning))
         verification = verify_process(segments, question=task.actor_inputs["problem"])
         records.append({
-            "question_id": task.question_id, "submitted_answer": state["selected_answer"],
+            "question_id": task.question_id, "sample_index": sample,
+            "submitted_answer": state["selected_answer"],
             "predicted_integer": integer, "terminal_eligible": integer is not None,
             "is_correct": integer is not None and integer == aime_integer(task.reference["answer"]),
             "termination_reason": state["termination_reason"], "policy_step_count": len(state["steps"]),
@@ -148,6 +161,13 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
             "verification": {"verified_process_reward": verification.process_reward,
                              "audit_completed": True, "audit": verification.audit}})
     return records
+
+
+def sampled_task_records(tasks, samples, run_one):
+    """Run each task `samples` times; every trajectory gets its own budget via `run_one`."""
+    for task in tasks:
+        for sample in range(samples):
+            yield task, sample, {**run_one(task), "sample_index": sample}
 
 
 def worker(args, tasks, profile):
@@ -168,7 +188,7 @@ def worker(args, tasks, profile):
                        dtype=profile.precision, max_model_len=profile.context_limit,
                        gpu_memory_utilization=args.gpu_memory_utilization,
                        enforce_eager=True, generation_config="vllm", seed=profile.seed,
-                       max_num_seqs=16, max_num_batched_tokens=profile.context_limit,
+                       max_num_seqs=args.max_num_seqs, max_num_batched_tokens=profile.context_limit,
                        trust_remote_code=True)
     if args.benchmark == "mathvision":
         engine_args["limit_mm_per_prompt"] = {"image": profile.max_steps}
@@ -183,14 +203,17 @@ def worker(args, tasks, profile):
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")
                 stream.flush()
         else:
-            for task in selected:
+            def run_one(task):
                 server = BudgetedServer(engine, SamplingParams, profile)
                 record = asyncio.run(generate_task(
                     args.benchmark, task, tokenizer, processor, server, profile, resources))
                 record.update(grade_record(args.benchmark, record, task.reference, args.timeout_seconds))
+                return record
+
+            for task, sample, record in sampled_task_records(selected, profile.trajectories_per_problem, run_one):
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")
                 stream.flush()
-                print(f"question={task.question_id} correct={record['is_correct']} "
+                print(f"question={task.question_id} sample={sample} correct={record['is_correct']} "
                       f"stop={record['termination_reason']} tokens={record['generated_output_tokens']}", flush=True)
 
 
@@ -207,13 +230,15 @@ def write_tables(path):
              "", chr(96) * 3 + "latex", r"% Requires \usepackage{booktabs}", ""]
     names = {"aime2026": "AIME2026", "hotpotqa": "HotpotQA",
              "livecodebench": "LiveCodeBench", "mathvision": "MATH-Vision"}
-    metrics = {"aime2026": "Integer accuracy", "hotpotqa": "Answer EM (F1 auxiliary)",
+    metrics = {"aime2026": "Integer accuracy", "hotpotqa": "Answer EM",
                "livecodebench": "Pass@1", "mathvision": "Answer accuracy"}
     for benchmark, profile in PROFILES.items():
         lines += [r"\begin{table}[!ht]", r"\centering", r"\begin{tabular}{@{}ll@{}}",
                   r"\toprule", r"\textbf{Parameter} & \textbf{Value} \\", r"\midrule"]
         rows = [("Sampling temperature", str(profile.temperature)), ("Top-$p$ / Top-$k$", "1.0 / -1"),
-                ("Trajectories per problem $n$", "1"), ("Evaluation metric", metrics[benchmark]),
+                ("Trajectories per problem $n$", str(profile.trajectories_per_problem)),
+                ("Evaluation metric", f"{metrics[benchmark]} (avg@{profile.trajectories_per_problem})"
+                 + (", F1 auxiliary" if benchmark == "hotpotqa" else "")),
                 ("Total completion budget", f"{profile.total_output_tokens} tokens"),
                 ("Per-step generation cap", f"{profile.per_step_tokens} tokens"),
                 ("Maximum interaction steps", str(profile.max_steps)),
@@ -248,8 +273,8 @@ def main(argv=None):
             command_parser.error(f"{name.replace('_', '-')} is required for evaluation")
     if args.dataset_revision.lower() in {"main", "master", "latest", "head"}:
         command_parser.error("--dataset-revision must identify a frozen snapshot")
-    if not 0 < args.gpu_memory_utilization < 1 or args.timeout_seconds <= 0:
-        command_parser.error("GPU memory utilization must be in (0,1), and timeout must be positive")
+    if not 0 < args.gpu_memory_utilization < 1 or args.timeout_seconds <= 0 or args.max_num_seqs < 1:
+        command_parser.error("GPU memory utilization must be in (0,1), and timeout and max-num-seqs must be positive")
     expected_split = "validation" if args.benchmark == "hotpotqa" else "test"
     args.split = args.split or expected_split
     if args.split != expected_split:
@@ -263,6 +288,8 @@ def main(argv=None):
         recorded = json.loads((args.output / "run_manifest.json").read_text())
         if dataset_hashes(args.dataset) != recorded["dataset"]["file_sha256"]:
             raise RuntimeError("Dataset changed after evaluation manifest creation")
+        if policy_prompt_record(args.benchmark) != recorded["policy_prompt"]:
+            raise RuntimeError("Policy prompt variant differs from the evaluation manifest")
     tasks, full_count = load_tasks(
         args.benchmark, args.dataset, split=args.split, version=args.dataset_version,
         max_problems=args.max_problems, load_images=args.worker_rank is not None,
@@ -311,8 +338,10 @@ def main(argv=None):
                             "selected_question_ids": [task.question_id for task in tasks],
                             "full_question_count": full_count, "smoke_test": len(tasks) < full_count},
                 "deployment": {"gpu_groups": groups, "tensor_parallel_size_per_replica": args.tensor_parallel_size,
-                               "gpu_memory_utilization": args.gpu_memory_utilization},
+                               "gpu_memory_utilization": args.gpu_memory_utilization,
+                               "max_num_seqs": args.max_num_seqs},
                 "resources": resources_from_args(args),
+                "policy_prompt": policy_prompt_record(args.benchmark),
                 "package_versions": package_versions,
                 "official_grader": official_grader,
                 "model_file_sha256": {str(path.relative_to(args.model)): next(iter(dataset_hashes(path).values()))
@@ -333,6 +362,7 @@ def main(argv=None):
                  "--split", args.split, "--output", str(args.output), "--gpus", args.gpus,
                  "--tensor-parallel-size", str(args.tensor_parallel_size),
                  "--gpu-memory-utilization", str(args.gpu_memory_utilization),
+                 "--max-num-seqs", str(args.max_num_seqs),
                  "--corpus-dir", str(args.corpus_dir), "--embedding-model", args.embedding_model,
                  "--timeout-seconds", str(args.timeout_seconds)]
     for name in ("total_output_tokens", "per_step_tokens", "prompt_limit", "context_limit",
@@ -360,7 +390,7 @@ def main(argv=None):
         for rank in range(len(groups)):
             records += [json.loads(line) for line in (args.output / f"replica_{rank}.jsonl").read_text().splitlines()]
         order = {task.question_id: index for index, task in enumerate(tasks)}
-        records.sort(key=lambda row: order[row["question_id"]])
+        records.sort(key=lambda row: (order[row["question_id"]], row.get("sample_index", 0)))
         summary = summarize_records(records, list(order), profile)
         summary.update(elapsed_seconds=time.monotonic() - started, smoke_test=len(tasks) < full_count)
         (args.output / "results.jsonl").write_text(

@@ -9,7 +9,6 @@ from typing import Any
 from uuid import uuid4
 
 from agent_r1.agent_flow.agent_flow import AgentFlowBase, AgentFlowOutput, AgentFlowStep, register
-from agent_r1.env.tool_format import ToolFormatWrapper
 from agent_r1.verifier import (
     VerificationResult,
     apply_composed_reward,
@@ -19,12 +18,13 @@ from agent_r1.evaluation.consistency import consistency_record
 from recipes.llm_judge.scoring import (
     ProcessStep, image_data_url, judge_reward_info, question_from_raw_prompt, verify_process_steps,
 )
+from recipes.taco_a9.protocol import parse_tool_call
 from recipes.vision_r1.artifacts import VisualArtifact
 from recipes.vision_r1.prompts import (
     FINAL_TURN_PROMPT,
     INSPECT_OR_SUBMIT_TOOLS,
     SUBMIT_ONLY_TOOLS,
-    SYSTEM_PROMPT,
+    system_prompt_template,
 )
 from recipes.vision_r1.reward_contract import outcome_reward, reward_schedule
 from recipes.vision_r1.verifier import verify_process
@@ -32,18 +32,13 @@ from verl.utils.profiler import simple_timer
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
-_HERMES_TOOL_FORMAT = ToolFormatWrapper.from_name("hermes")
 
 
+# Same parser as the TACO flow and the evaluator's submission selection: accepts JSON tool
+# calls and Qwen3.5's native XML form (<function=...><parameter=...>).
 def _one_tool_call(text: str) -> tuple[str | None, dict[str, Any]]:
-    _, calls = _HERMES_TOOL_FORMAT.parse_response(text)
-    if len(calls) != 1:
-        return None, {}
-    name = calls[0].name
-    arguments = calls[0].arguments
-    if not isinstance(name, str) or not isinstance(arguments, dict):
-        return None, {}
-    return name, arguments
+    call = parse_tool_call(text)
+    return call.name, call.arguments
 
 
 def _ground_truth(kwargs: Mapping[str, Any]) -> Any:
@@ -83,7 +78,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
         *args,
         reward_mode: str,
         terminal_warmup_steps: int = 50,
-        max_steps: int = 3,
+        max_steps: int = 5,
         **kwargs,
     ) -> None:
         self.judge_server = kwargs.pop("shared_judge_server", None)
@@ -112,7 +107,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
         messages = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT.format(
+                "content": system_prompt_template().format(
                     root_artifact_id=root.artifact_id,
                     width=root.width,
                     height=root.height,

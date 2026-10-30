@@ -37,6 +37,17 @@ pnp_model_overrides "$MODEL_PATH"
 pnp_optimizer_overrides "$MODEL_PATH"
 pnp_paper_profile vision_r1 "$MODEL_PATH"
 [[ -f "$MODEL_PATH/config.json" ]] || { echo "Missing model config: $MODEL_PATH/config.json" >&2; exit 2; }
+# The agent flow config reads both values; prepare_run records them in the manifest.
+export VISION_R1_MAX_STEPS="${VISION_R1_MAX_STEPS:-$PAPER_MAX_STEPS}"
+if ! [[ "$VISION_R1_MAX_STEPS" =~ ^[1-9][0-9]*$ ]] || (( VISION_R1_MAX_STEPS < 2 )); then
+    echo "VISION_R1_MAX_STEPS must be an integer of at least 2" >&2
+    exit 2
+fi
+export VISION_R1_ALLOW_REASONING="${VISION_R1_ALLOW_REASONING:-1}"
+[[ "$VISION_R1_ALLOW_REASONING" == 0 || "$VISION_R1_ALLOW_REASONING" == 1 ]] || {
+    echo "VISION_R1_ALLOW_REASONING must be 0 or 1" >&2; exit 2; }
+# One root image plus at most one crop per non-final turn.
+MAX_IMAGES_PER_PROMPT="$VISION_R1_MAX_STEPS"
 TRAIN_BATCH_SIZE="${VISION_R1_TRAIN_BATCH_SIZE:-$PAPER_BATCH_SIZE}"
 ROLLOUT_N="${VISION_R1_ROLLOUT_N:-4}"
 TOTAL_STEPS="${VISION_R1_TOTAL_TRAINING_STEPS:-$PAPER_TRAIN_STEPS}"
@@ -47,9 +58,9 @@ export VISION_R1_TERMINAL_WARMUP_STEPS="$WARMUP_STEPS"
 SAVE_FREQ="${VISION_R1_SAVE_FREQ:-50}"
 SEED="${VISION_R1_SEED:-42}"
 TP_SIZE="${VISION_R1_TENSOR_PARALLEL_SIZE:-8}"
-MAX_PROMPT_LENGTH="${VISION_R1_MAX_PROMPT_LENGTH:-8192}"
+MAX_PROMPT_LENGTH="${VISION_R1_MAX_PROMPT_LENGTH:-12288}"
 MAX_RESPONSE_LENGTH="${VISION_R1_MAX_RESPONSE_LENGTH:-2048}"
-MAX_MODEL_LENGTH="${VISION_R1_MAX_MODEL_LENGTH:-12288}"
+MAX_MODEL_LENGTH="${VISION_R1_MAX_MODEL_LENGTH:-16384}"
 MAX_NUM_SEQS="${VISION_R1_MAX_NUM_SEQS:-32}"
 VLLM_MEMORY_UTILIZATION="${VISION_R1_VLLM_MEMORY_UTILIZATION:-0.30}"
 
@@ -74,7 +85,7 @@ cd "$PROJECT_DIR"
     --train-max-samples "$TRAIN_MAX_SAMPLES" --train-batch-size "$TRAIN_BATCH_SIZE" \
     --total-training-steps "$TOTAL_STEPS" --rollout-n "$ROLLOUT_N" \
     --max-prompt-length "$MAX_PROMPT_LENGTH" --max-response-length "$MAX_RESPONSE_LENGTH" \
-    --terminal-warmup-steps "$WARMUP_STEPS" --seed "$SEED"
+    --terminal-warmup-steps "$WARMUP_STEPS" --seed "$SEED" --max-steps "$VISION_R1_MAX_STEPS"
 "$PYTHON_BIN" -m "$AGENT_R1_TRAINER_MODULE" \
     "${AGENT_R1_ALGORITHM_ARGS[@]}" \
     algorithm.gamma=1.0 algorithm.use_kl_in_reward=false \
@@ -102,7 +113,7 @@ cd "$PROJECT_DIR"
     actor_rollout_ref.rollout.max_num_batched_tokens="$MAX_MODEL_LENGTH" \
     actor_rollout_ref.rollout.max_num_seqs="$MAX_NUM_SEQS" \
     +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0 \
-    +actor_rollout_ref.rollout.engine_kwargs.vllm.limit_mm_per_prompt.image=3 \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.limit_mm_per_prompt.image="$MAX_IMAGES_PER_PROMPT" \
     actor_rollout_ref.rollout.multi_turn.enable=true actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.multi_turn.max_parallel_calls=1 \
     actor_rollout_ref.rollout.agent.agent_flow_config_path="$PROJECT_DIR/recipes/vision_r1/pnp_vision_r1.yaml" \

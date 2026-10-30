@@ -135,7 +135,11 @@ class HermesFormatWrapper(ToolFormatWrapper):
 
 @ToolFormatWrapper.register("qwen35")
 class Qwen35FormatWrapper(ToolFormatWrapper):
-    """Qwen3.5's native function/parameter XML tool-call format."""
+    """Qwen3.5's native function/parameter XML tool-call format.
+
+    A Hermes JSON body inside ``<tool_call>`` is also accepted, matching the PNP
+    flows' parser, so neither form Qwen3.5 emits is silently dropped.
+    """
 
     _TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
     _FUNCTION_RE = re.compile(r"<function=([^>\n]+)>(.*?)</function>", re.DOTALL)
@@ -151,6 +155,20 @@ class Qwen35FormatWrapper(ToolFormatWrapper):
                 pass
         return value
 
+    @staticmethod
+    def _json_call(tool_block: str) -> ToolCallAction | None:
+        try:
+            payload = json.loads(tool_block)
+            arguments = payload["arguments"]
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.strip() or not isinstance(arguments, dict):
+            return None
+        return ToolCallAction(name=name.strip(), arguments=arguments)
+
     def parse_response(self, llm_response: str) -> tuple[str, list[ToolCallAction]]:
         if "<tool_call>" not in llm_response or "</tool_call>" not in llm_response:
             return llm_response, []
@@ -159,7 +177,11 @@ class Qwen35FormatWrapper(ToolFormatWrapper):
         for tool_block in self._TOOL_CALL_RE.findall(llm_response):
             function_match = self._FUNCTION_RE.fullmatch(tool_block.strip())
             if function_match is None:
-                logger.error("Failed to decode Qwen3.5 tool call: malformed function block")
+                json_call = self._json_call(tool_block)
+                if json_call is None:
+                    logger.error("Failed to decode Qwen3.5 tool call: malformed function block")
+                else:
+                    function_calls.append(json_call)
                 continue
             name = function_match.group(1).strip()
             function_body = function_match.group(2)
