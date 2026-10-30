@@ -29,18 +29,18 @@ Scores are percentages. Both the Qwen3.5-4B and Qwen3.5-9B tables include update
 
 | Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 50.00 | 46.78 | 40.47 | 75.72 | 53.24 |
-| GRPO | 52.50 | 57.73 | 47.96 | 79.80 | 59.50 |
-| GRPO + LLM-as-a-judge | 53.33 | 58.28 | 48.72 | **82.01** | 60.59 |
-| **Ours (plug-and-play verifier)** | **55.83** | **60.18** | **49.57** | 81.51 | **61.77** |
+| ReAct | 50.00 | 46.78 | 40.47 | 30.13 | 41.85 |
+| GRPO | 52.50 | 57.73 | 47.96 | 33.22 | 47.85 |
+| GRPO + LLM-as-a-judge | 53.33 | 58.28 | 48.72 | **35.20** | 48.88 |
+| **Ours (plug-and-play verifier)** | **55.83** | **60.18** | **49.57** | 34.54 | **50.03** |
 
 ### Qwen3.5-9B
 
 | Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 53.33 | 52.56 | 49.00 | 79.47 | 58.59 |
-| GRPO | 56.67 | 63.20 | 56.59 | 83.19 | 64.91 |
-| **Ours (plug-and-play verifier)** | **58.33** | **66.67** | **58.48** | **84.80** | **67.07** |
+| ReAct | 53.33 | 52.56 | 49.00 | 36.18 | 47.77 |
+| GRPO | 56.67 | 63.20 | 56.59 | 37.01 | 53.37 |
+| **Ours (plug-and-play verifier)** | **58.33** | **66.67** | **58.48** | **38.16** | **55.41** |
 
 
 ### Training dynamics
