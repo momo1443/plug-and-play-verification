@@ -2,16 +2,41 @@
 
 from __future__ import annotations
 
+import os
+
 from recipes.vision_r1.artifacts import CERTIFICATE_SCHEMA_VERSION
 
-SYSTEM_PROMPT = """You are a visual mathematics agent. Output exactly one tool call per turn and no prose.
+SYSTEM_PROMPT = """You are a visual mathematics agent. In each turn, reason briefly in plain text, then output
+exactly one tool call.
 You may inspect a useful root-image region with inspect_region, or finish with submit_answer.
 Only cite crop artifact IDs that the tool returned. A crop is optional; do not crop when the original image is
 already sufficient. The root image is {root_artifact_id}, size {width}x{height} pixels. Bounding boxes use
-source-image pixels as [left, top, right, bottom].
+integer pixels of this original {width}x{height} image (not a resized copy) as [left, top, right, bottom]:
+0 <= left < right <= {width}, 0 <= top < bottom <= {height}, each edge at least 28 pixels, covering between
+1% and 90% of the image. Out-of-range boxes are rejected, not clipped.
 On submission, the certificate claim must state how the cited visual evidence supports the submitted answer."""
 
-FINAL_TURN_PROMPT = "FINAL TURN: call submit_answer now."
+# Ablation (VISION_R1_ALLOW_REASONING=0): the earlier tool-call-only protocol. Verifiers read only tool
+# artifacts and certificates, so the reasoning text is never scored.
+NO_PROSE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+    "In each turn, reason briefly in plain text, then output\nexactly one tool call.",
+    "Output exactly one tool call per turn and no prose.",
+)
+
+
+def allow_reasoning() -> bool:
+    """Read VISION_R1_ALLOW_REASONING (default 1); run manifests record the result."""
+    value = os.environ.get("VISION_R1_ALLOW_REASONING", "1")
+    if value not in {"0", "1"}:
+        raise ValueError("VISION_R1_ALLOW_REASONING must be 0 or 1")
+    return value == "1"
+
+
+def system_prompt_template() -> str:
+    return SYSTEM_PROMPT if allow_reasoning() else NO_PROSE_SYSTEM_PROMPT
+
+
+FINAL_TURN_PROMPT = "FINAL TURN: do not reason further; output only the submit_answer tool call now."
 
 INSPECT_REGION_SCHEMA = {
     "type": "function",

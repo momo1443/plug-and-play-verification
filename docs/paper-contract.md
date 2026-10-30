@@ -19,7 +19,7 @@ GPU on the same eight-GPU node.
 | DeepScaleR | 20 | 8 | 2048 initial; 13312 history | 10240 total per trajectory (2048 per turn) | 5 |
 | HotpotQA | 20 | 8 | 8192 | 1024 | 4 |
 | TACO | 20 | 8 | 8192 | 2048 | 5 |
-| Vision-R1 | 20 | 8 | 8192 | 2048 | 3 |
+| Vision-R1 | 20 | 8 | 12288 | 2048 | 5 |
 
 9B uses LoRA rank/alpha 64 and the seven projection modules listed in Appendix C; 4B uses full fine-tuning. DeepScaleR permits up to five reasoning generations by default (`DEEPSCALER_MAX_STEPS`), with a shared total token budget and per-turn cap `ceil(total / max_steps)`. A reference-independent extracted final answer ends the trajectory; incomplete trajectories retain their steps/masks and independently verified process credits, with zero outcome reward. Equation/judge verification occurs retrospectively and credits remain on their source turns. No correctness or verification feedback enters model context. Set `DEEPSCALER_MAX_STEPS=1` for an optional single-generation setting. Appendices B and C describe the five-generation mathematics protocol used for the reported results. The answer-checking ToolEnv remains a separate optional protocol.
 

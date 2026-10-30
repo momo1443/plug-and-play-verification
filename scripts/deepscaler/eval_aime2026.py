@@ -7,7 +7,7 @@ the submitted final response is scored; the reference is never model feedback.
 Usage:
     CUDA_VISIBLE_DEVICES=2 python eval_aime2026.py
 
-Computes exact-match accuracy on AIME 2026 (I+II, 30 problems) using greedy decoding.
+Computes exact-match accuracy on AIME 2026 (I+II, 30 problems) sampling at temperature 0.6.
 """
 
 import json

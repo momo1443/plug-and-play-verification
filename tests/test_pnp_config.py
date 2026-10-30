@@ -315,6 +315,25 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
             self.assertEqual(options["trainer.total_training_steps"], "500")
             self.assertEqual(options["data.train_max_samples"], "10000")
 
+    def test_vision_image_limit_follows_turn_count(self):
+        # One root image plus one crop per non-final turn must fit vLLM's per-prompt image limit.
+        image_limit = "+actor_rollout_ref.rollout.engine_kwargs.vllm.limit_mm_per_prompt.image"
+        for override, expected in ((None, "5"), ("4", "4")):
+            with self.subTest(override=override):
+                extra = {} if override is None else {"VISION_R1_MAX_STEPS": override}
+                options = self.launch("scripts/vision_r1/pnp_vision_r1.sh", **extra)
+                self.assertEqual(options[image_limit], expected)
+                prepare = [args for args in map(json.loads, self.calls.read_text().splitlines())
+                           if args[:2] == ["-m", "recipes.vision_r1.prepare_run"]][-1]
+                self.assertEqual(prepare[prepare.index("--max-steps") + 1], expected)
+        for name, value in (("VISION_R1_MAX_STEPS", "1"), ("VISION_R1_MAX_STEPS", "x"),
+                            ("VISION_R1_ALLOW_REASONING", "true")):
+            with self.subTest(**{name: value}):
+                result = subprocess.run(["bash", str(PROJECT_ROOT / "scripts/vision_r1/pnp_vision_r1.sh")],
+                                        env=dict(self.env, **{name: value}), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(name, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

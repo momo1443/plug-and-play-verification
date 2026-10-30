@@ -4,5 +4,5 @@
   # Held-out answers must not be available as an interactive checking tool.
   tools: []
   tools_kwargs: {}
-  tool_format: hermes
+  tool_format: qwen35
   max_steps: 4

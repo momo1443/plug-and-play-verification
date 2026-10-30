@@ -107,8 +107,10 @@ def request_completion(
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": 0,
+        # Same decoding as the shared PNP evaluator (agent_r1.evaluation.pnp_protocol).
+        "temperature": 0.6,
         "top_p": 1,
+        "top_k": -1,
         "max_tokens": max_tokens,
     }
     if use_tools:

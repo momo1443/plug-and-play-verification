@@ -82,19 +82,19 @@ def create_flow(benchmark, task, tokenizer, processor, server, profile, resource
     if benchmark == "hotpotqa":
         from recipes.hotpotqa_a9.agent_flow import HotpotQACertificateAgentFlow
         cls = HotpotQACertificateAgentFlow
-        options = dict(max_steps=4, require_sentence_evidence=True, embedding_devices="cpu",
+        options = dict(max_steps=profile.max_steps, require_sentence_evidence=True, embedding_devices="cpu",
                        corpus_data_dir=resources["corpus_dir"], evidence_sidecar_path=resources["evidence_sidecar"],
                        embedding_model_name=resources["embedding_model"])
     elif benchmark == "livecodebench":
         from recipes.taco_a9.agent_flow import TacoA9CodeAgentFlow
         from agent_r1.evaluation.pnp_code import PublicTaskStore, LiveCodeExecutor
         cls = TacoA9CodeAgentFlow
-        options = dict(max_steps=5, task_store=PublicTaskStore(task),
+        options = dict(max_steps=profile.max_steps, task_store=PublicTaskStore(task),
                        executor=LiveCodeExecutor(timeout_seconds=resources["timeout_seconds"]))
     else:
         from recipes.vision_r1.agent_flow import VisionR1VisualAgentFlow
         cls = VisionR1VisualAgentFlow
-        options = dict(max_steps=3, reward_mode="uniform_visual_certificate")
+        options = dict(max_steps=profile.max_steps, reward_mode="uniform_visual_certificate")
     flow = type("PnpEvaluation" + cls.__name__, (EvaluationRuntime, cls), {})(**common, **options)
     flow.evaluation_steps = []
     return flow

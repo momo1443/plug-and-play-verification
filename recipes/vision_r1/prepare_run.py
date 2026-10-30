@@ -8,6 +8,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 import pyarrow.parquet as pq
 
+from recipes.vision_r1.prompts import allow_reasoning
+
 
 def file_identity(path):
     path = Path(path).resolve()
@@ -23,7 +25,7 @@ def main():
     for name in ("project-dir", "output-dir", "model-path", "train-path", "validation-path", "arm"):
         parser.add_argument("--" + name, required=True)
     for name in ("train-max-samples", "train-batch-size", "total-training-steps", "rollout-n",
-                 "max-prompt-length", "max-response-length", "terminal-warmup-steps", "seed"):
+                 "max-prompt-length", "max-response-length", "terminal-warmup-steps", "seed", "max-steps"):
         parser.add_argument("--" + name, type=int, required=True)
     args = parser.parse_args()
     rows = pq.ParquetFile(args.train_path).metadata.num_rows
@@ -34,6 +36,7 @@ def main():
         "recipes/vision_r1/agent_flow.py",
         "recipes/vision_r1/verifier.py",
         "recipes/vision_r1/artifacts.py",
+        "recipes/vision_r1/prompts.py",
         "recipes/vision_r1/pnp_vision_r1.yaml",
         "recipes/vision_r1/prepare_data.py",
         "recipes/vision_r1/prepare_run.py",
@@ -58,7 +61,8 @@ def main():
         "evaluation": {"training_validation": "Vision-R1 test split", "paper_benchmark": "MATH-Vision; separate evaluation required"},
     }
     manifest["training"].update({"algorithm": os.environ.get("AGENT_R1_OPTIMIZER", "grpo").upper(),
-        "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "max_agent_steps": 3,
+        "sampled_prompt_count": args.train_batch_size * args.total_training_steps, "max_agent_steps": args.max_steps,
+        "allow_reasoning": allow_reasoning(),
         "actor_lr": 1e-6, "reference_kl_coefficient": 0.001, "terminal_gate": "valid_final_submission",
         "process_requires_terminal_submission": False,
         "process_denominator": "cited required crops; without a readable certificate, recorded crops plus missing declared evidence slots and a zero certificate slot only if submission or certificate attempted; untriggered checks excluded",

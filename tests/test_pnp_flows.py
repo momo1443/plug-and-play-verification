@@ -144,7 +144,7 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
                     image_sha256=visual_artifacts.image_sha256).verify_process,
                 outcome_reward=vision_contract.outcome_reward,
                 reward_schedule=vision_contract.reward_schedule,
-                SYSTEM_PROMPT=vision_prompts.SYSTEM_PROMPT,
+                system_prompt_template=vision_prompts.system_prompt_template,
                 FINAL_TURN_PROMPT=vision_prompts.FINAL_TURN_PROMPT,
                 INSPECT_OR_SUBMIT_TOOLS=vision_prompts.INSPECT_OR_SUBMIT_TOOLS,
                 SUBMIT_ONLY_TOOLS=vision_prompts.SUBMIT_ONLY_TOOLS,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 
 import pandas as pd
@@ -203,6 +205,57 @@ class VisionR1ContractTest(unittest.TestCase):
         self.assertEqual(row["extra_info"]["question_id"], "vision-r1-rl:train:3")
         self.assertEqual(row["images"][0]["max_pixels"], MAX_IMAGE_PIXELS)
         self.assertEqual(row["reward_model"]["ground_truth"], "11")
+
+
+class VisionToolCallFormatTest(unittest.TestCase):
+    def test_qwen35_native_xml_tool_calls_are_parsed(self):
+        from recipes.vision_r1.agent_flow import _one_tool_call
+        xml = ("<tool_call>\n<function=inspect_region>\n<parameter=source_artifact_id>\nimage:root:abc\n</parameter>\n"
+               "<parameter=bbox_2d>\n[1, 2, 30, 40]\n</parameter>\n<parameter=purpose>\nread digits\n</parameter>\n"
+               "</function>\n</tool_call>")
+        self.assertEqual(_one_tool_call(xml),
+                         ("inspect_region", {"source_artifact_id": "image:root:abc", "bbox_2d": [1, 2, 30, 40],
+                                             "purpose": "read digits"}))
+        json_call = '<tool_call>{"name": "submit_answer", "arguments": {"answer": "7"}}</tool_call>'
+        self.assertEqual(_one_tool_call(json_call), ("submit_answer", {"answer": "7"}))
+        self.assertEqual(_one_tool_call(xml + json_call), (None, {}))
+
+    def test_only_vision_allows_reasoning_before_its_tool_call(self):
+        from recipes.hotpotqa_a9.prompts import A9_SYSTEM_PROMPT
+        from recipes.taco_a9.prompts import SYSTEM_PROMPT as TACO_SYSTEM_PROMPT
+        from recipes.vision_r1.prompts import FINAL_TURN_PROMPT, NO_PROSE_SYSTEM_PROMPT, SYSTEM_PROMPT
+        no_prose = "Output exactly one tool call per turn and no prose."
+        for prompt in (A9_SYSTEM_PROMPT, TACO_SYSTEM_PROMPT, NO_PROSE_SYSTEM_PROMPT):
+            self.assertIn(no_prose, prompt)
+        self.assertNotIn(no_prose, SYSTEM_PROMPT)
+        self.assertIn("reason briefly in plain text, then output", SYSTEM_PROMPT)
+        self.assertEqual(SYSTEM_PROMPT.split("\nYou may inspect")[1], NO_PROSE_SYSTEM_PROMPT.split("\nYou may inspect")[1])
+        self.assertIn("do not reason", FINAL_TURN_PROMPT)
+        self.assertIn("not a resized copy", SYSTEM_PROMPT)
+
+    def test_reasoning_flag_selects_the_system_prompt_and_rejects_other_values(self):
+        from recipes.vision_r1.prompts import NO_PROSE_SYSTEM_PROMPT, SYSTEM_PROMPT, system_prompt_template
+        with patch.dict(os.environ):
+            os.environ.pop("VISION_R1_ALLOW_REASONING", None)
+            self.assertIs(system_prompt_template(), SYSTEM_PROMPT)
+        for value, expected in (("1", SYSTEM_PROMPT), ("0", NO_PROSE_SYSTEM_PROMPT)):
+            with self.subTest(value=value), patch.dict(os.environ, {"VISION_R1_ALLOW_REASONING": value}):
+                self.assertIs(system_prompt_template(), expected)
+        with patch.dict(os.environ, {"VISION_R1_ALLOW_REASONING": "false"}), self.assertRaises(ValueError):
+            system_prompt_template()
+
+    def test_qwen35_tool_env_format_also_accepts_json_bodies(self):
+        from agent_r1.env.tool_format import ToolFormatWrapper
+        wrapper = ToolFormatWrapper.from_name("qwen35")
+        xml = "<tool_call>\n<function=check>\n<parameter=answer>\n7\n</parameter>\n</function>\n</tool_call>"
+        json_call = '<tool_call>{"name": "check", "arguments": {"answer": "7"}}</tool_call>'
+        string_arguments = '<tool_call>{"name": "check", "arguments": "{\\"answer\\": \\"7\\"}"}</tool_call>'
+        for text in (xml, json_call, string_arguments):
+            _, calls = wrapper.parse_response(text)
+            self.assertEqual([(call.name, call.arguments) for call in calls], [("check", {"answer": "7"})])
+        for malformed in ("<tool_call>not json</tool_call>", '<tool_call>{"name": "check"}</tool_call>',
+                          '<tool_call>["check"]</tool_call>'):
+            self.assertEqual(wrapper.parse_response(malformed)[1], [])
 
 
 if __name__ == "__main__":

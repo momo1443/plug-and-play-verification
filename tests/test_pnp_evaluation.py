@@ -15,7 +15,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from agent_r1.evaluation.pnp import gpu_groups, grade_record, math_records, preflight, write_tables
+from agent_r1.evaluation.pnp import (gpu_groups, grade_record, math_records, preflight, sampled_task_records,
+                                     write_tables)
 from agent_r1.evaluation.pnp_datasets import EvaluationTask, load_tasks
 from agent_r1.evaluation.pnp_protocol import (
     PROFILES, EvaluationStop, TrajectoryBudget, mathvision_score, qa_scores, summarize_records,
@@ -28,10 +29,13 @@ from test_aime_agent_eval import CharacterTokenizer, ScriptedEngine
 from pnp_test_utils import load_source, vision_contract, vision_prompts, visual_artifacts, tool_format, call
 from recipes.vision_r1.verifier import verify_process as verify_vision_process
 
+# Single-trajectory AIME profile for tests that script exactly one generation per call.
+SINGLE_AIME = replace(PROFILES["aime2026"], trajectories_per_problem=1)
+
 
 class PnpEvaluationTest(unittest.TestCase):
     def test_common_decoding_and_task_training_interfaces(self):
-        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 3])
+        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 5])
         for profile in PROFILES.values():
             self.assertEqual(profile.sampling()["n"], 1)
             self.assertEqual((profile.top_p, profile.top_k), (1.0, -1))
@@ -41,10 +45,18 @@ class PnpEvaluationTest(unittest.TestCase):
                 replace(profile, temperature=-0.1)
         self.assertEqual({name: p.temperature for name, p in PROFILES.items()},
                          {"aime2026": 0.6, "hotpotqa": 0.6, "livecodebench": 0.6, "mathvision": 0.6})
-        self.assertEqual(PROFILES["mathvision"].total_output_tokens, 6144)
+        vision = PROFILES["mathvision"]
+        self.assertEqual((vision.total_output_tokens, vision.per_step_tokens, vision.prompt_limit,
+                          vision.context_limit), (10240, 2048, 12288, 16384))
         aime = PROFILES["aime2026"]
         self.assertEqual((aime.total_output_tokens, aime.per_step_tokens, aime.context_limit),
                          (10240, 2048, 13312))
+        self.assertEqual({name: p.trajectories_per_problem for name, p in PROFILES.items()},
+                         {"aime2026": 4, "hotpotqa": 1, "livecodebench": 4, "mathvision": 1})
+        with self.assertRaises(ValueError):
+            replace(aime, temperature=0.0)
+        with self.assertRaises(ValueError):
+            replace(PROFILES["livecodebench"], temperature=0.0)
 
     def test_budget_is_cumulative_and_keeps_observations_out_of_output_count(self):
         budget = TrajectoryBudget(replace(PROFILES["hotpotqa"], total_output_tokens=5, per_step_tokens=3))
@@ -54,7 +66,7 @@ class PnpEvaluationTest(unittest.TestCase):
         with self.assertRaisesRegex(EvaluationStop, "token_budget"):
             budget.next_cap(1)
         with self.assertRaisesRegex(EvaluationStop, "prompt_limit"):
-            TrajectoryBudget(PROFILES["mathvision"]).next_cap(8193)
+            TrajectoryBudget(PROFILES["mathvision"]).next_cap(PROFILES["mathvision"].prompt_limit + 1)
 
     def test_inference_budget_violations_are_errors_not_incorrect_answers(self):
         with self.assertRaises(RuntimeError):
@@ -65,12 +77,69 @@ class PnpEvaluationTest(unittest.TestCase):
                  "termination_reason": reason, "generated_output_tokens": 3,
                  "verified_process_reward": 1000}
                 for i, reason in enumerate(("final_submission", "token_budget", "max_steps", "empty_generation"))]
-        result = summarize_records(rows, ["0", "1", "2", "3"], PROFILES["aime2026"])
+        result = summarize_records(rows, ["0", "1", "2", "3"], SINGLE_AIME)
         self.assertEqual(result["accuracy"], 0.25)
         self.assertEqual(result["missing_or_invalid_submissions"], 3)
         for invalid in (rows[:-1], rows + rows[:1]):
             with self.assertRaises(ValueError):
-                summarize_records(invalid, ["0", "1", "2", "3"], PROFILES["aime2026"])
+                summarize_records(invalid, ["0", "1", "2", "3"], SINGLE_AIME)
+
+    def test_repeated_samples_report_avg_at_k_spread_and_pass_at_k(self):
+        outcomes = {"0": [True, True, False, True], "1": [False, False, False, True], "2": [False] * 4}
+        rows = [{"question_id": qid, "sample_index": s, "terminal_eligible": ok, "is_correct": ok,
+                 "termination_reason": "final_answer", "generated_output_tokens": 10}
+                for qid, values in outcomes.items() for s, ok in enumerate(values)]
+        four = replace(PROFILES["aime2026"], trajectories_per_problem=4)
+        result = summarize_records(rows, list(outcomes), four)
+        self.assertEqual((result["aggregation"], result["total"], result["total_trajectories"]), ("avg@4", 3, 12))
+        self.assertEqual(result["accuracy"], 4 / 12)
+        self.assertEqual(result["correct"], 4)
+        self.assertEqual(result["per_sample_accuracy"], [1 / 3, 1 / 3, 0.0, 2 / 3])
+        self.assertEqual(result["pass_at_4"], 2 / 3)
+        # Per-sample accuracies [1/3, 1/3, 0, 2/3]: squared deviations sum to 2/9, over k-1=3 -> 2/27.
+        self.assertAlmostEqual(result["per_sample_accuracy_std"], (2 / 27) ** 0.5)
+        self.assertAlmostEqual(result["accuracy_standard_error"], (2 / 27) ** 0.5 / 2)
+        for invalid in (rows[:-1], rows + rows[:1], [dict(row, sample_index=0) for row in rows]):
+            with self.assertRaises(ValueError):
+                summarize_records(invalid, list(outcomes), four)
+
+    def test_aime_samples_four_trajectories_per_problem_in_one_batch(self):
+        task = EvaluationTask("q1", {"problem": "Compute 1+1."}, {"answer": "2"})
+        class BatchEngine:
+            calls = []
+            def generate(self, inputs, params, **kwargs):
+                self.calls.append(len(inputs))
+                text = "2}" if params.max_tokens <= 64 else "1+1=2."
+                return [SimpleNamespace(outputs=[SimpleNamespace(token_ids=[ord(c) for c in text])])
+                        for _ in inputs]
+        engine = BatchEngine()
+        records = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])
+        self.assertEqual([row["sample_index"] for row in records], list(range(4)))
+        self.assertEqual({row["question_id"] for row in records}, {"q1"})
+        self.assertEqual(engine.calls[0], 4)
+        self.assertTrue(all(row["is_correct"] for row in records))
+
+    def test_manifest_records_the_vision_prompt_variant(self):
+        from agent_r1.evaluation.pnp import policy_prompt_record
+        self.assertEqual(policy_prompt_record("aime2026"), {})
+        for value, expected in (("1", True), ("0", False)):
+            with patch.dict(os.environ, {"VISION_R1_ALLOW_REASONING": value}):
+                self.assertEqual(policy_prompt_record("mathvision"), {"vision_r1_allow_reasoning": expected})
+
+    def test_per_task_benchmarks_run_each_sample_with_a_fresh_trajectory(self):
+        calls = []
+        def run_one(task):
+            calls.append(task)
+            return {"question_id": task, "is_correct": len(calls) % 2 == 0}
+        rows = list(sampled_task_records(["a", "b"], 4, run_one))
+        self.assertEqual(calls, ["a"] * 4 + ["b"] * 4)
+        self.assertEqual([(task, sample) for task, sample, _ in rows],
+                         [(t, s) for t in ("a", "b") for s in range(4)])
+        self.assertEqual([record["sample_index"] for _, _, record in rows], [0, 1, 2, 3] * 2)
+        result = summarize_records([dict(record, terminal_eligible=record["is_correct"],
+                                         termination_reason="final_submission", generated_output_tokens=1)
+                                    for _, _, record in rows], ["a", "b"], PROFILES["livecodebench"])
+        self.assertEqual((result["aggregation"], result["accuracy"], result["pass_at_4"]), ("avg@4", 0.5, 1.0))
 
     def test_qa_em_f1_and_boolean_answers(self):
         self.assertEqual(qa_scores("The Eiffel Tower", ["Eiffel Tower"])["answer_em"], 1)
@@ -132,12 +201,12 @@ class PnpEvaluationTest(unittest.TestCase):
         def sampling(**params):
             sampled.append(params)
             return SimpleNamespace(**params)
-        record = math_records(engine, CharacterTokenizer(), sampling, [task], PROFILES["aime2026"])[0]
+        record = math_records(engine, CharacterTokenizer(), sampling, [task], SINGLE_AIME)[0]
         self.assertEqual({params["temperature"] for params in sampled}, {0.6})
         self.assertTrue(record["is_correct"])
         self.assertEqual(record["predicted_integer"], 2)
         record = math_records(ScriptedEngine(["1+1=2."] * 5), CharacterTokenizer(),
-                              SimpleNamespace, [task], PROFILES["aime2026"])[0]
+                              SimpleNamespace, [task], SINGLE_AIME)[0]
         self.assertFalse(record["is_correct"])
         self.assertGreater(record["verification"]["verified_process_reward"], 0)
 
@@ -153,7 +222,7 @@ class PnpEvaluationTest(unittest.TestCase):
         engine = SimpleNamespace(generate=lambda inputs, params, **kwargs: [
             SimpleNamespace(outputs=[SimpleNamespace(token_ids=[1] * (params.max_tokens + 1))])])
         with self.assertRaisesRegex(RuntimeError, "exceeded"):
-            math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])
+            math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], SINGLE_AIME)
 
     def test_aime_local_source_preserves_ids_and_isolates_answers(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -348,7 +417,7 @@ class PnpEvaluationRuntimeTest(unittest.IsolatedAsyncioTestCase):
             "recipes/vision_r1/agent_flow.py", ToolFormatWrapper=tool_format.ToolFormatWrapper,
             VisualArtifact=visual_artifacts.VisualArtifact, reward_schedule=vision_contract.reward_schedule,
             outcome_reward=vision_contract.outcome_reward, verify_process=verify_vision_process,
-            SYSTEM_PROMPT=vision_prompts.SYSTEM_PROMPT, FINAL_TURN_PROMPT=vision_prompts.FINAL_TURN_PROMPT,
+            system_prompt_template=vision_prompts.system_prompt_template, FINAL_TURN_PROMPT=vision_prompts.FINAL_TURN_PROMPT,
             INSPECT_OR_SUBMIT_TOOLS=vision_prompts.INSPECT_OR_SUBMIT_TOOLS,
             SUBMIT_ONLY_TOOLS=vision_prompts.SUBMIT_ONLY_TOOLS)
         flow = object.__new__(module.VisionR1VisualAgentFlow)
