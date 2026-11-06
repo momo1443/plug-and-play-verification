@@ -9,7 +9,7 @@ a trainer, launch Ray, or modify training runs. The generated
 ## Main protocol
 
 Agent trajectories are sampled at `temperature=0.6` (`top_p=1`, `top_k=-1`),
-bfloat16, seed 42. AIME2026 and LiveCodeBench sample four complete trajectories per
+bfloat16, seed 42. AIME2025 and LiveCodeBench sample four complete trajectories per
 question, each with its own budget, and report avg@4, the mean accuracy (pass@1) over
 all trajectories; the summary also lists the four per-sample accuracies, their standard
 deviation and the standard error of avg@4, and pass@4. HotpotQA and MATH-Vision use one
@@ -30,7 +30,7 @@ errors abort the evaluation instead of publishing an incomplete accuracy.
 
 | Benchmark | Final metric | Steps | Total generated tokens | Per step | Prompt limit | Context limit |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| AIME2026 | Integer accuracy | 5 | 10240 | 2048 | 2048 initial | 13312 |
+| AIME2025 | Integer accuracy | 5 | 10240 | 2048 | 2048 initial | 13312 |
 | HotpotQA validation | Answer EM; F1 auxiliary | 4 | 4096 | 1024 | 8192 each step | 12288 |
 | LiveCodeBench release_v6 | Pass@1 | 5 | 10240 | 2048 | 8192 each step | 12288 |
 | MATH-Vision | Answer accuracy | 5 | 10240 | 2048 | 12288 each step | 16384 |
@@ -61,10 +61,10 @@ snapshot identifiers with the actual sources; these are not claims of completed 
 
 ```bash
 # Add --preflight-only to any command to validate prerequisites without GPUs.
-bash run_pnp_eval.sh aime2026 \
+bash run_pnp_eval.sh aime2025 \
   --model models/Qwen3.5-4B \
-  --dataset data/corpus/aime2026/test.parquet \
-  --dataset-version 2026 --dataset-revision LOCAL_AIME2026_SNAPSHOT \
+  --dataset data/corpus/aime2025/test.parquet \
+  --dataset-version 2025 --dataset-revision LOCAL_AIME2025_SNAPSHOT \
   --gpus 0,1,2,3,4,5,6,7
 
 bash run_pnp_eval.sh hotpotqa \
@@ -86,10 +86,10 @@ bash run_pnp_eval.sh mathvision \
   --gpus 0,1,2,3,4,5,6,7
 ```
 
-AIME2026 requires `--dataset-version 2026` and the full 30-question I + II snapshot
+AIME2025 requires `--dataset-version 2025` and the full 30-question I + II snapshot
 before optional subset selection. It accepts raw `problem` / `answer` rows or
 prepared `prompt` / `reward_model.ground_truth` rows, with references kept out of
-policy inputs. Supply an AIME2026 snapshot and record its pinned revision.
+policy inputs. Supply the [MathArena/aime_2025](https://huggingface.co/datasets/MathArena/aime_2025) snapshot and record its pinned revision. The dataset year has been restored to 2025 while retaining the updated token budgets and avg@4 protocol; this is not a restoration of the historical evaluation settings underlying the manuscript results.
 
 LiveCodeBench requires the full 1055-question release_v6 snapshot. HotpotQA uses
 prepared validation rows aligned with the retrieval evidence sidecar and requires

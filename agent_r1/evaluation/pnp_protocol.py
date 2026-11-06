@@ -5,7 +5,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from .official import request
 
-# v3: avg@k over k independent trajectories (k=4 for AIME2026/LiveCodeBench) and the
+# v3: avg@k over k independent trajectories (k=4 for AIME2025/LiveCodeBench) and the
 # five-step MATH-Vision budget. v2 summaries are single-trajectory and not comparable.
 PROTOCOL_VERSION = "pnp-agent-evaluation-v3"
 
@@ -45,7 +45,7 @@ class EvaluationProfile:
 
     def record(self):
         return {"protocol_version": PROTOCOL_VERSION, **asdict(self),
-                "prompt_limit_scope": "initial_prompt" if self.benchmark == "aime2026" else "each_policy_step",
+                "prompt_limit_scope": "initial_prompt" if self.benchmark == "aime2025" else "each_policy_step",
                 "output_budget_unit": "all_generated_tokens_across_the_trajectory",
                 "references_visible_to_policy": False, "hidden_test_feedback": False,
                 "accuracy_denominator": "all_selected_questions",
@@ -54,7 +54,7 @@ class EvaluationProfile:
 
 
 PROFILES = {
-    "aime2026": EvaluationProfile("aime2026", 5, 10240, 2048, 2048, 13312, "integer_accuracy",
+    "aime2025": EvaluationProfile("aime2025", 5, 10240, 2048, 2048, 13312, "integer_accuracy",
                                   trajectories_per_problem=4),
     "hotpotqa": EvaluationProfile("hotpotqa", 4, 4096, 1024, 8192, 12288, "answer_em"),
     "livecodebench": EvaluationProfile("livecodebench", 5, 10240, 2048, 8192, 12288, "pass_at_1",

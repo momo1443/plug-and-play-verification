@@ -16,32 +16,31 @@ Our framework checks numeric equalities, retrieved evidence, code executions, an
 
 | Domain | Training dataset | Evaluation benchmark |
 | --- | --- | --- |
-| Mathematics | DeepScaleR-Preview-Dataset | AIME 2026 |
+| Mathematics | DeepScaleR-Preview-Dataset | AIME 2025 |
 | Multi-hop QA | HotpotQA | HotpotQA validation |
 | Code | TACO | LiveCodeBench |
 | Vision | Vision-R1-RL | MATH-Vision |
 
 ## Results
 
-Scores are percentages. Both the Qwen3.5-4B and Qwen3.5-9B tables include updated AIME 2026 results. `Avg.` is the unweighted mean across the four benchmarks in each table. AIME evaluation uses at most five policy generations.
+Manuscript Tables 1-3 report the following scores (%). `Avg.` is the unweighted mean across the four benchmarks. These are the manuscript's reported results, not new evaluations of this checkout.
 
 ### Qwen3.5-4B
 
-| Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 50.00 | 46.78 | 40.47 | 30.13 | 41.85 |
-| GRPO | 52.50 | 57.73 | 47.96 | 33.22 | 47.85 |
-| GRPO + LLM-as-a-judge | 53.33 | 58.28 | 48.72 | **35.20** | 48.88 |
-| **Ours (plug-and-play verifier)** | **55.83** | **60.18** | **49.57** | 34.54 | **50.03** |
+| ReAct | 26.67 | 46.78 | 40.47 | 75.72 | 47.41 |
+| GRPO | 33.33 | 57.73 | 47.96 | 79.80 | 54.71 |
+| GRPO + LLM-as-a-judge | 36.67 | 58.28 | 48.72 | **82.01** | 56.42 |
+| **Ours (plug-and-play verifier)** | **40.00** | **60.18** | **49.57** | 81.51 | **57.82** |
 
 ### Qwen3.5-9B
 
-| Method | AIME 2026 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
+| Method | AIME 2025 | HotpotQA | LiveCodeBench | MATH-Vision | Avg. |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ReAct | 53.33 | 52.56 | 49.00 | 36.18 | 47.77 |
-| GRPO | 56.67 | 63.20 | 56.59 | 37.01 | 53.37 |
-| **Ours (plug-and-play verifier)** | **58.33** | **66.67** | **58.48** | **38.16** | **55.41** |
-
+| ReAct | 36.67 | 52.56 | 49.00 | 79.47 | 54.43 |
+| GRPO | 43.33 | 63.20 | 56.59 | 83.19 | 61.58 |
+| **Ours (plug-and-play verifier)** | **46.67** | **66.67** | **58.48** | **84.80** | **64.16** |
 
 ### Training dynamics
 
@@ -171,6 +170,8 @@ Reward and audit definitions are detailed in the [paper contract](docs/paper-con
 
 Accuracy scores final submissions over all selected questions; missing or invalid submissions score zero. Process consistency is recorded separately. The shared evaluator uses pinned, unmodified official HotpotQA, LiveCodeBench, and MATH-V graders; AIME uses exact integer equality.
 
+The current AIME 2025 evaluator retains the updated inference settings: four independent trajectories per question (avg@4), at most five policy generations, 10,240 total output tokens, 2,048 tokens per step, and a 13,312-token context. Switching the dataset year does not restore the historical evaluation settings or establish reproduction of the manuscript scores. Use the full 30-question AIME I + II snapshot from [MathArena/aime_2025](https://huggingface.co/datasets/MathArena/aime_2025) and record its pinned revision.
+
 Export FSDP checkpoints before inference and merge LoRA weights when applicable:
 
 ```bash
@@ -184,11 +185,11 @@ Install the isolated grader environment, then check evaluation prerequisites:
 
 ```bash
 bash scripts/evaluation/setup_official_graders.sh
-bash run_pnp_eval.sh aime2026 \
+bash run_pnp_eval.sh aime2025 \
   --model /path/to/exported-checkpoint \
-  --dataset /path/to/aime2026/test.parquet \
-  --dataset-version 2026 \
-  --dataset-revision LOCAL_AIME2026_SNAPSHOT \
+  --dataset /path/to/aime2025/test.parquet \
+  --dataset-version 2025 \
+  --dataset-revision LOCAL_AIME2025_SNAPSHOT \
   --preflight-only
 ```
 

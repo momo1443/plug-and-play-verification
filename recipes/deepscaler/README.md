@@ -109,7 +109,7 @@ Qwen generation prompt opens `<think>`, a closing `</think>` is required before
 a submitted answer. Reasoning turns use the model's default thinking mode.
 The last available turn is a concise visible answer submission with
 `enable_thinking=False`, using the same remaining completion budget (normally
-2,048 tokens after four 2,048-token turns). Standalone AIME2026 evaluation uses the
+2,048 tokens after four 2,048-token turns). Standalone AIME2025 evaluation uses the
 same turn protocol and the same 10,240-token budget (2,048 per turn, 13,312 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
 to reproduce the full-thinking protocol. All token budgets remain unchanged.
 The final submission prompt prefills `\boxed{` as prompt tokens, then the model
@@ -158,7 +158,7 @@ split. Repeated questions stay together to avoid train/validation leakage.
 Rows missing problems or answers are excluded and recorded in
 `data/corpus/deepscaler/data_manifest.json`. Source answer conflicts are counted
 and retained without changing labels. This creates a local diagnostic split;
-it does not recreate an unspecified paper split or substitute for AIME 2026.
+it does not recreate an unspecified paper split or substitute for AIME 2025.
 
 The smoke launcher uses all eight GPUs, a batch of four training examples, two
 rollouts per prompt, 500 updates across 500 epochs, a 512-token trajectory budget,
@@ -235,7 +235,7 @@ DEEPSCALER_MAX_STEPS=1 bash scripts/deepscaler/pnp_deepscaler.sh
 Optional budget/context overrides are `DEEPSCALER_MAX_RESPONSE_LENGTH` and
 `DEEPSCALER_MAX_MODEL_LENGTH`; use identical values in all comparison arms, and
 pass the same values to evaluation (`--total-output-tokens`/`--context-limit`, or
-`AIME2026_MAX_RESPONSE_LENGTH`/`AIME2026_MAX_MODEL_LENGTH` for `eval_aime2026.py`). Run manifests record the effective
+`AIME2025_MAX_RESPONSE_LENGTH`/`AIME2025_MAX_MODEL_LENGTH` for `eval_aime2025.py`). Run manifests record the effective
 turn cap, total/per-turn budgets, context length, and prompt code hashes.
 The single-generation and eight-generation settings are optional alternatives
 to the five-generation protocol used for the reported mathematics results.
