@@ -97,11 +97,11 @@ Sampling temperature & 0.6 \\
 Top-$p$ / Top-$k$ & 1.0 / -1 \\
 Trajectories per problem $n$ & 1 \\
 Evaluation metric & Answer accuracy (avg@1) \\
-Total completion budget & 10240 tokens \\
+Total completion budget & 6144 tokens \\
 Per-step generation cap & 2048 tokens \\
-Maximum interaction steps & 5 \\
-Per-step prompt limit & 12288 tokens \\
-Context limit & 16384 tokens \\
+Maximum interaction steps & 3 \\
+Per-step prompt limit & 8192 tokens \\
+Context limit & 12288 tokens \\
 Inference engine & vLLM \\
 Mode & Offline Python API \\
 Tensor parallel size & 1 per replica \\

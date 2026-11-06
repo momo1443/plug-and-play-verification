@@ -35,7 +35,7 @@ SINGLE_AIME = replace(PROFILES["aime2025"], trajectories_per_problem=1)
 
 class PnpEvaluationTest(unittest.TestCase):
     def test_common_decoding_and_task_training_interfaces(self):
-        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 5])
+        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 3])
         for profile in PROFILES.values():
             self.assertEqual(profile.sampling()["n"], 1)
             self.assertEqual((profile.top_p, profile.top_k), (1.0, -1))
@@ -47,7 +47,7 @@ class PnpEvaluationTest(unittest.TestCase):
                          {"aime2025": 0.6, "hotpotqa": 0.6, "livecodebench": 0.6, "mathvision": 0.6})
         vision = PROFILES["mathvision"]
         self.assertEqual((vision.total_output_tokens, vision.per_step_tokens, vision.prompt_limit,
-                          vision.context_limit), (10240, 2048, 12288, 16384))
+                          vision.context_limit), (6144, 2048, 8192, 12288))
         aime = PROFILES["aime2025"]
         self.assertEqual((aime.total_output_tokens, aime.per_step_tokens, aime.context_limit),
                          (10240, 2048, 13312))

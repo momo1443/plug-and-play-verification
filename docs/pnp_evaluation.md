@@ -33,7 +33,7 @@ errors abort the evaluation instead of publishing an incomplete accuracy.
 | AIME2025 | Integer accuracy | 5 | 10240 | 2048 | 2048 initial | 13312 |
 | HotpotQA validation | Answer EM; F1 auxiliary | 4 | 4096 | 1024 | 8192 each step | 12288 |
 | LiveCodeBench release_v6 | Pass@1 | 5 | 10240 | 2048 | 8192 each step | 12288 |
-| MATH-Vision | Answer accuracy | 5 | 10240 | 2048 | 12288 each step | 16384 |
+| MATH-Vision | Answer accuracy | 3 | 6144 | 2048 | 8192 each step | 12288 |
 
 Total output budgets count every token generated across the trajectory, including
 reasoning and tool-call syntax. Observations and visual tokens consume context,
@@ -108,7 +108,7 @@ is separate. Original upstream scripts, licenses, commits, and checksums are
 stored in `third_party/official_graders`; the adapters verify their checksums.
 Run manifests record the actual official grader revision and CPU dependency
 versions. The shared evaluation protocol is `pnp-agent-evaluation-v3` (avg@k sampling
-and the five-step MATH-Vision budget); `v2` summaries are single-trajectory and are not
+and the three-step MATH-Vision budget); `v2` summaries are single-trajectory and are not
 comparable.
 
 LiveCodeBench requires a working `bwrap` sandbox; preflight checks a known correct

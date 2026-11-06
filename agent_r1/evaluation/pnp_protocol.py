@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass, replace
 from .official import request
 
 # v3: avg@k over k independent trajectories (k=4 for AIME2025/LiveCodeBench) and the
-# five-step MATH-Vision budget. v2 summaries are single-trajectory and not comparable.
+# three-step MATH-Vision budget (3 x 2048 = 6144 tokens). v2 summaries are single-trajectory
+# and not comparable.
 PROTOCOL_VERSION = "pnp-agent-evaluation-v3"
 
 
@@ -59,7 +60,7 @@ PROFILES = {
     "hotpotqa": EvaluationProfile("hotpotqa", 4, 4096, 1024, 8192, 12288, "answer_em"),
     "livecodebench": EvaluationProfile("livecodebench", 5, 10240, 2048, 8192, 12288, "pass_at_1",
                                        trajectories_per_problem=4),
-    "mathvision": EvaluationProfile("mathvision", 5, 10240, 2048, 12288, 16384, "answer_accuracy"),
+    "mathvision": EvaluationProfile("mathvision", 3, 6144, 2048, 8192, 12288, "answer_accuracy"),
 }
 
 

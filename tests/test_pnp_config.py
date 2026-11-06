@@ -318,7 +318,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
     def test_vision_image_limit_follows_turn_count(self):
         # One root image plus one crop per non-final turn must fit vLLM's per-prompt image limit.
         image_limit = "+actor_rollout_ref.rollout.engine_kwargs.vllm.limit_mm_per_prompt.image"
-        for override, expected in ((None, "5"), ("4", "4")):
+        for override, expected in ((None, "3"), ("4", "4")):
             with self.subTest(override=override):
                 extra = {} if override is None else {"VISION_R1_MAX_STEPS": override}
                 options = self.launch("scripts/vision_r1/pnp_vision_r1.sh", **extra)
