@@ -35,7 +35,7 @@ SINGLE_AIME = replace(PROFILES["aime2025"], trajectories_per_problem=1)
 
 class PnpEvaluationTest(unittest.TestCase):
     def test_common_decoding_and_task_training_interfaces(self):
-        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 4, 5, 3])
+        self.assertEqual([p.max_steps for p in PROFILES.values()], [5, 5, 4, 5, 3])
         for profile in PROFILES.values():
             self.assertEqual(profile.sampling()["n"], 1)
             self.assertEqual((profile.top_p, profile.top_k), (1.0, -1))
@@ -44,15 +44,18 @@ class PnpEvaluationTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 replace(profile, temperature=-0.1)
         self.assertEqual({name: p.temperature for name, p in PROFILES.items()},
-                         {"aime2025": 0.6, "hotpotqa": 0.6, "livecodebench": 0.6, "mathvision": 0.6})
+                         {"aime2025": 0.6, "aime2026": 0.6, "hotpotqa": 0.6, "livecodebench": 0.6,
+                          "mathvision": 0.6})
         vision = PROFILES["mathvision"]
         self.assertEqual((vision.total_output_tokens, vision.per_step_tokens, vision.prompt_limit,
                           vision.context_limit), (6144, 2048, 8192, 12288))
-        aime = PROFILES["aime2025"]
-        self.assertEqual((aime.total_output_tokens, aime.per_step_tokens, aime.context_limit),
-                         (10240, 2048, 13312))
+        for year in ("aime2025", "aime2026"):
+            aime = PROFILES[year]
+            self.assertEqual((aime.max_steps, aime.total_output_tokens, aime.per_step_tokens,
+                              aime.prompt_limit, aime.context_limit), (5, 10240, 2048, 2048, 13312))
         self.assertEqual({name: p.trajectories_per_problem for name, p in PROFILES.items()},
-                         {"aime2025": 4, "hotpotqa": 1, "livecodebench": 4, "mathvision": 1})
+                         {"aime2025": 1, "aime2026": 4, "hotpotqa": 1, "livecodebench": 4, "mathvision": 1})
+        aime = PROFILES["aime2026"]
         with self.assertRaises(ValueError):
             replace(aime, temperature=0.0)
         with self.assertRaises(ValueError):
@@ -113,7 +116,7 @@ class PnpEvaluationTest(unittest.TestCase):
                 return [SimpleNamespace(outputs=[SimpleNamespace(token_ids=[ord(c) for c in text])])
                         for _ in inputs]
         engine = BatchEngine()
-        records = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2025"])
+        records = math_records(engine, CharacterTokenizer(), SimpleNamespace, [task], PROFILES["aime2026"])
         self.assertEqual([row["sample_index"] for row in records], list(range(4)))
         self.assertEqual({row["question_id"] for row in records}, {"q1"})
         self.assertEqual(engine.calls[0], 4)
@@ -257,6 +260,10 @@ class PnpEvaluationTest(unittest.TestCase):
         with patch("agent_r1.evaluation.pnp_datasets.raw_rows", return_value=rows):
             with self.assertRaisesRegex(ValueError, "AIME2025"):
                 load_tasks("aime2025", "/unused", split="test", version="2026", max_problems=1)
+            with self.assertRaisesRegex(ValueError, "AIME2026"):
+                load_tasks("aime2026", "/unused", split="test", version="2025", max_problems=1)
+            tasks, count = load_tasks("aime2026", "/unused", split="test", version="2026", max_problems=2)
+            self.assertEqual((count, len(tasks)), (30, 2))
             with patch("agent_r1.evaluation.pnp_datasets.raw_rows", return_value=rows[:-1]):
                 with self.assertRaisesRegex(ValueError, "30 questions"):
                     load_tasks("aime2025", "/unused", split="test", version="2025", max_problems=1)
@@ -352,8 +359,10 @@ class PnpEvaluationTest(unittest.TestCase):
             path = Path(temporary) / "config.md"
             write_tables(path)
             text = path.read_text()
-        self.assertEqual(text.count(r"\begin{table}"), 4)
+        self.assertEqual(text.count(r"\begin{table}"), 5)
         self.assertIn("PNP evaluation configuration for AIME2025", text)
+        self.assertIn("PNP evaluation configuration for AIME2026", text)
+        self.assertIn(r"\label{tab:pnp_eval_aime2026}", text)
         self.assertIn(r"\label{tab:pnp_eval_aime2025}", text)
         self.assertIn("Total completion budget & 10240 tokens", text)
         self.assertIn("Total completion budget & 10240 tokens \\\\\nPer-step generation cap & 2048 tokens", text)

@@ -5,10 +5,18 @@ from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from .official import request
 
-# v3: avg@k over k independent trajectories (k=4 for AIME2025/LiveCodeBench) and the
-# three-step MATH-Vision budget (3 x 2048 = 6144 tokens). v2 summaries are single-trajectory
-# and not comparable.
+# v3: avg@k over k independent trajectories (k=4 for AIME2026/LiveCodeBench, k=1 for
+# AIME2025/HotpotQA/MATH-Vision) and the three-step MATH-Vision budget (3 x 2048 = 6144
+# tokens). v2 summaries are single-trajectory and not comparable.
 PROTOCOL_VERSION = "pnp-agent-evaluation-v3"
+
+# AIME benchmarks share one mathematics flow; each requires its own full 30-question
+# I + II snapshot and dataset year.
+AIME_BENCHMARKS = {"aime2025": "2025", "aime2026": "2026"}
+
+
+def is_aime(benchmark):
+    return benchmark in AIME_BENCHMARKS
 
 
 @dataclass(frozen=True)
@@ -46,7 +54,7 @@ class EvaluationProfile:
 
     def record(self):
         return {"protocol_version": PROTOCOL_VERSION, **asdict(self),
-                "prompt_limit_scope": "initial_prompt" if self.benchmark == "aime2025" else "each_policy_step",
+                "prompt_limit_scope": "initial_prompt" if is_aime(self.benchmark) else "each_policy_step",
                 "output_budget_unit": "all_generated_tokens_across_the_trajectory",
                 "references_visible_to_policy": False, "hidden_test_feedback": False,
                 "accuracy_denominator": "all_selected_questions",
@@ -55,7 +63,8 @@ class EvaluationProfile:
 
 
 PROFILES = {
-    "aime2025": EvaluationProfile("aime2025", 5, 10240, 2048, 2048, 13312, "integer_accuracy",
+    "aime2025": EvaluationProfile("aime2025", 5, 10240, 2048, 2048, 13312, "integer_accuracy"),
+    "aime2026": EvaluationProfile("aime2026", 5, 10240, 2048, 2048, 13312, "integer_accuracy",
                                   trajectories_per_problem=4),
     "hotpotqa": EvaluationProfile("hotpotqa", 4, 4096, 1024, 8192, 12288, "answer_em"),
     "livecodebench": EvaluationProfile("livecodebench", 5, 10240, 2048, 8192, 12288, "pass_at_1",

@@ -225,12 +225,12 @@ def main() -> None:
     }
     process_enabled = coerce_bool(os.environ.get("HOTPOTQA_A9_PROCESS_REWARD_ENABLED", "true"), name="HOTPOTQA_A9_PROCESS_REWARD_ENABLED")
     mode = {"A0": "terminal_only", "A1": "terminal_only", "A2": "gold_process_only",
-            "A3": "gold_fixed_mix", "A6": "llm_process_uniform", "A7": "weak_fixed_mix"}.get(args.arm, "certificate_uniform")
+            "A3": "gold_process_uniform", "A6": "llm_process_uniform", "A7": "weak_fixed_mix"}.get(args.arm, "certificate_uniform")
     if not process_enabled:
         mode = "terminal_only"
     expected_terminal = 1.0 if mode == "terminal_only" else 0.0 if mode == "gold_process_only" else 0.5
     formula = {"terminal_only": "terminal_em", "gold_process_only": "gold_coverage",
-               "gold_fixed_mix": "0.5 * terminal_em + 0.5 * gold_coverage",
+               "gold_process_uniform": "w * terminal_em + (1-w) * gold_coverage; one w per prompt group",
                "weak_fixed_mix": "0.5 * terminal_em + 0.5 * observable_search_reward"}.get(
                    mode, "w * terminal_em + (1-w) * process_reward; one w per prompt group")
     manifest = {

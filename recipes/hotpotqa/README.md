@@ -5,7 +5,7 @@ The paper arms share the certificate flow in `recipes/hotpotqa_a9/`: four turns,
 the deterministic verifier; A6 uses a frozen causal process judge without gold
 answers or gold supporting facts. A6 uses 50 outcome-only warmup updates, then
 a prompt-group-shared random outcome/process mixture. A2/A3 are explicitly
-privileged gold-evidence ablations. See the
+privileged gold-evidence ablations; A3 uses the same warmup and mixture schedule. See the
 [paper contract](../../docs/paper-contract.md).
 
 This package supplies retrieval, evidence preprocessing, and judge services.
@@ -20,7 +20,7 @@ bash run_pnp.sh hotpotqa --arm outcome   # outcome-only GRPO (same wrapper, A1 r
 bash scripts/hotpotqa/pnp_hotpotqa.sh  # verifier GRPO
 bash scripts/hotpotqa/run_a6.sh          # frozen process judge
 bash scripts/hotpotqa/run_a2.sh          # gold process-only ablation
-bash scripts/hotpotqa/run_a3.sh          # gold 0.5 mixture ablation
+bash scripts/hotpotqa/run_a3.sh          # gold-evidence outcome+process ablation
 bash scripts/ppo/run_terminal.sh hotpotqa
 bash scripts/hotpotqa/run_a0.sh          # base-model certificate validation
 bash scripts/hotpotqa/pnp_hotpotqa_eval.sh  # certificate checkpoint validation

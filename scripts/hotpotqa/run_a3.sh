@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A3 (combined agentic RLVR): step-causal GRPO with 0.5 times the
-# deterministic per-search new-evidence reward plus 0.5 times terminal exact
-# match. Final-answer tokens remain in the policy loss under raw completion.
+# A3 (gold-evidence upper bound): step-causal GRPO combining terminal exact
+# match with the privileged per-search new-gold-evidence reward. Like the
+# verifier and judge arms, it uses 50 outcome-only warmup updates, then one
+# prompt-group-shared w ~ U(0, 1): reward = w * EM + (1-w) * gold_process.
+# Final-answer tokens remain in the policy loss under raw completion.
 #
 # Self-contained entrypoint; shared scientific/runtime defaults are owned by
 # pnp_hotpotqa_train.sh and remain overridable through documented HOTPOTQA_* variables.

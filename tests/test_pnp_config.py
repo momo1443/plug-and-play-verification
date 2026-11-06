@@ -172,7 +172,7 @@ class PnpConfigTest(unittest.TestCase):
                 options = self.launch("scripts/deepscaler/pnp_deepscaler.sh", AGENT_R1_MODEL_SCALE=scale)
                 self.assertEqual(options["data.max_prompt_length"], "2048")
                 self.assertEqual(options["data.max_response_length"], expected_response)
-                self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"], "13312")
+                self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"], "8192")
                 self.assertEqual(options["actor_rollout_ref.rollout.response_length"], expected_response)
 
 
@@ -289,7 +289,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
                     self.assertEqual(options["actor_rollout_ref.rollout.multi_turn.enable"],
                                      "False" if turns == "1" else "True")
                     self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"],
-                                     "2048" if turns == "1" else "13312")
+                                     "2048" if turns == "1" else "8192")
                     self.assertEqual(options["data.max_response_length"], "10240")
 
     def test_math_defaults_to_five_turns(self):

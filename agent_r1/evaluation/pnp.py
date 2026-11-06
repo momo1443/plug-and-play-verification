@@ -16,7 +16,8 @@ import sys
 import time
 
 from agent_r1.evaluation.pnp_datasets import dataset_hashes, load_tasks
-from agent_r1.evaluation.pnp_protocol import PROFILES, evaluation_profile, mathvision_score, qa_scores, summarize_records
+from agent_r1.evaluation.pnp_protocol import (PROFILES, evaluation_profile, is_aime, mathvision_score, qa_scores,
+                                              summarize_records)
 from agent_r1.evaluation.official import grader_identity
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,7 +44,7 @@ def parser():
     result.add_argument("--model", "--model-path", dest="model", type=Path)
     result.add_argument("--checkpoint", type=Path, help="Source checkpoint identity; --model must be a vLLM-loadable export")
     result.add_argument("--dataset", type=Path)
-    result.add_argument("--dataset-version", help="Frozen year/release/config, e.g. 2025 or release_v6")
+    result.add_argument("--dataset-version", help="Frozen year/release/config, e.g. 2025, 2026 or release_v6")
     result.add_argument("--dataset-revision", help="Pinned source commit or local snapshot identifier (file hashes are also recorded)")
     result.add_argument("--split", choices=("test", "validation"), help="HotpotQA: validation; other benchmarks: test")
     result.add_argument("--output", type=Path, help="New run directory; defaults to logs/pnp_eval_<benchmark>_<timestamp>")
@@ -51,7 +52,7 @@ def parser():
     result.add_argument("--tensor-parallel-size", type=int, default=1)
     result.add_argument("--gpu-memory-utilization", type=float, default=0.3)
     result.add_argument("--max-num-seqs", type=int, default=16,
-                        help="vLLM concurrent sequences for AIME2025's batched generation; the agent "
+                        help="vLLM concurrent sequences for AIME's batched generation; the agent "
                              "benchmarks submit one request at a time. Not part of the evaluation protocol")
     result.add_argument("--total-output-tokens", type=int)
     result.add_argument("--per-step-tokens", type=int)
@@ -90,7 +91,7 @@ def policy_prompt_record(benchmark):
 
 def preflight(args):
     missing = [name for name in ("vllm", "transformers", "torch") if importlib.util.find_spec(name) is None]
-    if args.benchmark != "aime2025":
+    if not is_aime(args.benchmark):
         missing += [name for name in ("verl", "ray", "omegaconf") if importlib.util.find_spec(name) is None]
     if args.benchmark == "hotpotqa":
         missing += [name for name in ("faiss", "FlagEmbedding") if importlib.util.find_spec(name) is None]
@@ -197,7 +198,7 @@ def worker(args, tasks, profile):
     engine = LLM(**engine_args)
     resources = resources_from_args(args)
     with (args.output / f"replica_{args.worker_rank}.jsonl").open("w", encoding="utf-8") as stream:
-        if args.benchmark == "aime2025":
+        if is_aime(args.benchmark):
             records = math_records(engine, tokenizer, SamplingParams, selected, profile)
             for record in records:
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -220,7 +221,7 @@ def worker(args, tasks, profile):
 def write_tables(path):
     lines = ["# PNP evaluation configuration", "",
              "These are shared evaluator defaults, not measurements from completed runs. "
-             "All four benchmarks reuse PNP policy/tool interfaces. Run manifests record any explicit overrides.",
+             "All benchmarks reuse PNP policy/tool interfaces. Run manifests record any explicit overrides.",
              "", "Accuracy uses the final submitted answer/program, independent of process reward. "
              "Missing or invalid submissions remain in the denominator. References and hidden tests are grading-only.",
              "", "Total completion budgets count generated tokens across all interaction steps; "
@@ -228,9 +229,9 @@ def write_tables(path):
              "The default node has eight NVIDIA A40 GPUs. Tensor parallel size defaults to 1 per replica; "
              "the selected GPU count determines replica count.",
              "", chr(96) * 3 + "latex", r"% Requires \usepackage{booktabs}", ""]
-    names = {"aime2025": "AIME2025", "hotpotqa": "HotpotQA",
+    names = {"aime2025": "AIME2025", "aime2026": "AIME2026", "hotpotqa": "HotpotQA",
              "livecodebench": "LiveCodeBench", "mathvision": "MATH-Vision"}
-    metrics = {"aime2025": "Integer accuracy", "hotpotqa": "Answer EM",
+    metrics = {"aime2025": "Integer accuracy", "aime2026": "Integer accuracy", "hotpotqa": "Answer EM",
                "livecodebench": "Pass@1", "mathvision": "Answer accuracy"}
     for benchmark, profile in PROFILES.items():
         lines += [r"\begin{table}[!ht]", r"\centering", r"\begin{tabular}{@{}ll@{}}",
@@ -242,7 +243,7 @@ def write_tables(path):
                 ("Total completion budget", f"{profile.total_output_tokens} tokens"),
                 ("Per-step generation cap", f"{profile.per_step_tokens} tokens"),
                 ("Maximum interaction steps", str(profile.max_steps)),
-                ("Initial prompt limit" if benchmark == "aime2025" else "Per-step prompt limit",
+                ("Initial prompt limit" if is_aime(benchmark) else "Per-step prompt limit",
                  f"{profile.prompt_limit} tokens"), ("Context limit", f"{profile.context_limit} tokens"),
                 ("Inference engine", "vLLM"), ("Mode", "Offline Python API"),
                 ("Tensor parallel size", "1 per replica"), ("Precision / Seed", "bfloat16 / 42")]

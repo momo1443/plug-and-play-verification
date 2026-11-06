@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # 8-GPU A40 configuration (4B; 9B uses LoRA and vLLM TP=2 via models/Qwen3.5-9B.sh):
 #   - vllm_gpu_memory_utilization=0.30
-#   - max_model_len=13312
+#   - max_model_len=8192 (history/context limit; paper Tables 4-5)
 #   - max_num_seqs=20 (32 via models/Qwen3.5-4B.sh)
 #   - grpo_micro_batch_size=1
 #   - rollout_n=4
@@ -87,8 +87,8 @@ if ! [[ "$MAX_RESPONSE_LENGTH" =~ ^[1-9][0-9]*$ ]]; then
     echo "DEEPSCALER_MAX_RESPONSE_LENGTH must be a positive integer" >&2
     exit 2
 fi
-DEFAULT_MODEL_LENGTH=$((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH + 1024))
-(( DEFAULT_MODEL_LENGTH >= 8192 )) || DEFAULT_MODEL_LENGTH=8192
+# Paper Tables 4-5: 2048-token initial prompt, 8192-token history/context limit.
+DEFAULT_MODEL_LENGTH=8192
 MAX_MODEL_LENGTH="${DEEPSCALER_MAX_MODEL_LENGTH:-$DEFAULT_MODEL_LENGTH}"
 if ! [[ "$MAX_MODEL_LENGTH" =~ ^[1-9][0-9]*$ ]] || (( MAX_MODEL_LENGTH <= MAX_PROMPT_LENGTH )); then
     echo "DEEPSCALER_MAX_MODEL_LENGTH must exceed the initial prompt limit" >&2

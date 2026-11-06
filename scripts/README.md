@@ -58,16 +58,16 @@ for the same HotpotQA verifier contract.
 
 ## Evaluation
 
-Use `bash run_pnp_eval.sh BENCHMARK ...` for matched single-trajectory PNP
-evaluation of `aime2025`, `hotpotqa`, `livecodebench`, and `mathvision`.
+Use `bash run_pnp_eval.sh BENCHMARK ...` for matched PNP evaluation of
+`aime2025`, `aime2026`, `hotpotqa`, `livecodebench`, and `mathvision`.
 The [shared guide](../docs/pnp_evaluation.md) documents the required frozen
 dataset revisions, model exports, budgets, final graders, and CPU preflight.
 The entries below include compatibility wrappers and historical baselines.
 
 | Task | Entry point |
 | --- | --- |
-| AIME2025 PNP compatibility wrapper | `scripts/deepscaler/pnp_aime.py`, delegating to the shared evaluator |
-| AIME 2025 historical A0 (single trajectory; use `run_pnp_eval.sh aime2025` for avg@4) | `scripts/deepscaler/eval_aime2025.py`; paired A0 wrapper `scripts/deepscaler/run_aime2025_a0.sh` |
+| AIME2025/AIME2026 PNP compatibility wrapper | `scripts/deepscaler/pnp_aime.py`, delegating to the shared evaluator |
+| AIME 2025 A0 base-model baseline (use `run_pnp_eval.sh aime2025` or `aime2026` for the PNP protocol) | `scripts/deepscaler/eval_aime2025.py`; paired A0 wrapper `scripts/deepscaler/run_aime2025_a0.sh` |
 | HotpotQA A0 | `scripts/hotpotqa/run_a0.sh` |
 | HotpotQA PNP compatibility wrapper | `scripts/hotpotqa/pnp_hotpotqa_eval.sh`, delegating to the shared evaluator |
 | MATH-Vision A0 | `scripts/mathvision/run_a0_react.sh`; standalone evaluator `recipes/mathvision/evaluate_react.py` |

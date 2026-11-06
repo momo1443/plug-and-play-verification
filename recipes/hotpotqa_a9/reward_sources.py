@@ -11,12 +11,15 @@ def arm_schedule(*, arm, global_step, is_validation, warmup_steps, prompt_group_
         return UniformRewardSchedule(1.0, 0.0, "validation_terminal_em" if is_validation else "terminal_only", "fixed", None)
     if arm == "A2":
         return UniformRewardSchedule(0.0, 1.0, "gold_process_only", "fixed", None)
-    if arm in {"A3", "A7"}:
-        return UniformRewardSchedule(0.5, 0.5, "gold_fixed_mix" if arm == "A3" else "weak_fixed_mix", "fixed", None)
+    if arm == "A7":
+        return UniformRewardSchedule(0.5, 0.5, "weak_fixed_mix", "fixed", None)
+    # A3 (gold evidence), A6 (judge) and A9 (verifier) share the outcome-only warmup and
+    # the same prompt-group-shared w ~ U(0, 1); only the process-reward source differs.
     return uniform_reward_schedule(
         global_step=global_step, is_validation=False, warmup_steps=warmup_steps,
         prompt_group_key=prompt_group_key, namespace=b"hotpotqa-a9-group-weight-v1",
-        warmup_phase="em_warmup", validation_phase="validation_terminal_em", mixed_phase="process_uniform",
+        warmup_phase="em_warmup", validation_phase="validation_terminal_em",
+        mixed_phase="gold_process_uniform" if arm == "A3" else "process_uniform",
     )
 
 

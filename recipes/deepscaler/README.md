@@ -57,7 +57,7 @@ training rows, replacing overlong entries with subsequent rows in source order.
 It defaults to eight NVIDIA A40 GPUs (0–7), batch/mini-batch 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
-are 2,048 initial tokens, 13,312 context tokens, 10,240 completion tokens across
+are 2,048 initial tokens, 8,192 context tokens, 10,240 completion tokens across
 five turns, capped at 2,048 tokens per turn. Checkpoints run every 10 updates;
 periodic held-out validation is disabled. The default A9 EM-only reward phase is separate from LR
 warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
@@ -109,7 +109,7 @@ Qwen generation prompt opens `<think>`, a closing `</think>` is required before
 a submitted answer. Reasoning turns use the model's default thinking mode.
 The last available turn is a concise visible answer submission with
 `enable_thinking=False`, using the same remaining completion budget (normally
-2,048 tokens after four 2,048-token turns). Standalone AIME2025 evaluation uses the
+2,048 tokens after four 2,048-token turns). Standalone AIME2025/AIME2026 evaluation uses the
 same turn protocol and the same 10,240-token budget (2,048 per turn, 13,312 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
 to reproduce the full-thinking protocol. All token budgets remain unchanged.
 The final submission prompt prefills `\boxed{` as prompt tokens, then the model
@@ -158,7 +158,7 @@ split. Repeated questions stay together to avoid train/validation leakage.
 Rows missing problems or answers are excluded and recorded in
 `data/corpus/deepscaler/data_manifest.json`. Source answer conflicts are counted
 and retained without changing labels. This creates a local diagnostic split;
-it does not recreate an unspecified paper split or substitute for AIME 2025.
+it does not substitute for the AIME 2025/2026 evaluation sets.
 
 The smoke launcher uses all eight GPUs, a batch of four training examples, two
 rollouts per prompt, 500 updates across 500 epochs, a 512-token trajectory budget,
@@ -213,8 +213,8 @@ from `prompts.py`. It contains no verifier results or reference-answer signal.
 Both deterministic and frozen-judge verification run after rollout completion;
 outcome scoring uses the reference only after a final answer has been selected.
 
-The original input limit is 2048 tokens. Multi-turn history uses a 13,312-token
-context by default. **The total generated-token budget per trajectory** is
+The original input limit is 2048 tokens. Multi-turn training history uses an 8,192-token
+context by default (AIME evaluation uses 13,312). **The total generated-token budget per trajectory** is
 10,240 for both 4B and 9B, with a per-turn cap of `ceil(total / max_steps)`.
 For five turns, this cap is 2,048; each generation is also capped by
 the remaining trajectory budget and context space.

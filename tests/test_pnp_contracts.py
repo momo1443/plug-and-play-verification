@@ -36,6 +36,22 @@ def test_hotpot_a6_uses_warmup_then_prompt_group_random_mixing():
     assert schedule(51, validation=True).process_weight == 0
 
 
+def test_hotpot_a3_gold_arm_shares_the_verifier_warmup_and_uniform_mixing():
+    def schedule(arm, step, group="train:1", validation=False):
+        return arm_schedule(arm=arm, global_step=step, is_validation=validation,
+                            warmup_steps=50, prompt_group_key=group)
+    for step in (1, 50):
+        assert (schedule("A3", step).terminal_weight, schedule("A3", step).process_weight) == (1, 0)
+    gold, verifier = schedule("A3", 51), schedule("A9", 51)
+    assert gold.weight_sampling == "uniform_0_1_per_prompt_group"
+    assert gold.phase == "gold_process_uniform"
+    # Same w for the same update and prompt group: arms differ only in the process source.
+    assert gold.terminal_weight == verifier.terminal_weight
+    assert gold.terminal_weight != schedule("A3", 51, "train:2").terminal_weight
+    assert schedule("A3", 51, validation=True).process_weight == 0
+    assert schedule("A7", 51).weight_sampling == "fixed"
+
+
 @pytest.mark.parametrize("response,expected", [
     (r"Intermediate result 42; final answer is 7", False),
     (r"Earlier \boxed{42}, corrected final \boxed{7}", False),
