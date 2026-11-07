@@ -2,7 +2,7 @@
 
 Run these commands from the repository root, with the veRL environment, model
 files, prepared datasets, and each task's services available. See the
-[paper contract](../docs/paper-contract.md) for the matched profiles and
+[training profiles](common/pnp.sh) for the domain settings and
 [shared settings](common/README.md) for 4B/9B model adaptation.
 
 ## Paper training
@@ -51,7 +51,7 @@ The total training output budget is 4096 tokens for 4B and 5120 for 9B;
 no correctness feedback enters this flow. Independent AIME evaluation uses
 five generations with a 10240-token total budget and a 2048-token per-turn cap.
 
-The shared `models/Qwen3.5-9B.sh DATASET` profile includes the previous HotpotQA
+The shared `models/Qwen3.5-9B.sh DATASET` profile configures HotpotQA
 and TACO 9B memory settings. Domain launchers share model adaptation from
 `common/pnp.sh`. `run_a7.sh` is the
 retained weak-execution control; `pnp_hotpotqa_8gpu.sh` is an alternative hardware wrapper
@@ -61,9 +61,10 @@ for the same HotpotQA verifier contract.
 
 Use `bash run_pnp_eval.sh BENCHMARK ...` for matched PNP evaluation of
 `aime2025`, `aime2026`, `hotpotqa`, `livecodebench`, and `mathvision`.
-The [shared guide](../docs/pnp_evaluation.md) documents the required frozen
-dataset revisions, model exports, budgets, final graders, and CPU preflight.
-The entries below include compatibility wrappers and historical baselines.
+The [shared evaluator](../agent_r1/evaluation/pnp.py) handles frozen dataset
+revisions, model exports, final graders, and CPU preflight. Benchmark budgets
+are defined in the [evaluation settings](../agent_r1/evaluation/pnp_protocol.py).
+The entries below include compatibility wrappers and base-model baselines.
 
 | Task | Entry point |
 | --- | --- |
@@ -75,13 +76,12 @@ The entries below include compatibility wrappers and historical baselines.
 | LiveCodeBench A0 | `recipes/livecodebench_a0/evaluate_a0.py` |
 | Audit metrics from JSONL | `python -m agent_r1.evaluation.summarize validation.jsonl --output metrics.json` |
 
-These are the existing evaluation utilities, not a claim that all paper scores
-have been reproduced. Task validation and held-out benchmark evaluation remain
-separate protocols.
+Use task validation during training and the held-out benchmark entrypoints for
+final evaluation. Each run records its dataset, model, grader, and inference settings.
 
 ## Extensions and environment patches
 
-- `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments. The incomplete DeepMath-103K launcher was removed because its recipe dependency was absent.
+- `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments.
 - `extensions/hotpotqa_lr/`: A8 local-reasoning training, calibration, validation, and diagnostics.
 - `patches/`: explicit environment patch scripts. Inspect their expected installed source/version before applying; moving them does not apply any patch.
 

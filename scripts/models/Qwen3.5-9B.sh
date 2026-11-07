@@ -19,7 +19,7 @@ case "$DATASET" in
         export DEEPSCALER_TENSOR_PARALLEL_SIZE="${DEEPSCALER_TENSOR_PARALLEL_SIZE:-2}"
         ;;
     hotpotqa)
-        # Preserve the previous 9B QA memory and checkpoint profile.
+        # 9B QA memory and checkpoint settings.
         IFS=',' read -r -a _VISIBLE_GPUS <<<"$CUDA_VISIBLE_DEVICES"
         export HOTPOTQA_NUM_GPUS="${HOTPOTQA_NUM_GPUS:-${#_VISIBLE_GPUS[@]}}"
         export HOTPOTQA_RUN_MODE="${HOTPOTQA_RUN_MODE:-main}"
@@ -40,7 +40,7 @@ case "$DATASET" in
         export HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP="${HOTPOTQA_MAX_ACTOR_CKPT_TO_KEEP:-2}"
         ;;
     taco)
-        # Preserve the previous 9B code-generation memory profile.
+        # 9B code-generation memory settings.
         export TACO_A9_TENSOR_PARALLEL_SIZE="${TACO_A9_TENSOR_PARALLEL_SIZE:-8}"
         export TACO_A9_TRAIN_BATCH_SIZE="${TACO_A9_TRAIN_BATCH_SIZE:-20}"
         export TACO_A9_ROLLOUT_N="${TACO_A9_ROLLOUT_N:-4}"

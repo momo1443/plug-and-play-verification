@@ -242,7 +242,7 @@ def main() -> None:
         calibration_metadata = {
             "status": "waived_by_user",
             "report": None,
-            "reason": "user_requested_direct_500_step_launch",
+            "reason": "explicit_uncalibrated_launch",
         }
     else:
         calibration_report_path = Path(args.calibration_report).resolve()

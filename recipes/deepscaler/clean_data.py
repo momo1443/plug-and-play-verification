@@ -64,7 +64,7 @@ def quality_decisions(records: list[dict]) -> dict:
     return {"source_rows": len(records), "unique_problems": len(groups),
             "excluded": excluded, "corrections": corrected,
             "conflicting_groups": conflicts, "equivalent_label_groups": equivalent_groups,
-            "limitations": "Every row is structurally checked and every duplicate-label conflict compared. This is not a proof of every single-label reference answer."}
+            "limitations": "Structural checks cover every row; duplicate-answer labels are compared and reference corrections are recorded explicitly."}
 
 
 def main():

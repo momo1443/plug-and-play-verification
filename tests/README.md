@@ -29,4 +29,6 @@ CUDA_VISIBLE_DEVICES= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests \
 - Other retained suites cover data preparation, answer extraction, rollout logs,
   worker behavior, synchronization, GRPO advantages, and validation metrics.
 
-These CPU checks do not establish GPU training stability or model accuracy.
+The CPU suites cover configuration forwarding, reward contracts, deterministic
+verification, and evaluation records. Use the training and benchmark entrypoints
+to measure GPU execution and task accuracy.

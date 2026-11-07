@@ -50,7 +50,7 @@ Explicit environment overrides take precedence:
 # Example for a renamed 9B checkpoint; retain the task's model-path setting.
 AGENT_R1_LORA_RANK=64 AGENT_R1_LORA_ALPHA=64 bash run_pnp.sh hotpotqa --model Qwen3.5-9B
 
-# Reproduce the previous full-fine-tuning configuration explicitly.
+# Select full fine-tuning explicitly.
 AGENT_R1_LORA_RANK=0 bash run_pnp.sh hotpotqa --model Qwen3.5-9B
 ```
 
@@ -63,8 +63,7 @@ The same scalar fields remain in the
 [verl 0.8.0 FSDP engine](https://github.com/volcengine/verl/blob/v0.8.0/verl/workers/engine/fsdp/transformer_impl.py),
 and its vLLM server falls back to `lora_rank` when the nested LoRA rank is zero.
 
-These are defaults for **new launches**, not evidence that previous 9B runs used
-LoRA. For fair comparisons, set the same adaptation mode in all reward arms.
+Use the same adaptation mode in all reward arms for matched comparisons.
 After configuration validation, the trainer writes an effective configuration
 snapshot to `trainer.default_local_dir/launch_configs/resolved_<UTC>.yaml`.
 Each launch, including a resume, has a separate timestamped file. Use that file
@@ -75,7 +74,6 @@ and the run manifest when preparing the final paper tables.
 Run `python3 -m unittest discover -s tests -p test_pnp_config.py -v`
 from the repository root. These tests run the actual shell launchers with a
 Python stub, exercise model/length overrides, and capture trainer arguments.
-They do not load models or run distributed optimization. An earlier
-FSDP2/offload/LoRA synchronization failure was observed, so LoRA training still
-requires a GPU smoke test on the intended runtime before claiming stable LoRA
-training. This change does not alter advantage, clipping, KL, or loss code.
+Use GPU smoke runs to check FSDP/LoRA execution and checkpoint synchronization
+on the target runtime. Advantage computation, clipping, KL regularization,
+and loss aggregation are defined in the shared trainer implementation.

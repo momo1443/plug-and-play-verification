@@ -6,12 +6,11 @@ the deterministic verifier; A6 uses a frozen causal process judge without gold
 answers or gold supporting facts. A6 uses 50 outcome-only warmup updates, then
 a prompt-group-shared random outcome/process mixture. A2/A3 are explicitly
 privileged gold-evidence ablations; A3 uses the same warmup and mixture schedule. See the
-[paper contract](../../docs/paper-contract.md).
+[shared training settings](../../scripts/common/README.md).
 
 This package supplies retrieval, evidence preprocessing, and judge services.
 `recipes/hotpotqa_lr/` retains shared parsing/artifact helpers and the optional
-A8 experiment. The earlier raw-answer loop is retained for legacy configurations;
-its obsolete mixed legacy/paper guide has been removed.
+A8 experiment. The raw-answer loop supports the corresponding baseline configurations.
 
 ## Current entrypoints
 

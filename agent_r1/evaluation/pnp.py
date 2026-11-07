@@ -225,7 +225,7 @@ def worker(args, tasks, profile):
 
 def write_tables(path):
     lines = ["# PNP evaluation configuration", "",
-             "These are shared evaluator defaults, not measurements from completed runs. "
+             "Shared evaluator configuration for the supported benchmarks. "
              "All benchmarks reuse PNP policy/tool interfaces. Run manifests record any explicit overrides.",
              "", "Accuracy uses the final submitted answer/program, independent of process reward. "
              "Missing or invalid submissions remain in the denominator. References and hidden tests are grading-only.",

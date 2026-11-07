@@ -118,7 +118,7 @@ def main():
     report = {'input':str(args.input.resolve()), 'coverage':'all_complete_records', 'totals':dict(totals),
               'remaining_failed_equations':[{'lhs':a,'rhs':b,'count':n,**failures[(a,b)]} for (a,b),n in failed.most_common()],
               'records':records,
-              'limitations':'Old premature submissions cannot be regenerated offline. Replayed metrics are parser diagnostics, not a new model evaluation. Unsupported contexts earn no credit.'}
+              'limitations':'Offline parser and verifier diagnostics computed from recorded trajectories. Unsupported contexts receive zero credit.'}
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps(report['totals']), flush=True)

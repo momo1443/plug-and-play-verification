@@ -4,7 +4,7 @@ The main entrypoints are `bash run_pnp.sh deepscaler --arm outcome` and
 `bash run_pnp.sh deepscaler`. Both prepare the same original 10,000-row training prefix, 500 updates,
 prompt batch 20 at both model sizes (Appendix C), four rollouts, and the common `VerificationResult` composer.
 The frozen-judge and PPO launchers use the same flow and generation limits.
-See [the implementation contract](../../docs/paper-contract.md).
+See the [shared training settings](../../scripts/common/README.md).
 
 ## Local Qwen3.5 setup
 
@@ -25,9 +25,7 @@ Use the recipe scripts from the activated Conda `pnp` environment:
 
 ```bash
 bash scripts/deepscaler/pnp_deepscaler_smoke.sh
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 DEEPSCALER_TOTAL_EPOCHS=2 \
-  DEEPSCALER_FILTER_OVERLONG_PROMPTS=True \
-  bash scripts/deepscaler/pnp_deepscaler.sh
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/deepscaler/pnp_deepscaler.sh
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
   bash scripts/deepscaler/pnp_deepscaler.sh
 ```
@@ -45,12 +43,9 @@ protocol: its answer-checking tool feeds reference-based correctness back to
 the model. The paper mathematics flow here provides fixed continuation
 messages and performs verification after the rollout.
 
-The main model profile replaces overlong questions before selecting its 10,000
-training rows. If filtering an unprepared corpus explicitly, veRL selects the
-sample prefix before filtering, which can shorten an epoch. The example above
-allows two epochs so the local filtered corpus still reaches the 500-update
-limit. Rich verifier audits are retained in validation JSONL; aggregate
-validation metrics use numeric scalar fields only.
+The main model profile validates the token lengths of the original 10,000-row
+training prefix before launch. Rich verifier audits are retained in validation
+JSONL; aggregate validation metrics use numeric scalar fields.
 
 The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, selects exactly
 the first 10,000 original training rows. Overlong prefix rows raise an error;
@@ -83,7 +78,8 @@ discount/tax reference is corrected from 54 to 66. Original source files and
 held-out membership are preserved; the cleaned splits and full audit are saved
 under `_meta/data/`. Explicit `DEEPSCALER_TRAIN_PATH` / `DEEPSCALER_VAL_PATH`
 overrides select supplied data. `DEEPSCALER_CLEAN_DATA=False` (the default) selects the original
-corpus for comparisons. Data checks do not prove every single-label answer.
+corpus for comparisons. Cleaning reports record structural checks, duplicate-label
+comparisons, exclusions, and reference corrections.
 
 The local profile disables Ray OpenTelemetry and sets
 `VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU=0` to avoid assembling large CPU copies
@@ -224,12 +220,11 @@ context by default (AIME evaluation uses 13,312). **The total generated-token bu
 For five turns, these caps are 820 and 1,024 respectively; each generation is also capped by
 the remaining trajectory budget and context space.
 Unused tokens from an early-stopped turn are not added to a later turn's cap.
-These caps bound generation; they do not guarantee that every trajectory uses
-all turns or all tokens. Context exhaustion ends the rollout without truncating
-its recorded history.
+Generation ends on a final submission or an exhausted turn, output-token, or
+context budget. Recorded history is preserved when context space is exhausted.
 
 ```bash
-# Default: at most five turns; same option applies to A1, Judge, PPO and AIME.
+# Default: at most five turns; the training option applies to A1, A9, Judge and PPO.
 DEEPSCALER_MAX_STEPS=5 bash scripts/deepscaler/pnp_deepscaler.sh
 # More turns, retaining the same total token budget.
 DEEPSCALER_MAX_STEPS=8 bash scripts/deepscaler/pnp_deepscaler.sh

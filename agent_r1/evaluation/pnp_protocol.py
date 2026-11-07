@@ -7,7 +7,7 @@ from .official import request
 
 # v3: avg@k over k independent trajectories (k=4 for AIME2026/LiveCodeBench, k=1 for
 # AIME2025/HotpotQA/MATH-Vision) and the three-step MATH-Vision budget (3 x 2048 = 6144
-# tokens). v2 summaries are single-trajectory and not comparable.
+# tokens). v2 summaries use one trajectory per question.
 # v4 adds canonical Equation (9) records and joint-metric summaries.
 PROTOCOL_VERSION = "pnp-agent-evaluation-v4"
 

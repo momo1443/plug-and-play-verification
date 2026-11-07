@@ -12,7 +12,7 @@ Built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.
 
 ## Overview
 
-Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. Verified work receives credit at its source step, even when the final answer is incorrect or missing. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
+Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. For eligible final submissions, verified work receives credit at its source step even when the submitted answer is incorrect. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
 
 | Domain | Training dataset | Evaluation benchmark |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ Our framework checks numeric equalities, retrieved evidence, code executions, an
 
 ## Results
 
-Manuscript Tables 1-3 report the following scores (%). `Avg.` is the unweighted mean across the four benchmarks. These are the manuscript's reported results, not new evaluations of this checkout.
+The following scores (%) are reported in manuscript Tables 1-3. `Avg.` is the unweighted mean across the four benchmarks.
 
 ### Qwen3.5-4B
 
@@ -131,7 +131,7 @@ bash run_pnp.sh deepscaler \
 
 The launcher also accepts `hotpotqa`, `taco`, `vision_r1`, and `--model Qwen3.5-9B`. Defaults select 10,000 training rows and four rollouts per prompt; 4B uses full fine-tuning and 9B uses LoRA (rank/alpha 64).
 
-See the [launcher index](scripts/README.md) for comparison commands and the [paper contract](docs/paper-contract.md) for batch sizes and token budgets. [Frozen-judge runs](docs/experiments/llm-process-judge.md) allocate seven GPUs to the actor and one to the judge.
+See the [launcher index](scripts/README.md) for comparison commands and the [shared settings](scripts/common/README.md) for batch sizes and token budgets. [Frozen-judge runs](scripts/llm_judge/run_grpo_4b_judge_9b.sh) allocate seven GPUs to the actor and one to the judge.
 
 ## Method
 
@@ -157,7 +157,7 @@ Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `
 
 **Verifier-induced self-reflection.** Later corrections do not erase earlier failures, but verified revisions can still earn process credits at their source steps. This supervision can encourage checking and revising intermediate reasoning, potentially reducing error propagation.
 
-Reward and audit definitions are detailed in the [paper contract](docs/paper-contract.md).
+Reward and audit definitions are implemented in the [shared verifier interface](agent_r1/verifier/reward.py).
 
 <details>
 <summary><strong>Example: verification on HotpotQA</strong></summary>
@@ -193,17 +193,16 @@ bash run_pnp_eval.sh aime2025 \
   --preflight-only
 ```
 
-Replace the paths and snapshot identifier with your actual inputs; remove `--preflight-only` to run. The runner defaults to eight GPUs and saves manifests, outputs, and summaries under `logs/`. Use matching datasets, interfaces, graders, and budgets across policies. All four benchmark commands are in the [evaluation guide](docs/pnp_evaluation.md).
+Replace the paths and snapshot identifier with your actual inputs; remove `--preflight-only` to run. The runner defaults to eight GPUs and saves manifests, outputs, and summaries under `logs/`. Use matching datasets, interfaces, graders, and budgets across policies. The [evaluation entrypoint](run_pnp_eval.sh) supports all four domains.
 
 ## Documentation
 
 | Resource | Contents |
 | --- | --- |
-| [Repository guide](docs/README.md) | Code layout |
 | [Launcher index](scripts/README.md) | Training and comparison commands |
-| [Paper contract](docs/paper-contract.md) | Rewards, budgets, and metrics |
+| [Verifier interface](agent_r1/verifier/reward.py) | Reward composition and source-step credits |
 | [Shared settings](scripts/common/README.md) | Model and optimizer options |
-| [Evaluation guide](docs/pnp_evaluation.md) | Benchmarks and official graders |
+| [Evaluation settings](agent_r1/evaluation/pnp_protocol.py) | Benchmark budgets and metrics |
 | [CPU checks](tests/README.md) | Test instructions |
 
 Run CPU checks after installing the task and grader dependencies:
@@ -212,7 +211,7 @@ Run CPU checks after installing the task and grader dependencies:
 PYTHONPATH=.:tests python -m pytest -q tests
 ```
 
-Reproducing manuscript scores requires the corresponding checkpoints and frozen data. CPU tests check implementation behavior.
+Evaluation uses model checkpoints and frozen dataset snapshots. CPU tests cover reward construction, verifier behavior, and runtime interfaces.
 
 ## Acknowledgements and License
 

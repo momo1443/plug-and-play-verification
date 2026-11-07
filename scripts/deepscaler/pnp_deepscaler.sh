@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # DeepScaleR GRPO with bounded reasoning turns and retrospective verification.
-# DEEPSCALER_MAX_STEPS defaults to 5; set 1 for the previous single-turn protocol.
+# DEEPSCALER_MAX_STEPS defaults to 5; set 1 for a single-turn run.
 # Initial input: 2048 tokens; total generated tokens: 4096 (4B) / 5120 (9B).
 # Up to five turns share that total budget, including the final submission.
 #

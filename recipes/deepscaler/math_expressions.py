@@ -1,7 +1,7 @@
 """Bounded arithmetic with exact rationals and explicit LaTeX semantics.
 
 Unknown notation is excluded from process evidence, never silently deleted.
-This parser checks arithmetic; it does not prove a problem's reasoning.
+This parser verifies supported numeric equalities extracted from reasoning text.
 """
 from __future__ import annotations
 
