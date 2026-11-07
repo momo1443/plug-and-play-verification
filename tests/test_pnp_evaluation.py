@@ -28,9 +28,18 @@ from recipes.taco_a9.sandbox import TestCase as SandboxCase
 from test_aime_agent_eval import CharacterTokenizer, ScriptedEngine
 from pnp_test_utils import load_source, vision_contract, vision_prompts, visual_artifacts, tool_format, call
 from recipes.vision_r1.verifier import verify_process as verify_vision_process
+from agent_r1.evaluation.consistency import consistency_record
+from agent_r1.verifier import VerificationResult
 
 # Single-trajectory AIME profile for tests that script exactly one generation per call.
 SINGLE_AIME = replace(PROFILES["aime2025"], trajectories_per_problem=1)
+
+
+def audited_record(row, checks=(1,)):
+    return {**row, **consistency_record(
+        VerificationResult((), {"applicable_checks": list(checks)}),
+        float(row["is_correct"]), eligible=row["terminal_eligible"],
+    )}
 
 
 class PnpEvaluationTest(unittest.TestCase):
@@ -80,6 +89,7 @@ class PnpEvaluationTest(unittest.TestCase):
                  "termination_reason": reason, "generated_output_tokens": 3,
                  "verified_process_reward": 1000}
                 for i, reason in enumerate(("final_submission", "token_budget", "max_steps", "empty_generation"))]
+        rows = [audited_record(row) for row in rows]
         result = summarize_records(rows, ["0", "1", "2", "3"], SINGLE_AIME)
         self.assertEqual(result["accuracy"], 0.25)
         self.assertEqual(result["missing_or_invalid_submissions"], 3)
@@ -93,6 +103,7 @@ class PnpEvaluationTest(unittest.TestCase):
                  "termination_reason": "final_answer", "generated_output_tokens": 10}
                 for qid, values in outcomes.items() for s, ok in enumerate(values)]
         four = replace(PROFILES["aime2025"], trajectories_per_problem=4)
+        rows = [audited_record(row) for row in rows]
         result = summarize_records(rows, list(outcomes), four)
         self.assertEqual((result["aggregation"], result["total"], result["total_trajectories"]), ("avg@4", 3, 12))
         self.assertEqual(result["accuracy"], 4 / 12)
@@ -139,8 +150,8 @@ class PnpEvaluationTest(unittest.TestCase):
         self.assertEqual([(task, sample) for task, sample, _ in rows],
                          [(t, s) for t in ("a", "b") for s in range(4)])
         self.assertEqual([record["sample_index"] for _, _, record in rows], [0, 1, 2, 3] * 2)
-        result = summarize_records([dict(record, terminal_eligible=record["is_correct"],
-                                         termination_reason="final_submission", generated_output_tokens=1)
+        result = summarize_records([audited_record(dict(record, terminal_eligible=record["is_correct"],
+                                         termination_reason="final_submission", generated_output_tokens=1))
                                     for _, _, record in rows], ["a", "b"], PROFILES["livecodebench"])
         self.assertEqual((result["aggregation"], result["accuracy"], result["pass_at_4"]), ("avg@4", 0.5, 1.0))
 

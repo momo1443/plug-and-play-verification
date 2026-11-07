@@ -3,7 +3,8 @@ set -euo pipefail
 
 # DeepScaleR GRPO with bounded reasoning turns and retrospective verification.
 # DEEPSCALER_MAX_STEPS defaults to 5; set 1 for the previous single-turn protocol.
-# Initial input: 2048 tokens; total generated tokens: 10240 (5 turns x 2048), 4B and 9B.
+# Initial input: 2048 tokens; total generated tokens: 4096 (4B) / 5120 (9B).
+# Up to five turns share that total budget, including the final submission.
 #
 # Schedule (DEEPSCALER_EM_WARMUP_STEPS=50 by default):
 #   Steps 1-50:    Strict terminal EM reward — cold-start stabilization
@@ -162,15 +163,16 @@ OUTPUT_DIR="${DEEPSCALER_OUTPUT_DIR:-$PROJECT_DIR/logs/$RUN_ID}"
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
 
-# Data — every arm and model scale trains on the same prepared subset: cleaned DeepScaleR
-# rows, then the first TRAIN_MAX_SAMPLES prompts within MAX_PROMPT_LENGTH tokens.
+# Every arm/model uses the original training split's first TRAIN_MAX_SAMPLES rows.
+# Labels and row order are preserved. An overlong prefix row is an error, not
+# replaced by a later row. Data cleaning is an explicit optional experiment.
 # An explicit DEEPSCALER_TRAIN_PATH skips preparation.
 VAL_PATH="${DEEPSCALER_VAL_PATH:-$PROJECT_DIR/data/corpus/deepscaler/validation.parquet}"
 if [[ -n "${DEEPSCALER_TRAIN_PATH:-}" ]]; then
     TRAIN_PATH="$DEEPSCALER_TRAIN_PATH"
 else
     TRAIN_SOURCE_PATH="$PROJECT_DIR/data/corpus/deepscaler/train.parquet"
-    if [[ "${DEEPSCALER_CLEAN_DATA:-True}" == True ]]; then
+    if [[ "${DEEPSCALER_CLEAN_DATA:-False}" == True ]]; then
         CLEAN_DATA_DIR="$OUTPUT_DIR/_meta/data"
         "$PYTHON_BIN" -m recipes.deepscaler.clean_data --output-dir "$CLEAN_DATA_DIR"
         TRAIN_SOURCE_PATH="$CLEAN_DATA_DIR/train.parquet"
@@ -234,7 +236,7 @@ CHECKPOINT_SAVE_CONTENTS='["model","optimizer","extra"]'
     data.val_max_samples="$VAL_MAX_SAMPLES" \
     data.max_prompt_length="$MAX_PROMPT_LENGTH" \
     data.max_response_length="$MAX_RESPONSE_LENGTH" \
-    data.filter_overlong_prompts="${DEEPSCALER_FILTER_OVERLONG_PROMPTS:-True}" \
+    data.filter_overlong_prompts="${DEEPSCALER_FILTER_OVERLONG_PROMPTS:-False}" \
     data.truncation=error \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path="$MODEL_PATH" \

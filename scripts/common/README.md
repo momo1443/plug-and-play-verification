@@ -10,20 +10,20 @@ experiment protocols. Keep their token allocations separate:
 
 | Entry point | Profile | Prompt tokens | Response tokens |
 | --- | --- | ---: | ---: |
-| `scripts/deepscaler/pnp_deepscaler.sh` | `deepscaler_paper` | 2048 initial; 8192 history | 10240 total per trajectory (2048 per turn) |
+| `scripts/deepscaler/pnp_deepscaler.sh` | `deepscaler_paper` | 2048 initial; 8192 history | 4096 total (4B) / 5120 total (9B) |
 | `scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` | `deepscaler_toolenv` | 4096 | 2048 per interaction step |
 
-The main math flow defaults to `DEEPSCALER_MAX_STEPS=5`, matching the reported
-mathematics results; `1` selects an optional single-generation setting, and
+The main math flow defaults to `DEEPSCALER_MAX_STEPS=5`; `1` selects an optional single-generation setting, and
 larger positive integers allow more reasoning turns. It uses a per-turn cap of
 `ceil(total / max_steps)` and no answer-check feedback. Its total budget and context overrides are
 `DEEPSCALER_MAX_RESPONSE_LENGTH` and `DEEPSCALER_MAX_MODEL_LENGTH`; apply the
-same settings to training arms and AIME evaluation. Other domain profiles
-retain their original turn counts and per-generation budgets. All main profiles
-now default to prompt batch 20 for 4B and 8 for 9B, following the updated
-eight-A40 hardware configuration. These batch sizes match Appendix C;
-500 updates sample 4,000 prompts for 9B, while the
-selected training prefix remains 10,000 rows.
+same training settings to all reward arms. Independent AIME evaluation uses
+10,240 output tokens with a 2,048-token per-turn cap. Other domain profiles
+retain their original turn counts and per-generation budgets. Appendix C prompt
+and mini-batches are 20 for DeepScaleR and TACO at both model sizes, 20/8 for
+HotpotQA 4B/9B, and 8 for Vision-R1 at both model sizes. At 500 updates, batch
+20 samples 10,000 prompts and batch 8 samples 4,000 prompts; the selected
+training prefix remains 10,000 rows.
 
 ToolEnv A1 and A9 use the same shared launcher. Its length overrides are
 `DEEPSCALER_TOOL_MAX_PROMPT_LENGTH`, `DEEPSCALER_TOOL_MAX_RESPONSE_LENGTH`, and

@@ -188,8 +188,8 @@ def compute_tool_trajectory_reward(
     outcome-only warmup and prompt-group mixture weights. For A9, exclude tool
     XML and observations from reasoning_segments. The judge arm instead takes
     a separately computed process_verification with causal source-step credits.
-    Missing submissions receive terminal EM zero while their independently
-    verified process credits remain eligible under the existing schedule.
+    Missing submissions receive zero composed reward, as specified in the
+    paper. Verifier audits remain available independently of reward eligibility.
     """
     if reward_mode not in {"terminal_only", "uniform_equation_process", "llm_judge"}:
         raise ValueError(f"Unsupported DeepScaleR ToolEnv reward mode: {reward_mode}")
@@ -230,7 +230,7 @@ def compute_tool_trajectory_reward(
         verification=verification,
         schedule=schedule,
         terminal_gate_passed=has_final_answer,
-        process_requires_terminal_submission=False,
+        process_requires_terminal_submission=True,
     )
     process_segment_audits = list(verification.audit.get("process_segment_audits", []))
     return _as_trajectory_reward(

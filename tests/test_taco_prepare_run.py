@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TacoPrepareRunTest(unittest.TestCase):
-    """Both TACO arms accept the 4B (20) and 9B (8) paper batch sizes on eight GPUs."""
+    """Both TACO arms accept paper batch 20 and an explicit reduced batch 8."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

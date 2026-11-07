@@ -19,6 +19,7 @@ from agent_r1.evaluation.pnp_datasets import dataset_hashes, load_tasks
 from agent_r1.evaluation.pnp_protocol import (PROFILES, evaluation_profile, is_aime, mathvision_score, qa_scores,
                                               summarize_records)
 from agent_r1.evaluation.official import grader_identity
+from agent_r1.evaluation.consistency import consistency_record, finalize_evaluation_record
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -151,8 +152,11 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
             parsed = final_answer_record(step["response"])
             reasoning = "" if step["mode"] == "submission" else parsed["reasoning"] if parsed else step["response"]
             segments.append((step["turn"], reasoning))
-        verification = verify_process(segments, question=task.actor_inputs["problem"])
-        records.append({
+        verification = verify_process(
+            segments, question=task.actor_inputs["problem"],
+            truncated_steps=[step["turn"] for step in state["steps"] if step.get("generation_truncated")],
+        )
+        records.append(finalize_evaluation_record({
             "question_id": task.question_id, "sample_index": sample,
             "submitted_answer": state["selected_answer"],
             "predicted_integer": integer, "terminal_eligible": integer is not None,
@@ -160,7 +164,8 @@ def math_records(engine, tokenizer, sampling_factory, tasks, profile):
             "termination_reason": state["termination_reason"], "policy_step_count": len(state["steps"]),
             "generated_output_tokens": state["response_tokens"], "steps": state["steps"],
             "verification": {"verified_process_reward": verification.process_reward,
-                             "audit_completed": True, "audit": verification.audit}})
+                             "audit_completed": True, "audit": verification.audit,
+                             **consistency_record(verification, 0.0, eligible=integer is not None)}}))
     return records
 
 
@@ -209,7 +214,7 @@ def worker(args, tasks, profile):
                 record = asyncio.run(generate_task(
                     args.benchmark, task, tokenizer, processor, server, profile, resources))
                 record.update(grade_record(args.benchmark, record, task.reference, args.timeout_seconds))
-                return record
+                return finalize_evaluation_record(record)
 
             for task, sample, record in sampled_task_records(selected, profile.trajectories_per_problem, run_one):
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")

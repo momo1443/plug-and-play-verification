@@ -18,7 +18,14 @@ def summarize(entries):
         raise ValueError("Select a single checkpoint with --global-step; do not pool training updates")
     outcomes, consistencies, successes, infos = [], [], [], []
     for row in rows:
-        info = row["steps"][-1] if row.get("steps") else row
+        # Standalone evaluation stores canonical fields at trajectory level;
+        # trainer validation dumps store them on the final policy step.
+        if "verification_protocol" in row:
+            info = row
+        elif row.get("steps"):
+            info = row["steps"][-1]
+        else:
+            info = row
         if info.get("verification_protocol") != PROTOCOL_VERSION:
             raise ValueError(f"Audit requires {PROTOCOL_VERSION}; re-evaluate old dumps rather than infer C_d from rewards")
         checks = info["verification_checks"]

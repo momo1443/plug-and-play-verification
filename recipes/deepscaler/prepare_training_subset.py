@@ -7,18 +7,20 @@ from pathlib import Path
 
 
 def select_prompt_indices(rows, tokenizer, sample_count, max_prompt_length):
-    selected, excluded = [], []
-    for index, row in enumerate(rows):
+    if sample_count < 1 or max_prompt_length < 1:
+        raise ValueError("Sample count and prompt limit must be positive")
+    if len(rows) < sample_count:
+        raise ValueError(f"Only {len(rows)} source rows; need {sample_count}")
+    for index, row in enumerate(rows[:sample_count]):
         token_ids = tokenizer.apply_chat_template(
             row["prompt"], add_generation_prompt=True, tokenize=True, return_dict=False
         )
         if len(token_ids) > max_prompt_length:
-            excluded.append({"row": index, "tokens": len(token_ids)})
-        else:
-            selected.append(index)
-        if len(selected) == sample_count:
-            return selected, excluded
-    raise ValueError(f"Only {len(selected)} eligible rows; need {sample_count}")
+            raise ValueError(
+                f"Training prefix row {index} has {len(token_ids)} prompt tokens; "
+                f"limit is {max_prompt_length}. Source-prefix selection cannot skip or replace rows."
+            )
+    return list(range(sample_count)), []
 
 
 def main():
@@ -50,7 +52,7 @@ def main():
         "model": str(args.model.resolve()),
         "samples": len(selected),
         "max_prompt_length": args.max_prompt_length,
-        "selection": "first eligible rows in existing training order; labels unchanged",
+        "selection": "exact source prefix; row order and labels unchanged; overlong rows are errors",
         "selected_rows": selected,
         "excluded_overlong_rows": excluded,
     }

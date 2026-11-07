@@ -24,7 +24,7 @@ class PnpLauncherTest(unittest.TestCase):
             "trainer.n_gpus_per_node": "8", "trainer.total_training_steps": "500",
             "trainer.resume_mode": "disable", "trainer.test_freq": "-1", "trainer.save_freq": "10",
             "data.train_batch_size": "20", "data.train_max_samples": "10000",
-            "data.max_prompt_length": "2048", "data.max_response_length": "10240",
+            "data.max_prompt_length": "2048", "data.max_response_length": "4096",
             "actor_rollout_ref.rollout.n": "4", "actor_rollout_ref.rollout.max_model_len": "8192",
             "actor_rollout_ref.rollout.gpu_memory_utilization": "0.30",
             "actor_rollout_ref.rollout.max_num_seqs": "32", "actor_rollout_ref.rollout.agent.num_workers": "16",
@@ -48,7 +48,8 @@ class PnpLauncherTest(unittest.TestCase):
                     )
                     self.assertEqual(options["actor_rollout_ref.model.path"], str(self.model))
                     self.assert_adaptation(options, rank)
-                    self.assertEqual(options["data.train_batch_size"], "20" if rank == 0 else "8")
+                    expected_batch = "8" if domain == "vision_r1" or (rank and domain == "hotpotqa") else "20"
+                    self.assertEqual(options["data.train_batch_size"], expected_batch)
                     self.assertEqual(options["trainer.total_training_steps"], "500")
                     self.assertEqual(options["trainer.n_gpus_per_node"], "8")
 

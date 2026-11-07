@@ -1,8 +1,8 @@
 # DeepScaleR paper profile and ToolEnv extension
 
 The main entrypoints are `bash run_pnp.sh deepscaler --arm outcome` and
-`bash run_pnp.sh deepscaler`. Both prepare the same cleaned 10,000-row subset, 500 updates,
-prompt batch 20 (4B) or 8 (9B), four rollouts, and the common `VerificationResult` composer.
+`bash run_pnp.sh deepscaler`. Both prepare the same original 10,000-row training prefix, 500 updates,
+prompt batch 20 at both model sizes (Appendix C), four rollouts, and the common `VerificationResult` composer.
 The frozen-judge and PPO launchers use the same flow and generation limits.
 See [the implementation contract](../../docs/paper-contract.md).
 
@@ -52,13 +52,16 @@ allows two epochs so the local filtered corpus still reaches the 500-update
 limit. Rich verifier audits are retained in validation JSONL; aggregate
 validation metrics use numeric scalar fields only.
 
-The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, prepares exactly 10,000 eligible
-training rows, replacing overlong entries with subsequent rows in source order.
+The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, selects exactly
+the first 10,000 original training rows. Overlong prefix rows raise an error;
+rows are never replaced by later examples and reference labels remain unchanged.
 It defaults to eight NVIDIA A40 GPUs (0–7), batch/mini-batch 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
-are 2,048 initial tokens, 8,192 context tokens, 10,240 completion tokens across
-five turns, capped at 2,048 tokens per turn. Checkpoints run every 10 updates;
+are 2,048 initial tokens, 8,192 context tokens, and 4,096 completion tokens across
+up to five turns, capped at 820 tokens per turn and the remaining total budget.
+The 9B profile uses 5,120 completion tokens with a 1,024-token per-turn cap.
+Checkpoints run every 10 updates in the 4B model profile;
 periodic held-out validation is disabled. The default A9 EM-only reward phase is separate from LR
 warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
 The prepared subset, its source-selection manifest and resolved configuration
@@ -71,14 +74,15 @@ GPU utilization measures kernel activity; GPU memory usage is a separate metric.
 Size the vLLM budget from the complete training peak, including actor backward
 and optimizer states, rather than from generation-phase memory alone.
 
-The local model profile cleans the source data before selecting
-10,000 prompts. Every source row and every distinct reference label is checked;
+The default uses the original training split without cleaning or label changes.
+Optional `DEEPSCALER_CLEAN_DATA=True` enables a separate cleaning experiment before
+prefix selection. In that mode every source row and distinct reference label is checked;
 non-equivalent labels for duplicate questions, missing referenced diagrams and
 unsupported answer formats are quarantined. The independently checked dress
 discount/tax reference is corrected from 54 to 66. Original source files and
 held-out membership are preserved; the cleaned splits and full audit are saved
 under `_meta/data/`. Explicit `DEEPSCALER_TRAIN_PATH` / `DEEPSCALER_VAL_PATH`
-overrides select supplied data. `DEEPSCALER_CLEAN_DATA=False` selects the original
+overrides select supplied data. `DEEPSCALER_CLEAN_DATA=False` (the default) selects the original
 corpus for comparisons. Data checks do not prove every single-label answer.
 
 The local profile disables Ray OpenTelemetry and sets
@@ -109,8 +113,9 @@ Qwen generation prompt opens `<think>`, a closing `</think>` is required before
 a submitted answer. Reasoning turns use the model's default thinking mode.
 The last available turn is a concise visible answer submission with
 `enable_thinking=False`, using the same remaining completion budget (normally
-2,048 tokens after four 2,048-token turns). Standalone AIME2025/AIME2026 evaluation uses the
-same turn protocol and the same 10,240-token budget (2,048 per turn, 13,312 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
+816 tokens after four 820-token turns for 4B; 1,024 for 9B).
+Standalone AIME2025/AIME2026 evaluation uses the same turn protocol with its own
+10,240-token budget (2,048 per turn, 13,312 context). Set `DEEPSCALER_FINAL_TURN_SUBMISSION=False`
 to reproduce the full-thinking protocol. All token budgets remain unchanged.
 The final submission prompt prefills `\boxed{` as prompt tokens, then the model
 generates the answer and its closing brace. Nested and escaped math braces are
@@ -119,7 +124,7 @@ in chunks of at most 64 tokens and stops requesting chunks once a complete box
 is available; transport chunks still constitute one policy turn. Original
 sampled token IDs and log probabilities are retained through the closing box,
 and any generated suffix discarded from policy training still counts against
-the 10,240-token budget. `final_answer_prefill_step` records the turn for offline
+the trajectory's total completion budget. `final_answer_prefill_step` records the turn for offline
 replay; rollout output contains the generated suffix, with the prefix in its
 input. Submission-only output does not receive process credit.
 Earlier continuation prompts advance the existing solution and request a
@@ -215,8 +220,8 @@ outcome scoring uses the reference only after a final answer has been selected.
 
 The original input limit is 2048 tokens. Multi-turn training history uses an 8,192-token
 context by default (AIME evaluation uses 13,312). **The total generated-token budget per trajectory** is
-10,240 for both 4B and 9B, with a per-turn cap of `ceil(total / max_steps)`.
-For five turns, this cap is 2,048; each generation is also capped by
+4,096 for 4B and 5,120 for 9B, with a per-turn cap of `ceil(total / max_steps)`.
+For five turns, these caps are 820 and 1,024 respectively; each generation is also capped by
 the remaining trajectory budget and context space.
 Unused tokens from an early-stopped turn are not added to a later turn's cap.
 These caps bound generation; they do not guarantee that every trajectory uses

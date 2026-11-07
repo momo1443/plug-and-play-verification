@@ -114,7 +114,7 @@ def test_summary_uses_every_trajectory_and_rejects_missing_audits():
         summarize([stale_consistency])
 
 
-def test_math_failed_equations_survive_and_incomplete_trace_retains_process_only():
+def test_math_incomplete_trace_keeps_audits_but_has_zero_composed_reward():
     verification = verify_math([(1, "Step 1: 2 + 3 = 6\nStep 2: 2 + 3 = 5")])
     assert verification.audit["applicable_checks"] == [0, 1]
     reward = compute_tool_trajectory_reward(reward_mode="uniform_equation_process", final_response=None, ground_truth="5",
@@ -122,8 +122,9 @@ def test_math_failed_equations_survive_and_incomplete_trace_retains_process_only
         prompt_group_key="train:1", process_verification=verification)
     assert reward.terminal_em == reward.terminal_component == 0
     assert reward.process_reward == 0.5
-    assert reward.score == pytest.approx(reward.process_weight * 0.5)
-    assert reward.score > 0
+    assert reward.score == 0
+    assert reward.composed.process_requires_terminal_submission
+    assert all(value == 0 for value in reward.process_step_components.values())
 
 
 async def _hotpot(*, complete=True, validation=False, invalid_certificate=False):

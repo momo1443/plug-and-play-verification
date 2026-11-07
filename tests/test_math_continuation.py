@@ -193,21 +193,21 @@ class MathContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(output.steps[0].reward_score, 0)
         self.assertEqual(output.steps[-1].reward_score, 0)
 
-    async def test_incomplete_retains_process_credits_with_zero_terminal_reward(self):
+    async def test_incomplete_keeps_verifier_audits_with_zero_composed_reward(self):
         output, _, _ = await self.run_flow([REASONING] * 5)
         self.assertEqual(len(output.steps), 5)
         self.assertTrue(all(step.response_ids for step in output.steps))
         info = output.steps[-1].extra_fields["reward_extra_info"]
         self.assertFalse(info["terminal_eligible"])
         self.assertFalse(info["terminal_gate_passed"])
-        self.assertFalse(info["process_requires_terminal_submission"])
+        self.assertTrue(info["process_requires_terminal_submission"])
         self.assertEqual(info["terminal_em"], 0)
         self.assertEqual(info["optimizer_terminal_component"], 0)
         self.assertEqual(info["verified_success"], 0)
         self.assertEqual(output.steps[-1].reward_score, 0)
-        self.assertTrue(all(step.reward_score > 0 for step in output.steps[:4]))
+        self.assertTrue(all(step.reward_score == 0 for step in output.steps))
         self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
-        self.assertAlmostEqual(info["optimizer_process_total"], info["optimizer_process_weight"])
+        self.assertEqual(info["optimizer_process_total"], 0)
         self.assertEqual(info["termination_reason"], "max_steps")
         self.assertEqual(info["deterministic_verification"]["applicable_checks"], [1] * 4)
         self.assertEqual(info["verification_consistency"], 1)

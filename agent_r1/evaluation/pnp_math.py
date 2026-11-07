@@ -117,10 +117,13 @@ def generate_trajectories(engine, tokenizer, sampling_factory, problems, *, max_
                 final = (prefilled_final_record(response) if submission else
                          final_answer_record(response, require_think_close=bool(re.search(r"<think>\s*$", tail))))
                 recorded = FINAL_ANSWER_PREFIX + response if submission else response
+                truncated = (final is None and len(ids) == limit
+                             and ids[-1] != getattr(tokenizer, "eos_token_id", None))
                 state["responses"].append(recorded)
                 state["steps"].append({"turn": turn, "mode": "submission" if submission else "reasoning",
                                        "response": recorded, "response_token_ids": ids,
                                        "generated_tokens": item["consumed"],
+                                       "generation_truncated": truncated,
                                        "generation_requests": item["requests"]})
                 if final is not None:
                     state["selected_answer"] = final["answer"]

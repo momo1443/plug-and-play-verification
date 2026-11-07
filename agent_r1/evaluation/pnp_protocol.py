@@ -8,7 +8,8 @@ from .official import request
 # v3: avg@k over k independent trajectories (k=4 for AIME2026/LiveCodeBench, k=1 for
 # AIME2025/HotpotQA/MATH-Vision) and the three-step MATH-Vision budget (3 x 2048 = 6144
 # tokens). v2 summaries are single-trajectory and not comparable.
-PROTOCOL_VERSION = "pnp-agent-evaluation-v3"
+# v4 adds canonical Equation (9) records and joint-metric summaries.
+PROTOCOL_VERSION = "pnp-agent-evaluation-v4"
 
 # AIME benchmarks share one mathematics flow; each requires its own full 30-question
 # I + II snapshot and dataset year.
@@ -159,4 +160,12 @@ def summarize_records(records, expected_ids, profile):
     if profile.benchmark == "hotpotqa":
         result.update(answer_em=result["accuracy"],
                       answer_f1=sum(row["answer_f1"] for row in records) / trajectories)
+    from .summarize import summarize
+    joint = summarize(records)
+    result.update({key: joint[key] for key in (
+        "verification_protocol", "C_d_mean", "M_d", "consistent_count", "verified_success_count",
+    )})
+    for key, value in joint.items():
+        if key.endswith(("_mean", "_denominator")) and key not in result:
+            result[key] = value
     return result

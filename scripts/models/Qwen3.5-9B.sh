@@ -42,7 +42,7 @@ case "$DATASET" in
     taco)
         # Preserve the previous 9B code-generation memory profile.
         export TACO_A9_TENSOR_PARALLEL_SIZE="${TACO_A9_TENSOR_PARALLEL_SIZE:-8}"
-        export TACO_A9_TRAIN_BATCH_SIZE="${TACO_A9_TRAIN_BATCH_SIZE:-8}"
+        export TACO_A9_TRAIN_BATCH_SIZE="${TACO_A9_TRAIN_BATCH_SIZE:-20}"
         export TACO_A9_ROLLOUT_N="${TACO_A9_ROLLOUT_N:-4}"
         export TACO_A9_MAX_PROMPT_LENGTH="${TACO_A9_MAX_PROMPT_LENGTH:-8192}"
         export TACO_A9_MAX_RESPONSE_LENGTH="${TACO_A9_MAX_RESPONSE_LENGTH:-2048}"

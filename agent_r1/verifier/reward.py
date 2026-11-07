@@ -144,7 +144,7 @@ class ComposedVerificationReward:
     schedule: UniformRewardSchedule
     terminal_gate_passed: bool
     verifier_audit: Mapping[str, Any]
-    process_requires_terminal_submission: bool = False
+    process_requires_terminal_submission: bool = True
 
     def record(self) -> dict[str, Any]:
         return {
@@ -172,12 +172,13 @@ def compose_verification_reward(
     verification: VerificationResult,
     schedule: UniformRewardSchedule,
     terminal_gate_passed: bool = True,
-    process_requires_terminal_submission: bool = False,
+    process_requires_terminal_submission: bool = True,
 ) -> ComposedVerificationReward:
     """Combine bounded credits, with separately configurable process gating.
 
-    Tasks may retain useful intermediate evidence without a final submission.
-    The terminal component still requires the terminal gate in either mode.
+    The paper contract gates both components on a valid final submission.
+    An eligible but incorrect submission may still earn process credits.
+    Retaining credits without a submission requires an explicit opt-out.
     """
 
     if not 0.0 <= float(terminal_reward) <= 1.0:

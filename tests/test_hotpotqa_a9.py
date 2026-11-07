@@ -415,9 +415,9 @@ class FormatGateTest(unittest.TestCase):
     """Final-submission format gates apply only to terminal rewards."""
 
     def test_format_gate_default_on(self):
-        """Outcome rewards require a valid final submission."""
+        """Both reward components require a valid final submission."""
         self.assertTrue(CONTRACT_CERT_MIX.format_gate)
-        self.assertFalse(CONTRACT_CERT_MIX.process_requires_terminal_submission)
+        self.assertTrue(CONTRACT_CERT_MIX.process_requires_terminal_submission)
 
 
     def test_warmup_schedule_remains_outcome_only(self):

@@ -5,6 +5,7 @@ import asyncio
 from types import SimpleNamespace
 
 from agent_r1.evaluation.pnp_protocol import EvaluationStop, TrajectoryBudget
+from agent_r1.evaluation.consistency import consistency_record
 
 
 class BudgetedServer:
@@ -178,7 +179,10 @@ async def audit_partial_flow(benchmark, task, flow, steps):
                 artifacts[artifact.artifact_id] = artifact
         result = verify_process(artifacts=artifacts, raw_certificate=None, submitted_answer="",
                                 submission_attempted=False)
-    return {"verified_process_reward": result.process_reward, "audit_completed": True, "audit": result.audit}
+    action_checks = [step.extra_fields["verification_action_valid"] for step in steps
+                     if "verification_action_valid" in step.extra_fields]
+    return {"verified_process_reward": result.process_reward, "audit_completed": True, "audit": result.audit,
+            **consistency_record(result, 0.0, eligible=False, extra_checks=action_checks)}
 
 
 async def generate_task(benchmark, task, tokenizer, processor, server, profile, resources):
@@ -203,18 +207,23 @@ async def generate_task(benchmark, task, tokenizer, processor, server, profile, 
         ids = step.response_ids.tolist()
         recorded_steps.append({"turn": index, "response": tokenizer.decode(ids, skip_special_tokens=True),
                                "generated_tokens": len(ids), "step_kind": step.extra_fields.get("step_kind"),
+                               "verification_action_valid": step.extra_fields.get("verification_action_valid"),
                                "artifacts": step.extra_fields.get("code_artifacts", step.extra_fields.get("visual_artifacts")),
                                "execution_ledger": step.extra_fields.get("execution_ledger")})
     info = steps[-1].extra_fields.get("reward_extra_info", {}) if steps else {}
     verification = {key: info[key] for key in (
-        "verified_process_reward", "verification_checks", "verification_consistency",
+        "verified_process_reward", "verification_protocol", "verification_checks", "verification_check_count",
+        "verification_consistency",
         "certificate_audit", "artifact_process_audits", "verifier_timing") if key in info}
     if "local_reward" in info:
         verification["verified_process_reward"] = info["local_reward"]
     verification["audit_completed"] = "verified_process_reward" in verification
-    if not verification["audit_completed"]:
+    if not verification["audit_completed"] or "verification_checks" not in verification:
         verification = await audit_partial_flow(benchmark, task, flow, steps)
     return {"question_id": task.question_id, "submitted_answer": answer,
             "terminal_eligible": answer is not None, "termination_reason": termination,
             "policy_step_count": len(steps), "generated_output_tokens": server.budget.generated_tokens,
-            "steps": recorded_steps, "verification": verification}
+            "steps": recorded_steps, "verification": verification,
+            **{key: info[key] for key in (
+                "revision_count", "developer_test_count", "retest_count", "revision_after_failed_test",
+            ) if key in info}}

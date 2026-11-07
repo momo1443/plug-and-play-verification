@@ -116,7 +116,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "arm": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
         "runtime_profile": "deepscaler_paper",
-        "contract_version": "deepscaler-paper-shared-contract-v9",
+        "contract_version": "deepscaler-paper-terminal-eligibility-v10",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": args.status,
         "output_dir": str(output_dir),
@@ -148,6 +148,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "credit_assignment": "step_causal",
             "train_max_samples": args.train_max_samples,
             "sampled_prompt_count": args.train_batch_size * args.total_training_steps,
+            "data_selection": "source_prefix",
+            "data_cleaning_enabled": os.environ.get("DEEPSCALER_CLEAN_DATA", "False") == "True",
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
             "max_prompt_length": args.max_prompt_length,
@@ -176,7 +178,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         },
         "reward_contract": {
             "terminal_gate": "valid_final_answer_submission",
-            "process_requires_terminal_submission": False,
+            "process_requires_terminal_submission": True,
             "reward_mode": os.environ.get("DEEPSCALER_REWARD_MODE", "uniform_equation_process"),
             "schedule": {
                 "warmup_steps": args.em_warmup_steps,
@@ -224,7 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-batch-size", type=int, required=True)
     parser.add_argument("--rollout-n", type=int, required=True)
     parser.add_argument("--max-prompt-length", type=int, default=2048)
-    parser.add_argument("--max-response-length", type=int, default=10240)
+    parser.add_argument("--max-response-length", type=int, default=4096)
     parser.add_argument("--max-agent-steps", type=int, default=5)
     parser.add_argument("--rollout-prompt-length", type=int)
     parser.add_argument("--total-training-steps", type=int, required=True)

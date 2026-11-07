@@ -308,7 +308,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     verification=verification,
                     schedule=schedule,
                     terminal_gate_passed=submitted_artifact is not None,
-                    process_requires_terminal_submission=False,
+                    process_requires_terminal_submission=True,
                 )
                 reward_score = 0.0
                 step_kind = "submit"
@@ -357,6 +357,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
                     "code_artifacts": [artifact.record() for artifact in artifacts.values()],
                     "execution_ledger": [record.record() for record in records.values()],
                     "step_kind": step_kind,
+                    "verification_action_valid": action_checks[-1],
                     "_agent_r1_is_validation": is_validation,
                     "reward_extra_info": terminal_info if action_name == "submit" else {
                         "optimizer_reward_phase": phase,
@@ -394,7 +395,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             composed = compose_verification_reward(
                 terminal_reward=outcome_reward, verification=verification, schedule=schedule,
                 terminal_gate_passed=submitted_artifact is not None,
-                process_requires_terminal_submission=False,
+                process_requires_terminal_submission=True,
             )
             terminal_info.update({"acc": outcome_reward, "terminal_private_all_pass": outcome_reward,
                                   "reward_mode": "llm_judge",
@@ -417,7 +418,7 @@ class TacoA9CodeAgentFlow(AgentFlowBase):
             )
             composed = compose_verification_reward(
                 terminal_reward=0.0, verification=verification, schedule=schedule,
-                terminal_gate_passed=False, process_requires_terminal_submission=False,
+                terminal_gate_passed=False, process_requires_terminal_submission=True,
             )
             apply_composed_reward(steps, composed, extra_final_info={
                 **consistency_record(verification, 0.0, eligible=False, extra_checks=action_checks),

@@ -147,7 +147,7 @@ For final outcome reward `E` and process credit `p_t`, the composer assigns:
 r_t=w_{k,g}\,\mathbf{1}\{t=T\}\,E+(1-w_{k,g})p_t.
 ```
 
-Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by its rollouts. Missing submissions receive zero outcome reward while retaining verified process credits. GRPO and PPO consume the composed step rewards; policy loss applies only to generated tokens.
+Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `w ~ Uniform(0,1)` per update and prompt group, shared by its rollouts. As specified in Section 3.3, ineligible final submissions receive zero composed reward. Eligible but incorrect submissions can still receive process credits. Verification audits are retained independently of reward eligibility. GRPO and PPO consume the composed step rewards; policy loss applies only to generated tokens.
 
 ### Last-Mile Refinement
 
@@ -168,9 +168,9 @@ Reward and audit definitions are detailed in the [paper contract](docs/paper-con
 
 ## Evaluation
 
-Accuracy scores final submissions over all selected questions; missing or invalid submissions score zero. Process consistency is recorded separately. The shared evaluator uses pinned, unmodified official HotpotQA, LiveCodeBench, and MATH-V graders; AIME uses exact integer equality.
+Accuracy scores final submissions over all selected questions; missing or invalid submissions score zero. Every evaluation record also includes the applicable checks, consistency `C_d`, and the joint score `E_d * C_d` from Equation (9). Summaries report `C_d_mean` and `M_d` over all trajectories, using the independently graded final outcome. The shared evaluator uses pinned, unmodified official HotpotQA, LiveCodeBench, and MATH-V graders; AIME uses exact integer equality.
 
-The current AIME 2025 evaluator retains the updated inference settings: four independent trajectories per question (avg@4), at most five policy generations, 10,240 total output tokens, 2,048 tokens per step, and a 13,312-token context. Switching the dataset year does not restore the historical evaluation settings or establish reproduction of the manuscript scores. Use the full 30-question AIME I + II snapshot from [MathArena/aime_2025](https://huggingface.co/datasets/MathArena/aime_2025) and record its pinned revision.
+Independent AIME evaluation uses at most five policy generations, 10,240 total output tokens, 2,048 tokens per step, and a 13,312-token context. AIME 2025 uses one trajectory per question; AIME 2026 uses four (avg@4). Sampling temperature is 0.6. Use the full 30-question AIME I + II snapshot from [MathArena/aime_2025](https://huggingface.co/datasets/MathArena/aime_2025) and record its pinned revision.
 
 Export FSDP checkpoints before inference and merge LoRA weights when applicable:
 

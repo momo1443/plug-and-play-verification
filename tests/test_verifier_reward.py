@@ -91,16 +91,28 @@ class VerifierRewardTest(unittest.TestCase):
                 audit={},
             )
 
-    def test_default_policy_decouples_process_from_terminal_submission(self) -> None:
+    def test_paper_default_gates_composed_reward_on_terminal_submission(self) -> None:
         composed = compose_verification_reward(
             terminal_reward=0.0,
             verification=VerificationResult(credits=(VerificationCredit(1, 0.5, {}),), audit={}),
             schedule=UniformRewardSchedule(0.7, 0.3, "mixed", "fixed", None),
             terminal_gate_passed=False,
         )
-        self.assertFalse(composed.process_requires_terminal_submission)
+        self.assertTrue(composed.process_requires_terminal_submission)
         self.assertEqual(composed.terminal_component, 0)
-        self.assertAlmostEqual(composed.process_step_components[1], 0.15)
+        self.assertEqual(composed.process_step_components[1], 0)
+        self.assertEqual(composed.score, 0)
+        self.assertEqual(composed.process_reward, 0.5)
+
+    def test_eligible_wrong_answer_still_receives_process_reward(self) -> None:
+        composed = compose_verification_reward(
+            terminal_reward=0.0,
+            verification=VerificationResult(credits=(VerificationCredit(1, 0.5, {}),), audit={}),
+            schedule=UniformRewardSchedule(0.7, 0.3, "mixed", "fixed", None),
+            terminal_gate_passed=True,
+        )
+        self.assertAlmostEqual(composed.score, 0.15)
+        self.assertEqual(composed.terminal_component, 0)
 
     def test_unsubmitted_process_credits_can_be_retained_without_terminal_credit(self) -> None:
         schedule = UniformRewardSchedule(0.7, 0.3, "mixed", "fixed", None)

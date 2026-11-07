@@ -111,7 +111,8 @@ class PnpConfigTest(unittest.TestCase):
                 with self.subTest(model=model, dataset=dataset):
                     options, arms = self.run_pnp(dataset, "--arm", "outcome", "--model", model)
                     self.assert_adaptation(options, rank)
-                    self.assertEqual(options["data.train_batch_size"], "8" if rank else "20")
+                    expected_batch = "8" if dataset == "vision_r1" or (rank and dataset == "hotpotqa") else "20"
+                    self.assertEqual(options["data.train_batch_size"], expected_batch)
                     if dataset == "deepscaler":
                         self.assertEqual(arms["DEEPSCALER_REWARD_MODE"], "terminal_only")
                     elif dataset == "hotpotqa":
@@ -141,12 +142,12 @@ class PnpConfigTest(unittest.TestCase):
                 options = self.launch(relative, arguments=arguments, DEEPSCALER_TRAIN_PATH="", DEEPSCALER_VAL_PATH="")
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                 modules = [args[1] for args in calls if len(args) > 1 and args[0] == "-m"]
-                self.assertIn("recipes.deepscaler.clean_data", modules)
+                self.assertNotIn("recipes.deepscaler.clean_data", modules)
                 subset = next(args for args in calls if args[1:2] == ["recipes.deepscaler.prepare_training_subset"])
                 self.assertEqual(subset[subset.index("--samples") + 1], options["data.train_max_samples"])
                 self.assertEqual(subset[subset.index("--max-prompt-length") + 1], "2048")
                 self.assertEqual(options["data.train_files"], subset[subset.index("--output") + 1])
-                self.assertEqual(options["data.filter_overlong_prompts"], "True")
+                self.assertEqual(options["data.filter_overlong_prompts"], "False")
 
     def test_every_policy_rollout_uses_thirty_percent_vllm_memory(self):
         memory = "actor_rollout_ref.rollout.gpu_memory_utilization"
@@ -167,7 +168,7 @@ class PnpConfigTest(unittest.TestCase):
                 self.assertEqual(options[tensor_parallel], expected_tp)
 
     def test_deepscaler_model_profiles_keep_their_completion_budgets(self):
-        for scale, expected_response in (("4b", "10240"), ("9b", "10240")):
+        for scale, expected_response in (("4b", "4096"), ("9b", "5120")):
             with self.subTest(scale=scale):
                 options = self.launch("scripts/deepscaler/pnp_deepscaler.sh", AGENT_R1_MODEL_SCALE=scale)
                 self.assertEqual(options["data.max_prompt_length"], "2048")
@@ -232,7 +233,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
         for launcher, batch in (("deepscaler/pnp_deepscaler.sh", "20"),
                                 ("hotpotqa/pnp_hotpotqa.sh", "20"),
                                 ("taco/pnp_taco.sh", "20"),
-                                ("vision_r1/pnp_vision_r1.sh", "20")):
+                                ("vision_r1/pnp_vision_r1.sh", "8")):
             with self.subTest(launcher=launcher):
                 options = self.launch("scripts/" + launcher)
                 self.assertEqual(options["data.train_max_samples"], "10000")
@@ -246,12 +247,12 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
 
     def test_9b_math_uses_paper_completion_length_and_shared_flow(self):
         options = self.launch("scripts/deepscaler/pnp_deepscaler.sh", AGENT_R1_MODEL_SCALE="9b")
-        self.assertEqual(options["data.max_response_length"], "10240")
-        self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "10240")
+        self.assertEqual(options["data.max_response_length"], "5120")
+        self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "5120")
         self.assertEqual(options["actor_rollout_ref.rollout.agent.default_agent_flow"], "deepscaler_paper_agent")
         self.assert_adaptation(options, 64)
 
-    def test_every_domain_uses_batch_eight_for_9b_actor(self):
+    def test_9b_domains_use_appendix_c_prompt_and_mini_batches(self):
         model = self.root / "Qwen3.5-9B"
         model.mkdir()
         (model / "config.json").write_text("{}")
@@ -263,8 +264,9 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
         ):
             with self.subTest(launcher=launcher):
                 options = self.launch("scripts/" + launcher, **{model_key: str(model)})
-                self.assertEqual(options["data.train_batch_size"], "8")
-                self.assertEqual(options["actor_rollout_ref.actor.ppo_mini_batch_size"], "8")
+                expected_batch = "8" if model_key in {"HOTPOTQA_MODEL_PATH", "VISION_R1_MODEL_PATH"} else "20"
+                self.assertEqual(options["data.train_batch_size"], expected_batch)
+                self.assertEqual(options["actor_rollout_ref.actor.ppo_mini_batch_size"], expected_batch)
                 self.assertEqual(options["trainer.total_training_steps"], "500")
                 self.assertEqual(options["actor_rollout_ref.rollout.n"], "4")
                 self.assert_adaptation(options, 64)
@@ -272,7 +274,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
     def test_9b_ppo_and_explicit_batch_override(self):
         options = self.launch("scripts/deepscaler/pnp_deepscaler.sh",
                               AGENT_R1_MODEL_SCALE="9b", AGENT_R1_OPTIMIZER="ppo")
-        self.assertEqual(options["data.train_batch_size"], "8")
+        self.assertEqual(options["data.train_batch_size"], "20")
         self.assertEqual(options["algorithm.adv_estimator"], "gae")
         self.assertEqual(options["actor_rollout_ref.rollout.agent.max_steps"], "5")
         options = self.launch("scripts/taco/pnp_taco.sh", AGENT_R1_MODEL_SCALE="9b",
@@ -290,7 +292,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
                                      "False" if turns == "1" else "True")
                     self.assertEqual(options["actor_rollout_ref.rollout.prompt_length"],
                                      "2048" if turns == "1" else "8192")
-                    self.assertEqual(options["data.max_response_length"], "10240")
+                    self.assertEqual(options["data.max_response_length"], "4096")
 
     def test_math_defaults_to_five_turns(self):
         for launcher in ("deepscaler/pnp_deepscaler.sh",):
@@ -298,7 +300,7 @@ class PnpBudgetIntegrationTest(unittest.TestCase):
             self.assertEqual(options["actor_rollout_ref.rollout.agent.max_steps"], "5")
             self.assertEqual(options["actor_rollout_ref.rollout.multi_turn.enable"], "True")
             self.assertEqual(options["data.max_prompt_length"], "2048")
-            self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "10240")
+            self.assertEqual(options["actor_rollout_ref.rollout.response_length"], "4096")
 
     def test_invalid_math_turn_count_fails_before_trainer(self):
         for turns in ("0", "-1", "4.5", "invalid"):

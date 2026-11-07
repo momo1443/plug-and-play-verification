@@ -44,11 +44,12 @@ bash scripts/hotpotqa/run_a2.sh
 bash scripts/hotpotqa/run_a3.sh
 ```
 
-Math defaults to at most five reasoning turns, shared by A1, A9, Judge, PPO
-and AIME evaluation. Use `DEEPSCALER_MAX_STEPS=8` for more turns or `=1` for
-an optional single-generation setting. The total generated-token budget
-is 10240 (2048 per turn) for both 4B and 9B; no correctness feedback enters this flow.
-The reported mathematics results use the default five-generation protocol.
+Math training defaults to at most five policy generations, shared by A1, A9,
+Judge and PPO, including the last-turn boxed submission. Use
+`DEEPSCALER_MAX_STEPS=8` for more turns or `=1` for a single generation.
+The total training output budget is 4096 tokens for 4B and 5120 for 9B;
+no correctness feedback enters this flow. Independent AIME evaluation uses
+five generations with a 10240-token total budget and a 2048-token per-turn cap.
 
 The shared `models/Qwen3.5-9B.sh DATASET` profile includes the previous HotpotQA
 and TACO 9B memory settings. Domain launchers share model adaptation from

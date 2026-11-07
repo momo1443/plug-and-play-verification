@@ -235,6 +235,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                 extra_fields={
                     "vision_r1_turn": turn,
                     "step_kind": step_kind,
+                    "verification_action_valid": action_checks[-1],
                     "visual_artifacts": [artifact.record() for artifact in artifacts.values()],
                     "reward_extra_info": {
                         "optimizer_reward_phase": schedule.phase,
@@ -268,7 +269,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                     verification=verification,
                     schedule=schedule,
                     terminal_gate_passed=True,
-                    process_requires_terminal_submission=False,
+                    process_requires_terminal_submission=True,
                 )
                 apply_composed_reward(
                     steps,
@@ -317,7 +318,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
             composed = compose_verification_reward(
                 terminal_reward=terminal_score, verification=verification, schedule=schedule,
                 terminal_gate_passed=submitted_answer is not None,
-                process_requires_terminal_submission=False,
+                process_requires_terminal_submission=True,
             )
             apply_composed_reward(steps, composed, extra_final_info={
                 **consistency_record(verify_process(
@@ -341,7 +342,7 @@ class VisionR1VisualAgentFlow(AgentFlowBase):
                 verification=verification,
                 schedule=schedule,
                 terminal_gate_passed=False,
-                process_requires_terminal_submission=False,
+                process_requires_terminal_submission=True,
             )
             apply_composed_reward(
                 steps,

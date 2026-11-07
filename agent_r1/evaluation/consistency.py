@@ -33,3 +33,25 @@ def consistency_record(
         "verified_success": float(terminal_reward) * consistent,
         "terminal_eligible": bool(eligible),
     }
+
+
+def finalize_evaluation_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Bind deterministic checks to the separately graded final outcome.
+
+    AgentFlows receive no benchmark reference during generation. Their outcome
+    placeholders must therefore be replaced before reporting Equation (9).
+    """
+    if not isinstance(record.get("is_correct"), bool):
+        raise ValueError("Final evaluation requires a binary graded outcome")
+    eligible = record["terminal_eligible"]
+    if record["is_correct"] and not eligible:
+        raise ValueError("An ineligible submission cannot be correct")
+    verification = dict(record["verification"])
+    if verification.get("verification_protocol") != PROTOCOL_VERSION:
+        raise ValueError(f"Evaluation requires {PROTOCOL_VERSION} check metadata")
+    deterministic = VerificationResult(
+        credits=(), audit={"applicable_checks": verification["verification_checks"]},
+    )
+    fields = consistency_record(deterministic, float(record["is_correct"]), eligible=eligible)
+    verification.update(fields)
+    return {**record, **fields, "verification": verification}

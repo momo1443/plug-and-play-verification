@@ -558,7 +558,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     verification=verification,
                     schedule=schedule,
                     terminal_gate_passed=eligible,
-                    process_requires_terminal_submission=False,
+                    process_requires_terminal_submission=True,
                 )
                 trajectory_audit = deterministic_verification.audit["certificate_audit"]
                 audit_records = trajectory_audit["steps"]
@@ -626,7 +626,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                 final_step = steps[-1]
                 reward_info = final_step.extra_fields["reward_extra_info"]
                 reward_info["format_gate_triggered"] = not eligible
-                reward_info["format_gate_scope"] = "terminal_component_only"
+                reward_info["format_gate_scope"] = "composed_reward"
                 self._record_step_timing(metrics, step_metrics)
                 break
 
@@ -705,6 +705,7 @@ class HotpotQACertificateAgentFlow(AgentFlowBase):
                     is_validation=is_validation,
                 ),
             )
+            step.extra_fields["verification_action_valid"] = action_checks[-1]
             if step_kind == "invalid_tool_call":
                 step.extra_fields["reward_extra_info"]["a9_format_invalid"] = True
             steps.append(await self._postprocess(step, **kwargs))

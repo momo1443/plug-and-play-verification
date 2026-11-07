@@ -81,7 +81,7 @@ pnp_model_overrides() {
     fi
 }
 
-# Appendix C defaults, with the user-requested 9B batch of 8 for eight A40 GPUs.
+# Appendix C defaults. Prompt batch sizes are domain- and model-specific.
 pnp_paper_profile() {
     local domain="$1"
     local model_path="${2%/}"
@@ -92,19 +92,22 @@ pnp_paper_profile() {
     PAPER_TRAIN_SAMPLES=10000
     PAPER_TRAIN_STEPS=$PNP_DEFAULT_TRAINING_STEPS
     PAPER_BATCH_SIZE=20
-    [[ "$PAPER_MODEL_SCALE" == 9b ]] && PAPER_BATCH_SIZE=8
     PAPER_PROMPT_LENGTH=8192
     PAPER_RESPONSE_LENGTH=2048
     case "$domain" in
         deepscaler)
             PAPER_PROMPT_LENGTH=2048
-            PAPER_RESPONSE_LENGTH=10240
+            PAPER_RESPONSE_LENGTH=4096
+            [[ "$PAPER_MODEL_SCALE" == 9b ]] && PAPER_RESPONSE_LENGTH=5120
             PAPER_MAX_STEPS=5 ;;
         hotpotqa)
+            [[ "$PAPER_MODEL_SCALE" == 9b ]] && PAPER_BATCH_SIZE=8
             PAPER_RESPONSE_LENGTH=1024
             PAPER_MAX_STEPS=4 ;;
         taco) PAPER_MAX_STEPS=5 ;;
-        vision_r1) PAPER_MAX_STEPS=3 ;;
+        vision_r1)
+            PAPER_BATCH_SIZE=8
+            PAPER_MAX_STEPS=3 ;;
         *) echo "Unknown paper domain: $domain" >&2; return 2 ;;
     esac
     return 0

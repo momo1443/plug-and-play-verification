@@ -189,19 +189,22 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
         )
         return output
 
-    async def test_qa_preserves_search_credit_for_wrong_and_missing_answers(self):
+    async def test_qa_credits_wrong_submissions_but_gates_missing_answers(self):
         for incomplete in (False, True):
             with self.subTest(incomplete=incomplete):
                 output = await self.run_domain("hotpotqa", correct=False, incomplete=incomplete)
                 info = output.steps[-1].extra_fields["reward_extra_info"]
                 self.assertEqual(info["optimizer_terminal_component"], 0)
                 self.assertEqual(info["acc"], 0)
-                self.assertGreater(sum(step.reward_score for step in output.steps), 0)
-                self.assertFalse(info["process_requires_terminal_submission"])
+                if incomplete:
+                    self.assertEqual(sum(step.reward_score for step in output.steps), 0)
+                else:
+                    self.assertGreater(sum(step.reward_score for step in output.steps), 0)
+                self.assertTrue(info["process_requires_terminal_submission"])
                 self.assertEqual(info["terminal_gate_passed"], not incomplete)
                 self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
 
-    async def test_deterministic_code_and_visual_evidence_survives_missing_submission(self):
+    async def test_missing_code_and_visual_submissions_keep_audits_but_zero_reward(self):
         for domain, mode in (("taco", "uniform_certificate"), ("vision_r1", "uniform_visual_certificate")):
             output = await self.run_domain(domain, incomplete=True, reward_mode=mode,
                                              developer_test=domain == "taco")
@@ -209,7 +212,8 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(info["terminal_reward"], 0)
             self.assertEqual(info["optimizer_terminal_component"], 0)
             self.assertFalse(info["terminal_gate_passed"])
-            self.assertGreater(info["optimizer_process_total"], 0)
+            self.assertEqual(info["optimizer_process_total"], 0)
+            self.assertTrue(info["process_requires_terminal_submission"])
             self.assertAlmostEqual(info["process_reward"], 1)
             self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
 
@@ -222,7 +226,7 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(info["optimizer_terminal_component"], 0)
             self.assertGreater(info["optimizer_process_total"], 0)
 
-    async def test_malformed_submission_keeps_process_and_fails_outcome_for_all_domains(self):
+    async def test_malformed_submission_gates_all_composed_rewards(self):
         for domain in ("hotpotqa", "taco", "vision_r1"):
             with self.subTest(domain=domain):
                 output = await self.run_domain(domain, malformed=True, developer_test=domain == "taco")
@@ -230,7 +234,7 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(info["terminal_reward"], 0)
                 self.assertEqual(info["optimizer_terminal_component"], 0)
                 self.assertFalse(info["terminal_gate_passed"])
-                self.assertGreater(info["optimizer_process_total"], 0)
+                self.assertEqual(info["optimizer_process_total"], 0)
                 self.assertAlmostEqual(sum(step.reward_score for step in output.steps), info["optimizer_process_total"])
 
     async def test_same_prefix_check_scores_ignore_outcomes_but_normalization_counts_applicable_checks(self):
@@ -240,16 +244,24 @@ class PnpFlowTest(unittest.IsolatedAsyncioTestCase):
             denominators = []
             for options in ({"correct": True}, {"correct": False}, {"incomplete": True}, {"malformed": True}):
                 output = await self.run_domain(domain, reward_mode=mode, **options)
-                denominator = output.steps[-1].extra_fields["reward_extra_info"]["verification_audit"]["process_denominator"]
+                audit = output.steps[-1].extra_fields["reward_extra_info"]["verification_audit"]
+                denominator = audit["process_denominator"]
                 prefix = [step.reward_score for step in output.steps[:-1]]
                 credits.append(prefix)
-                raw_credits.append([value * denominator for value in prefix])
+                # Raw local checks stay independent of outcome/submission;
+                # optimizer-visible credits additionally obey terminal eligibility.
+                raw_credits.append([
+                    [record.get("own_valid", record.get("normalization_group", {}).get("group_score"))
+                     for record in audit["credits_by_step"].get(index, [])]
+                    for index in range(1, len(output.steps))
+                ])
                 denominators.append(denominator)
             self.assertEqual(credits[0], credits[1])
             self.assertEqual(denominators, [3, 3, 2, 3] if domain == "hotpotqa" else [2, 2, 1, 2])
             for raw_credit in raw_credits[1:]:
                 for actual, expected in zip(raw_credit, raw_credits[0], strict=True):
-                    self.assertAlmostEqual(actual, expected)
+                    self.assertEqual(actual, expected)
+            self.assertTrue(all(value == 0 for prefix in credits[2:] for value in prefix))
 
     async def test_no_submission_does_not_change_terminal_only_phases(self):
         for domain in ("hotpotqa", "taco", "vision_r1"):
