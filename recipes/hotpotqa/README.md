@@ -1,11 +1,12 @@
 # HotpotQA
 
-The paper arms share the certificate flow in `recipes/hotpotqa_a9/`: four turns,
-10,000 selected training rows, and 500 updates. A1 uses outcome reward; A9 uses
-the deterministic verifier; A6 uses a frozen causal process judge without gold
-answers or gold supporting facts. A6 uses 50 outcome-only warmup updates, then
-a prompt-group-shared random outcome/process mixture. A2/A3 are explicitly
-privileged gold-evidence ablations; A3 uses the same warmup and mixture schedule. See the
+The paper experiments share the certificate-based agent flow in
+`recipes/hotpotqa_a9/`, with four turns, 10,000 selected training examples, and
+500 updates. A1 uses outcome rewards, A9 uses the deterministic verifier, and
+A6 uses a frozen LLM process judge without reference answers or annotated
+supporting facts. A6 uses 50 outcome-only warmup updates, followed by a random
+outcome/process reward mixture shared across each prompt group. A2 and A3 use
+privileged gold-evidence supervision; A3 uses the same warmup and mixing schedule. See the
 [shared training settings](../../scripts/common/README.md).
 
 This package supplies retrieval, evidence preprocessing, and judge services.
@@ -26,8 +27,8 @@ bash scripts/hotpotqa/run_a0.sh          # base-model certificate validation
 
 Configure model/data/output paths and resources through the launcher's
 `HOTPOTQA_*`, `CUDA_VISIBLE_DEVICES`, and `RUN_ID` environment variables.
-A8 launchers are under `scripts/extensions/hotpotqa_lr/`. Source hashing in
-run manifests uses the current script paths.
+A8 launchers are under `scripts/extensions/hotpotqa_lr/`. Run manifests record
+hashes of the source files.
 
 For standalone checkpoint evaluation, install the graders and provide an exported
 model plus the frozen dataset revision:
@@ -44,15 +45,15 @@ The wrapper evaluates `data/corpus/hotpotqa/validation.parquet` with the corpus
 and evidence sidecar listed below. Use `HOTPOTQA_VAL_PATH`,
 `HOTPOTQA_CORPUS_DATA_ROOT`, and `HOTPOTQA_EVIDENCE_SIDECAR` for alternate paths.
 
-## Additional Requirements
+## Additional requirements
 
 ```bash
 pip install -r recipes/hotpotqa/requirements.txt
 ```
 
-Building the retrieval index needs enough CPU/GPU memory to encode the corpus with the configured embedding model.
+Building the retrieval index requires sufficient CPU or GPU memory to encode the corpus with the configured embedding model.
 
-## Data And Resources
+## Data and resources
 
 Expected processed files:
 
@@ -64,7 +65,7 @@ Expected processed files:
 - `data/corpus/hotpotqa_corpus/index.bin`
 - `data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3`
 
-The FAISS index is searched by `recipes.hotpotqa.env.search_tool`. Default embedding id is `BAAI/bge-large-en-v1.5` (`HOTPOTQA_EMBEDDING_MODEL`); formal launchers point at the local checkpoint under `../models/bge-large-en-v1.5`.
+`recipes.hotpotqa.env.search_tool` queries the FAISS index. The default embedding model is `BAAI/bge-large-en-v1.5`, configured through `HOTPOTQA_EMBEDDING_MODEL`. The paper launchers use the local checkpoint at `../models/bge-large-en-v1.5`.
 
 The paper launchers preserve the prepared paragraph, embedding, and FAISS files. The evidence sidecar is built from official distractor sentence arrays and supporting facts, aligned to the existing PID order. Evidence IDs and gold hits are audit/verifier fields and never enter the model prompt.
 
@@ -111,9 +112,9 @@ python -m recipes.hotpotqa.validate_formal_a0_artifacts \
   --evidence_sidecar_path data/corpus/hotpotqa_corpus/hotpotqa_evidence_v1.sqlite3
 ```
 
-## Environment Setup
+## Environment setup
 
-No separate HTTP service. Retrieval loads local corpus + FAISS. Typical knobs:
+Retrieval uses the local corpus and FAISS index. Configure the embedding model and device with:
 
 ```bash
 export HOTPOTQA_EMBEDDING_MODEL=/path/to/bge-large-en-v1.5   # or BAAI/bge-large-en-v1.5

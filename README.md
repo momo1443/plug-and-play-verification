@@ -8,11 +8,11 @@ Built on [Agent-R1](https://github.com/AgentR1/Agent-R1), [veRL](https://github.
 
 ![Overview of the plug-and-play verifier](assets/images/plug-and-play-verifier.png)
 
-**Overview of the plug-and-play verifier.** *Left:* Artifacts are extracted at each interaction step. *Middle:* A unified interface routes them to domain-specific verifiers, which return verification scores assigned to the source steps. *Right:* These scores are aggregated into process rewards and combined with the outcome reward. *Bottom:* Verifiers connect to RL post-training through the shared interface and can be used independently across agents.
+**Overview of the plug-and-play verifier.** *Left:* Artifacts are extracted at each interaction step. *Middle:* A unified interface routes them to domain-specific verifiers, which return scores attributed to the steps that produced the artifacts. *Right:* These scores are aggregated into process rewards and combined with the outcome reward. *Bottom:* The shared interface connects verifiers to RL post-training and enables reuse across compatible agents.
 
 ## Overview
 
-Our framework checks numeric equalities, retrieved evidence, code executions, and image crops. For eligible final submissions, verified work receives credit at its source step even when the submitted answer is incorrect. The proposed verifiers use deterministic checks; frozen LLM judges and gold evidence are comparison arms.
+Our framework checks numeric equalities, retrieved evidence, code execution records, and image crops. For eligible final submissions, verified intermediate work receives credit at the step that produced it, even when the submitted answer is incorrect. We compare these deterministic verifiers with a frozen LLM judge and gold-evidence supervision.
 
 | Domain | Training dataset | Evaluation benchmark |
 | --- | --- | --- |
@@ -46,7 +46,7 @@ The following scores (%) are reported in manuscript Tables 1-3. `Avg.` is the un
 
 ![Training accuracy of Qwen3.5-4B with verification and an LLM process judge](assets/images/training-accuracy.png)
 
-**Training accuracy of Qwen3.5-4B with Ours and GRPO with LLM-as-a-judge.**
+**Training accuracy of Qwen3.5-4B trained with our verifier or an LLM process judge under GRPO.**
 
 ### Reuse across policy optimizers
 
@@ -84,7 +84,7 @@ Reward composition with **privileged gold-evidence process rewards**:
 
 ### 1. Set up the environment
 
-Use Linux with NVIDIA GPUs. These commands install the pinned Python 3.10 environment for Qwen3.5 mathematics; other domains require their task-specific dependencies.
+Use Linux with NVIDIA GPUs. The commands below create a Python 3.10 environment with pinned dependencies for training Qwen3.5 on mathematical reasoning tasks. Install the additional task-specific dependencies for the other domains.
 
 ```bash
 git clone https://github.com/momo1443/plug-and-play-verification.git
@@ -122,7 +122,7 @@ Place weights in `models/Qwen3.5-4B` or `models/Qwen3.5-9B`, or pass `--model-pa
 
 ### 3. Train with verification
 
-Formal profiles use **eight NVIDIA A40 GPUs and 500 training updates**:
+The paper training configurations use **eight NVIDIA A40 GPUs and 500 training updates**:
 
 ```bash
 bash run_pnp.sh deepscaler \
@@ -131,7 +131,7 @@ bash run_pnp.sh deepscaler \
   --gpus 0,1,2,3,4,5,6,7
 ```
 
-The launcher also accepts `hotpotqa`, `taco`, `vision_r1`, and `--model Qwen3.5-9B`. Defaults select 10,000 training rows and four rollouts per prompt; 4B uses full fine-tuning and 9B uses LoRA (rank/alpha 64).
+The launcher also accepts `hotpotqa`, `taco`, `vision_r1`, and `--model Qwen3.5-9B`. By default, training selects 10,000 examples and samples four rollouts per prompt. The 4B model uses full fine-tuning; the 9B model uses LoRA with rank 64 and alpha 64.
 
 See the [launcher index](scripts/README.md) for comparison commands and the [shared settings](scripts/common/README.md) for batch sizes and token budgets. [Frozen-judge runs](scripts/llm_judge/run_grpo_4b_judge_9b.sh) allocate seven GPUs to the actor and one to the judge.
 
@@ -139,9 +139,9 @@ See the [launcher index](scripts/README.md) for comparison commands and the [sha
 
 ![The plug-and-play process verification method](assets/images/method-overview.png)
 
-**The plug-and-play process verification.** *(a)* Identical outcome rewards can mask differences in verification results. *(b)* Local checks are decoupled from policy reasoning and return weighted sums of verification scores assigned to source steps through a common interface. These are aggregated into process rewards and combined with outcome rewards for GRPO or PPO training.
+**Plug-and-play process verification.** *(a)* Identical outcome rewards can mask differences in intermediate verification results. *(b)* Local checks are decoupled from policy reasoning. A common interface returns bounded credits attributed to the steps that produced the artifacts. These credits are combined with outcome rewards for GRPO or PPO training.
 
-Domain adapters return source-step credits and audit records through [`VerificationResult`](agent_r1/verifier/reward.py). Credits are nonnegative and sum to at most one. Failed applicable checks remain in normalization; inapplicable checks are excluded.
+Domain adapters return step-attributed credits and audit records through [`VerificationResult`](agent_r1/verifier/reward.py). Credits are nonnegative and sum to at most one. Normalization includes applicable checks that fail and excludes inapplicable checks.
 
 For final outcome reward `E` and process credit `p_t`, the composer assigns:
 
@@ -155,7 +155,7 @@ Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `
 
 **Policy refinement.** Within a prompt-and-step group containing at least two eligible rollouts, tied outcome rewards yield zero outcome-only group-relative advantages. After warmup, differences in remaining verified process returns provide a **last-mile refinement signal** for improving intermediate reasoning artifacts, including in all-correct groups.
 
-**Verification-privileged self-consistency.** A trajectory is locally consistent (`C_d=1`) only when at least one check applies and every applicable check passes. Missing required evidence counts as a failure. This measures consistency within one trajectory, independently of its final outcome, rather than majority agreement across sampled answers.
+**Verification-based self-consistency.** A trajectory is locally consistent (`C_d=1`) only when at least one check applies and every applicable check passes. Missing required evidence counts as a failure. This metric measures adherence to the verification rules within a single trajectory, independently of final-answer correctness.
 
 **Verifier-induced self-reflection.** Later corrections do not erase earlier failures, but verified revisions can still earn process credits at their source steps. This supervision can encourage checking and revising intermediate reasoning, potentially reducing error propagation.
 
@@ -170,7 +170,7 @@ Reward and audit definitions are implemented in the [shared verifier interface](
 
 ## Evaluation
 
-Accuracy scores final submissions over all selected questions; missing or invalid submissions score zero. Every evaluation record also includes the applicable checks, consistency `C_d`, and the joint score `E_d * C_d` from Equation (9). Summaries report `C_d_mean` and `M_d` over all trajectories, using the independently graded final outcome. The shared evaluator uses pinned, unmodified official HotpotQA, LiveCodeBench, and MATH-V graders; AIME uses exact integer equality.
+We compute accuracy from final submissions over all selected questions, assigning zero to missing or invalid submissions. Each evaluation record also includes the applicable checks, consistency `C_d`, and the joint score `E_d * C_d` from Equation (9). Summaries report `C_d_mean` and `M_d` over all trajectories using independently graded final outcomes. The shared evaluator uses pinned, unmodified official HotpotQA, LiveCodeBench, and MATH-V graders; AIME uses exact integer equality.
 
 Independent AIME evaluation uses at most five policy generations, 10,240 total output tokens, 2,048 tokens per step, and a 13,312-token context. AIME 2025 uses one trajectory per question; AIME 2026 uses four (avg@4). Sampling temperature is 0.6. Use the full 30-question AIME I + II snapshot from [MathArena/aime_2025](https://huggingface.co/datasets/MathArena/aime_2025) and record its pinned revision.
 

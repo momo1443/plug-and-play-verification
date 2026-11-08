@@ -1,8 +1,8 @@
 # Paper launcher configuration
 
-All datasets and experimental arms default to 500 optimizer updates. This also
-applies to extension and pilot/smoke launchers. `pnp.sh` defines the shared step
-default and computes enough epochs for reduced datasets to reach that budget.
+Training launchers default to 500 optimizer updates, including extension and
+pilot/smoke launchers. `pnp.sh` defines this default and computes enough training
+epochs for reduced datasets to reach the requested update count.
 The trainer YAML also defaults to 500 steps for direct Python launches.
 
 The DeepScaleR paper launcher and the multi-turn ToolEnv launcher are different
@@ -25,7 +25,7 @@ HotpotQA 4B/9B, and 8 for Vision-R1 at both model sizes. At 500 updates, batch
 20 samples 10,000 prompts and batch 8 samples 4,000 prompts; the selected
 training prefix remains 10,000 rows.
 
-ToolEnv A1 and A9 use the same shared launcher. Its length overrides are
+ToolEnv A1 and A9 use a shared launcher. Its length overrides are
 `DEEPSCALER_TOOL_MAX_PROMPT_LENGTH`, `DEEPSCALER_TOOL_MAX_RESPONSE_LENGTH`, and
 `DEEPSCALER_TOOL_MAX_MODEL_LENGTH` (context limit; default 8192). Changing lengths
 does not convert the paper reward/interaction protocol into ToolEnv. The profile
@@ -34,7 +34,7 @@ and prompt/response limits are written to each DeepScaleR run manifest.
 ## Model adaptation
 
 The DeepScaleR, HotpotQA, TACO A1/A9, and Vision-R1 launchers source
-`pnp.sh`. They pass the same three model fields to verl: `lora_rank`,
+`pnp.sh`. They pass the same three model fields to veRL: `lora_rank`,
 `lora_alpha`, and `target_modules`, under `actor_rollout_ref.model`.
 
 For a model path whose final component is `Qwen3.5-9B`, the default rank is 64.
@@ -55,11 +55,11 @@ AGENT_R1_LORA_RANK=0 bash run_pnp.sh hotpotqa --model Qwen3.5-9B
 ```
 
 Use `AGENT_R1_LORA_TARGET_MODULES='[q_proj,v_proj]'` to override the target list.
-No new rollout-side LoRA flags are needed: upstream verl initializes vLLM LoRA
-from the same model config. See the versioned
+veRL initializes rollout-side LoRA in vLLM from the same model configuration.
+See the versioned
 [model fields](https://github.com/volcengine/verl/blob/v0.7.0/verl/trainer/config/model/hf_model.yaml)
 and [vLLM server implementation](https://github.com/volcengine/verl/blob/v0.7.0/verl/workers/rollout/vllm_rollout/vllm_async_server.py).
-The same scalar fields remain in the
+These fields are also used by the
 [verl 0.8.0 FSDP engine](https://github.com/volcengine/verl/blob/v0.8.0/verl/workers/engine/fsdp/transformer_impl.py),
 and its vLLM server falls back to `lora_rank` when the nested LoRA rank is zero.
 

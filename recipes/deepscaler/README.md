@@ -1,9 +1,11 @@
 # DeepScaleR paper profile and ToolEnv extension
 
 The main entrypoints are `bash run_pnp.sh deepscaler --arm outcome` and
-`bash run_pnp.sh deepscaler`. Both prepare the same original 10,000-row training prefix, 500 updates,
-prompt batch 20 at both model sizes (Appendix C), four rollouts, and the common `VerificationResult` composer.
-The frozen-judge and PPO launchers use the same flow and generation limits.
+`bash run_pnp.sh deepscaler`. Both select the first 10,000 rows of the original
+training split and train for 500 updates, with 20 prompts per batch at both model
+sizes (Appendix C) and four rollouts per prompt. Both use the shared
+`VerificationResult` reward composer. The frozen-judge and PPO launchers use
+the same interaction protocol and generation limits.
 See the [shared training settings](../../scripts/common/README.md).
 
 ## Local Qwen3.5 setup
@@ -57,15 +59,16 @@ JSONL; aggregate validation metrics use numeric scalar fields.
 The `scripts/models/Qwen3.5-4B.sh` profile, selected through `run_pnp.sh`, selects exactly
 the first 10,000 original training rows. Overlong prefix rows raise an error;
 rows are never replaced by later examples and reference labels remain unchanged.
-It defaults to eight NVIDIA A40 GPUs (0–7), batch/mini-batch 20 prompts, four trajectories per prompt,
+It defaults to eight NVIDIA A40 GPUs (0–7), a batch and mini-batch size of 20 prompts, four trajectories per prompt,
 500 updates in one epoch, AdamW at constant 1e-6 with zero LR warmup, weight decay
 0.01, gradient clipping 1.0, KL 0.001, bfloat16 and seed 42. Its generation limits
 are 2,048 initial tokens, 8,192 context tokens, and 4,096 completion tokens across
 up to five turns, capped at 820 tokens per turn and the remaining total budget.
 The 9B profile uses 5,120 completion tokens with a 1,024-token per-turn cap.
-Checkpoints run every 10 updates in the 4B model profile;
-periodic held-out validation is disabled. The default A9 EM-only reward phase is separate from LR
-warmup and remains 50 updates; set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable it.
+The 4B model profile saves checkpoints every 10 updates;
+periodic held-out validation is disabled. The default A9 outcome-only reward
+warmup lasts 50 updates and is independent of learning-rate warmup.
+Set `DEEPSCALER_EM_WARMUP_STEPS=0` to disable reward warmup.
 The prepared subset, its source-selection manifest and resolved configuration
 are saved in the run's `logs/` directory.
 
@@ -162,7 +165,7 @@ The model still uses SDPA. This avoids requiring a CUDA extension solely for
 padding; installing a working FlashAttention package takes precedence.
 
 Data conversion reads the local DeepScaleR JSON, holds out at least 2,015 rows
-by a seeded shuffle of question groups, and retains source order within each
+using a seeded shuffle of question groups, and retains source order within each
 split. Repeated questions stay together to avoid train/validation leakage.
 Rows missing problems or answers are excluded and recorded in
 `data/corpus/deepscaler/data_manifest.json`. Source answer conflicts are counted
@@ -174,8 +177,7 @@ two rollouts per prompt, a 512-token trajectory budget, validation every update,
 and zero reward warmup. Its default update count is 500 and its checkpoint
 interval is inherited from the main launcher (50). The two-update examples above
 set `DEEPSCALER_TOTAL_TRAINING_STEPS=2` and `DEEPSCALER_SAVE_FREQ=-1` explicitly.
-The main launcher
-retains the 50-update warmup and paper generation budget. Select free GPUs
+The main launcher uses the 50-update warmup and the paper's generation budget. Select free GPUs
 explicitly when launching the main profile; its default expects eight GPUs.
 
 The main launcher accepts `DEEPSCALER_MODEL_PATH`, `DEEPSCALER_TRAIN_PATH`,
@@ -216,7 +218,7 @@ count as passed checks and are outside the extractable-equation denominator.
 A corrected equation is a new check at its own source turn. An earlier failed
 check remains in `applicable_checks`: for example, a failed first turn followed
 by a fully verified second turn yields credits `0` and `1/2`, while strict
-historical consistency remains zero. This distinguishes successful correction
+trajectory-level consistency remains zero. This distinguishes successful correction
 from a history in which every applicable check passed.
 
 The observation between generations is the fixed continuation/recheck prompt

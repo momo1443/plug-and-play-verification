@@ -1,13 +1,13 @@
 # Run entrypoints
 
-Run these commands from the repository root, with the veRL environment, model
-files, prepared datasets, and each task's services available. See the
+Run these commands from the repository root after activating the veRL environment
+and preparing the model weights, datasets, and task services. See the
 [training profiles](common/pnp.sh) for the domain settings and
 [shared settings](common/README.md) for 4B/9B model adaptation.
 
 ## Paper training
 
-PNP has a common entrypoint at the repository root:
+Use the common training entrypoint at the repository root:
 
 ```bash
 bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
@@ -17,15 +17,15 @@ bash run_pnp.sh hotpotqa --model Qwen3.5-9B --gpus 0,1,2,3,4,5,6,7
 Dataset launchers and agent configurations are named `pnp_<dataset>.sh` and
 `pnp_<dataset>.yaml`. Model profiles are `models/Qwen3.5-4B.sh` and
 `models/Qwen3.5-9B.sh`; shared settings are in `common/pnp.sh`.
-The formal training node uses eight NVIDIA A40 GPUs for both model scales.
+The paper configuration uses eight NVIDIA A40 GPUs for both model sizes.
 The 4B mathematics profile defaults to all eight GPUs, vLLM memory fraction 0.30,
 32 concurrent sequences, checkpointing every 10 updates, and no periodic evaluation.
 Frozen-judge comparisons allocate seven actor GPUs and one judge GPU on this node.
 
-Both arms of a domain go through the same model profile, so 4B/9B adaptation, data
-preparation and memory settings are identical; only the reward differs. Add
-`--model Qwen3.5-9B` for the 9B (LoRA) profile. Trailing `-- KEY=VALUE` Hydra overrides
-reach the trainer in every domain.
+For a fixed domain and model size, both reward arms use the same model profile,
+data preparation, and memory settings. Select the 9B LoRA profile with
+`--model Qwen3.5-9B`. Pass additional Hydra overrides after `--`, using
+`-- KEY=VALUE` in any domain.
 
 | Domain | Outcome-only GRPO | Verifier GRPO |
 | --- | --- | --- |
@@ -44,8 +44,8 @@ bash scripts/hotpotqa/run_a2.sh
 bash scripts/hotpotqa/run_a3.sh
 ```
 
-Math training defaults to at most five policy generations, shared by A1, A9,
-Judge and PPO, including the last-turn boxed submission. Use
+Mathematics training uses at most five policy generations by default across A1,
+A9, the frozen-judge baseline, and PPO. The final turn is reserved for a boxed answer. Use
 `DEEPSCALER_MAX_STEPS=8` for more turns or `=1` for a single generation.
 The total training output budget is 4096 tokens for 4B and 5120 for 9B;
 no correctness feedback enters this flow. Independent AIME evaluation uses
@@ -54,7 +54,7 @@ five generations with a 10240-token total budget and a 2048-token per-turn cap.
 The shared `models/Qwen3.5-9B.sh DATASET` profile configures HotpotQA
 and TACO 9B memory settings. Domain launchers share model adaptation from
 `common/pnp.sh`. `run_a7.sh` is the
-retained weak-execution control; `pnp_hotpotqa_8gpu.sh` is an alternative hardware wrapper
+weak-execution baseline; `pnp_hotpotqa_8gpu.sh` is an alternative hardware wrapper
 for the same HotpotQA verifier contract.
 
 ## Evaluation
@@ -83,7 +83,7 @@ final evaluation. Each run records its dataset, model, grader, and inference set
 
 - `extensions/deepscaler/`: multi-turn answer-checking ToolEnv experiments.
 - `extensions/hotpotqa_lr/`: A8 local-reasoning training, calibration, validation, and diagnostics.
-- `patches/`: explicit environment patch scripts. Inspect their expected installed source/version before applying; moving them does not apply any patch.
+- `patches/`: compatibility patches for installed dependencies. Check the target package version and source before applying a patch.
 
 All training entrypoints default to 500 optimizer updates, including extensions
 and pilot/smoke profiles. Reduced datasets repeat for enough epochs to reach
