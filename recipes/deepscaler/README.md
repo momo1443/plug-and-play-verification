@@ -80,16 +80,11 @@ Size the vLLM budget from the complete training peak, including actor backward
 and optimizer states, rather than from generation-phase memory alone.
 
 The default uses the original training split without cleaning or label changes.
-Optional `DEEPSCALER_CLEAN_DATA=True` enables a separate cleaning experiment before
-prefix selection. In that mode every source row and distinct reference label is checked;
-non-equivalent labels for duplicate questions, missing referenced diagrams and
-unsupported answer formats are quarantined. The independently checked dress
-discount/tax reference is corrected from 54 to 66. Original source files and
-held-out membership are preserved; the cleaned splits and full audit are saved
-under `_meta/data/`. Explicit `DEEPSCALER_TRAIN_PATH` / `DEEPSCALER_VAL_PATH`
-overrides select supplied data. `DEEPSCALER_CLEAN_DATA=False` (the default) selects the original
-corpus for comparisons. Cleaning reports record structural checks, duplicate-label
-comparisons, exclusions, and reference corrections.
+Optional `DEEPSCALER_CLEAN_DATA=True` enables additional preprocessing before
+prefix selection. This option preserves the source files and held-out membership
+and saves the processed splits and an audit of any exclusions or reference updates
+under `_meta/data/`. It is disabled by default (`DEEPSCALER_CLEAN_DATA=False`).
+Use `DEEPSCALER_TRAIN_PATH` and `DEEPSCALER_VAL_PATH` to supply explicit data paths.
 
 The local profile disables Ray OpenTelemetry and sets
 `VERL_FSDP_CHECKPOINT_OFFLOAD_TO_CPU=0` to avoid assembling large CPU copies
