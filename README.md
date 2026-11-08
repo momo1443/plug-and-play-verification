@@ -97,6 +97,7 @@ export PYTHON_BIN="$CONDA_PREFIX/bin/python"
 uv pip install --python "$PYTHON_BIN" \
   --override recipes/deepscaler/requirements-qwen35-overrides.txt \
   -r recipes/deepscaler/requirements-qwen35.txt
+python scripts/patches/patch_verl_lora_fsdp_checkpoint.py
 ```
 
 Runtime compatibility patches are documented in the [mathematics setup guide](recipes/deepscaler/README.md#local-qwen35-setup).
@@ -110,7 +111,8 @@ Runtime compatibility patches are documented in the [mathematics setup guide](re
 | TACO | Splits, test sidecars, Linux `bubblewrap` | [Preparation](recipes/taco_a9/prepare_data.py) · [Sidecar index](recipes/taco_a9/build_sidecar_index.py) |
 | Vision-R1 | Official train/test splits and images | [Preparation](recipes/vision_r1/prepare_data.py) |
 
-For mathematics, prepare the local corpus with:
+For mathematics, place the source JSON at
+`data/raw/DeepScaleR-Preview-Dataset/deepscaler.json`, then prepare the local corpus:
 
 ```bash
 python -m recipes.deepscaler.prepare_data
@@ -151,7 +153,7 @@ Updates 1–50 use outcome only (`w=1`). Later updates sample one reproducible `
 
 ### Last-Mile Refinement
 
-**Policy refinement.** Outcome-only GRPO yields zero group-relative advantages when all rollouts receive the same outcome reward, including all-correct groups. Differences in verified process returns provide a **last-mile refinement signal** for improving intermediate reasoning artifacts.
+**Policy refinement.** Within a prompt-and-step group containing at least two eligible rollouts, tied outcome rewards yield zero outcome-only group-relative advantages. After warmup, differences in remaining verified process returns provide a **last-mile refinement signal** for improving intermediate reasoning artifacts, including in all-correct groups.
 
 **Verification-privileged self-consistency.** A trajectory is locally consistent (`C_d=1`) only when at least one check applies and every applicable check passes. Missing required evidence counts as a failure. This measures consistency within one trajectory, independently of its final outcome, rather than majority agreement across sampled answers.
 

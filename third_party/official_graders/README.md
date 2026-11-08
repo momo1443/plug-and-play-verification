@@ -16,6 +16,6 @@ The isolated environment avoids changing the training environment's SymPy or
 ANTLR dependencies. Set `PNP_GRADER_PYTHON` to use another environment containing
 the same dependencies.
 
-AIME2025 uses exact equality against the dataset's official integer answers.
+AIME 2025 and AIME 2026 use exact equality against the datasets' official integer answers.
 PNP selects the final submission independently of the reference before comparing
 its integer value; this selection is part of the agent interaction protocol.

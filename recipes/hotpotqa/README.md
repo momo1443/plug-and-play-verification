@@ -22,13 +22,27 @@ bash scripts/hotpotqa/run_a2.sh          # gold process-only ablation
 bash scripts/hotpotqa/run_a3.sh          # gold-evidence outcome+process ablation
 bash scripts/ppo/run_terminal.sh hotpotqa
 bash scripts/hotpotqa/run_a0.sh          # base-model certificate validation
-bash scripts/hotpotqa/pnp_hotpotqa_eval.sh  # certificate checkpoint validation
 ```
 
 Configure model/data/output paths and resources through the launcher's
 `HOTPOTQA_*`, `CUDA_VISIBLE_DEVICES`, and `RUN_ID` environment variables.
 A8 launchers are under `scripts/extensions/hotpotqa_lr/`. Source hashing in
 run manifests uses the current script paths.
+
+For standalone checkpoint evaluation, install the graders and provide an exported
+model plus the frozen dataset revision:
+
+```bash
+bash scripts/evaluation/setup_official_graders.sh
+HOTPOTQA_MODEL_PATH=/path/to/exported-checkpoint \
+  HOTPOTQA_DATASET_REVISION=LOCAL_HOTPOTQA_SNAPSHOT \
+  HOTPOTQA_EMBEDDING_MODEL=/path/to/bge-large-en-v1.5 \
+  bash scripts/hotpotqa/pnp_hotpotqa_eval.sh
+```
+
+The wrapper evaluates `data/corpus/hotpotqa/validation.parquet` with the corpus
+and evidence sidecar listed below. Use `HOTPOTQA_VAL_PATH`,
+`HOTPOTQA_CORPUS_DATA_ROOT`, and `HOTPOTQA_EVIDENCE_SIDECAR` for alternate paths.
 
 ## Additional Requirements
 
@@ -68,10 +82,13 @@ python recipes/hotpotqa/data_preprocess/process_hotpotqa.py \
 
 python recipes/hotpotqa/env/build_index.py \
   --data_dir data/corpus/hotpotqa_corpus \
-  --corpus_path data/corpus/hotpotqa_corpus/hpqa_corpus.jsonl
+  --corpus_path data/corpus/hotpotqa_corpus/hpqa_corpus.jsonl \
+  --embedding_model /path/to/bge-large-en-v1.5
 ```
 
 For local 2Wiki/MuSiQue corpus construction, use `recipes/hotpotqa/env/build_retrieval_corpus.py`.
+
+Use the same embedding model when building the index and running retrieval.
 
 Build the verifier sidecar from official Hugging Face Parquet shards (e.g. under `../.cache/hotpotqa-official`):
 

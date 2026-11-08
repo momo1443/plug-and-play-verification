@@ -16,17 +16,24 @@ export PYTHON_BIN="$CONDA_PREFIX/bin/python"
 uv pip install --python "$PYTHON_BIN" \
   --override recipes/deepscaler/requirements-qwen35-overrides.txt \
   -r recipes/deepscaler/requirements-qwen35.txt
+"$PYTHON_BIN" scripts/patches/patch_verl_lora_fsdp_checkpoint.py
+# Place deepscaler.json under data/raw/DeepScaleR-Preview-Dataset/ first.
 "$PYTHON_BIN" -m recipes.deepscaler.prepare_data
-bash scripts/deepscaler/pnp_deepscaler_smoke.sh
+DEEPSCALER_TOTAL_TRAINING_STEPS=2 DEEPSCALER_SAVE_FREQ=-1 \
+  bash scripts/deepscaler/pnp_deepscaler_smoke.sh
 bash run_pnp.sh deepscaler --model Qwen3.5-4B --gpus 0,1,2,3,4,5,6,7
 ```
 
 Use the recipe scripts from the activated Conda `pnp` environment:
 
 ```bash
-bash scripts/deepscaler/pnp_deepscaler_smoke.sh
+DEEPSCALER_TOTAL_TRAINING_STEPS=2 DEEPSCALER_SAVE_FREQ=-1 \
+  bash scripts/deepscaler/pnp_deepscaler_smoke.sh
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/deepscaler/pnp_deepscaler.sh
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  DEEPSCALER_RESUME_MODE=resume_path \
+  DEEPSCALER_RESUME_FROM_PATH=/path/to/run/checkpoints/global_step_500 \
+  DEEPSCALER_VAL_ONLY=True DEEPSCALER_VAL_BEFORE_TRAIN=True \
   bash scripts/deepscaler/pnp_deepscaler.sh
 ```
 
@@ -141,8 +148,9 @@ python -m recipes.deepscaler.audit_rollouts \
   --output /path/to/new/run/_meta/full_rollout_audit.json
 ```
 
-Replay diagnoses scoring changes in recorded text; it cannot regenerate a
-trajectory stopped early by the old parser or measure new model accuracy.
+Replay computes parser and verifier diagnostics from the recorded trajectory text.
+The optional quality report supplies reference corrections and exclusion records
+for that audit; omit `--quality-report` to use the original source references.
 
 The Qwen3.5 runtime uses veRL 0.8.0, which supplies the `qwen3_5` training
 adapter absent from the released 0.7.0 wheel. The override file explicitly
@@ -161,10 +169,12 @@ Rows missing problems or answers are excluded and recorded in
 and retained without changing labels. This creates a local diagnostic split;
 it does not substitute for the AIME 2025/2026 evaluation sets.
 
-The smoke launcher uses all eight GPUs, a batch of four training examples, two
-rollouts per prompt, 500 updates across 500 epochs, a 512-token trajectory budget,
-and no checkpoint saving.
-Its warmup is zero to exercise the verifier immediately. The main launcher
+The smoke profile defaults to eight GPUs, a batch of four training examples,
+two rollouts per prompt, a 512-token trajectory budget, validation every update,
+and zero reward warmup. Its default update count is 500 and its checkpoint
+interval is inherited from the main launcher (50). The two-update examples above
+set `DEEPSCALER_TOTAL_TRAINING_STEPS=2` and `DEEPSCALER_SAVE_FREQ=-1` explicitly.
+The main launcher
 retains the 50-update warmup and paper generation budget. Select free GPUs
 explicitly when launching the main profile; its default expects eight GPUs.
 
@@ -242,11 +252,12 @@ to the five-generation protocol used for the reported mathematics results.
 
 ## Optional ToolEnv extension
 
-`run_deepscaler_tool_a1.sh` and `run_deepscaler_tool_a9.sh` are a paired
+`scripts/extensions/deepscaler/run_deepscaler_tool_a1.sh` and
+`scripts/extensions/deepscaler/run_deepscaler_tool_a9.sh` are a paired
 multi-turn experiment. Both use the same five-turn answer-check ToolEnv, model,
 derived parquet, training order, seed, rollout count, sequence limits, and
 runtime settings. The launcher rejects a sample/step mismatch so both arms see
-the same 30,000 examples by default.
+the same 10,000 examples by default (20 prompts per update for 500 updates).
 
 The pair differs only in its trajectory-level training reward:
 

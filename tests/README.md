@@ -1,9 +1,8 @@
 # PNP tests
 
 This directory maintains the current four PNP tasks (DeepScaleR math, HotpotQA,
-TACO, and visual reasoning), AIME agent evaluation, and the shared training and
-rollout infrastructure. Historical A0/A8 experiments, LLM judge comparisons,
-ToolEnv extensions, and tests for their launchers are excluded.
+TACO, and visual reasoning), AIME agent evaluation, process-judge reward schedules,
+and the shared training and rollout infrastructure.
 
 Run from the repository root in the `pnp` environment:
 
@@ -18,6 +17,8 @@ CUDA_VISIBLE_DEVICES= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:tests \
   execute production flows using mocked generation/execution boundaries.
 - `test_pnp_evaluation.py` checks shared budgets, complete denominators, hidden
   reference isolation, separate final grading, and evaluation wrappers.
+- `test_evaluation_consistency.py` checks Equation (9) exports, independent
+  outcome grading, truncated math checks, and joint-metric aggregation.
 - `test_official_graders.py` checks pinned upstream checksums, official answer
   extraction and equality, Decimal stdio comparison, functional results, and
   sandbox forwarding. Install `scripts/evaluation/setup_official_graders.sh`
