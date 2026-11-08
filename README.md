@@ -108,7 +108,7 @@ Runtime compatibility patches are documented in the [mathematics setup guide](re
 | --- | --- | --- |
 | DeepScaleR | Source JSON and prepared splits | [Mathematics recipe](recipes/deepscaler/README.md) |
 | HotpotQA | Splits, retrieval corpus/index, embedding model, evidence sidecar | [HotpotQA recipe](recipes/hotpotqa/README.md) |
-| TACO | Splits, test sidecars, Linux `bubblewrap` | [Preparation](recipes/taco_a9/prepare_data.py) · [Sidecar index](recipes/taco_a9/build_sidecar_index.py) |
+| TACO | Source-prefix data, test sidecars, Linux `bubblewrap` | [Setup](recipes/taco_a9/README.md) · [Sidecar index](recipes/taco_a9/build_sidecar_index.py) |
 | Vision-R1 | Official train/test splits and images | [Preparation](recipes/vision_r1/prepare_data.py) |
 
 For mathematics, place the source JSON at
@@ -117,6 +117,11 @@ For mathematics, place the source JSON at
 ```bash
 python -m recipes.deepscaler.prepare_data
 ```
+
+DeepScaleR and TACO select source training rows 0–9,999 before format conversion.
+Duplicates and labels are preserved. Local diagnostic rows follow the training
+prefix; they are never removed from it. HotpotQA and Vision-R1 also use the first
+10,000 rows of their training splits.
 
 Place weights in `models/Qwen3.5-4B` or `models/Qwen3.5-9B`, or pass `--model-path`. Data, weights, and run outputs are excluded from Git.
 

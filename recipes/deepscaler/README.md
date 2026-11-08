@@ -80,10 +80,9 @@ Size the vLLM budget from the complete training peak, including actor backward
 and optimizer states, rather than from generation-phase memory alone.
 
 The default uses the original training split without cleaning or label changes.
-Optional `DEEPSCALER_CLEAN_DATA=True` enables additional preprocessing before
-prefix selection. This option preserves the source files and held-out membership
-and saves the processed splits and an audit of any exclusions or reference updates
-under `_meta/data/`. It is disabled by default (`DEEPSCALER_CLEAN_DATA=False`).
+The launcher converts the first 10,000 source rows directly into the training
+schema and checks their prompt lengths. Conversion preserves duplicates, source
+order, and reference labels. Set `DEEPSCALER_RAW_JSON` to select the source JSON.
 Use `DEEPSCALER_TRAIN_PATH` and `DEEPSCALER_VAL_PATH` to supply explicit data paths.
 
 The local profile disables Ray OpenTelemetry and sets
@@ -159,13 +158,14 @@ token packing uses veRL's existing device-independent PyTorch padding helpers.
 The model still uses SDPA. This avoids requiring a CUDA extension solely for
 padding; installing a working FlashAttention package takes precedence.
 
-Data conversion reads the local DeepScaleR JSON, holds out at least 2,015 rows
-using a seeded shuffle of question groups, and retains source order within each
-split. Repeated questions stay together to avoid train/validation leakage.
-Rows missing problems or answers are excluded and recorded in
-`data/corpus/deepscaler/data_manifest.json`. Source answer conflicts are counted
-and retained without changing labels. This creates a local diagnostic split;
-it does not substitute for the AIME 2025/2026 evaluation sets.
+Data conversion takes training rows 0–9,999 in the original JSON order.
+Local diagnostic data uses the next 2,015 rows, leaving the training prefix
+unchanged. The conversion performs no filtering, deduplication, shuffling, or
+label updates. A required field missing from a selected row raises an error;
+later rows never replace it. Manifests record the original source indices.
+The training launcher writes these converted files under each run's
+`_meta/data/source_prefix/`; standalone conversion writes them under
+`data/corpus/deepscaler/`. Local diagnostics are separate from AIME evaluation.
 
 The smoke profile defaults to eight GPUs, a batch of four training examples,
 two rollouts per prompt, a 512-token trajectory budget, validation every update,

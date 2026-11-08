@@ -21,6 +21,7 @@ CODE_PATHS = (
     "recipes/taco_a9/prepare_data.py",
     "recipes/taco_a9/agent_flow.py",
     "recipes/taco_a9/sandbox.py",
+    "recipes/taco_a9/functional_runner.py",
     "recipes/taco_a9/protocol.py",
     "recipes/taco_a1/base.yaml",
     "recipes/taco_a1/prepare_run.py",
@@ -64,6 +65,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--smoke", action="store_true", help="Record a reduced functional smoke run.")
     args = parser.parse_args()
+
+    from recipes.taco_a9.prepare_data import validate_source_prefix
+    validate_source_prefix(Path(args.train_path), args.train_max_samples)
 
     project_dir = Path(args.project_dir).resolve()
     output_dir = Path(args.output_dir).resolve()

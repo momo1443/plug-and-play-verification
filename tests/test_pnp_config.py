@@ -143,7 +143,13 @@ class PnpConfigTest(unittest.TestCase):
                 calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
                 modules = [args[1] for args in calls if len(args) > 1 and args[0] == "-m"]
                 self.assertNotIn("recipes.deepscaler.clean_data", modules)
+                conversion = next(args for args in calls if args[1:2] == ["recipes.deepscaler.prepare_data"])
+                self.assertEqual(conversion[conversion.index("--train-samples") + 1], options["data.train_max_samples"])
+                self.assertEqual(conversion[conversion.index("--validation-size") + 1], "2015")
                 subset = next(args for args in calls if args[1:2] == ["recipes.deepscaler.prepare_training_subset"])
+                source_dir = conversion[conversion.index("--output-dir") + 1]
+                self.assertEqual(subset[subset.index("--input") + 1], source_dir + "/train.parquet")
+                self.assertEqual(options["data.val_files"], source_dir + "/validation.parquet")
                 self.assertEqual(subset[subset.index("--samples") + 1], options["data.train_max_samples"])
                 self.assertEqual(subset[subset.index("--max-prompt-length") + 1], "2048")
                 self.assertEqual(options["data.train_files"], subset[subset.index("--output") + 1])

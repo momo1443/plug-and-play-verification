@@ -28,15 +28,27 @@ class TestCase:
 class TestSuite:
     suite_id: str
     cases: tuple[TestCase, ...]
+    function_name: str | None = None
 
     @property
     def sha256(self) -> str:
         payload = [{"stdin": case.stdin, "expected_stdout": case.expected_stdout} for case in self.cases]
+        if self.function_name is not None:
+            payload = {"function_name": self.function_name, "cases": payload}
         return sha256_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
 def normalize_stdout(value: str) -> str:
     return "\n".join(line.rstrip() for line in value.strip().splitlines()).strip()
+
+
+def functional_outputs_equal(actual: str, expected: str) -> bool:
+    """Compare TACO call-based results, including its wrapped-output convention."""
+    try:
+        result, reference = json.loads(actual), json.loads(expected)
+    except (TypeError, ValueError):
+        return False
+    return result == reference or (isinstance(reference, list) and bool(reference) and result == reference[0])
 
 
 class BubblewrapPythonExecutor:
@@ -50,7 +62,7 @@ class BubblewrapPythonExecutor:
         self.timeout_seconds = float(timeout_seconds)
         self.python_path = python_path
 
-    def _command(self, code_path: Path, input_path: Path) -> list[str]:
+    def _command(self, code_path: Path, input_path: Path, *, functional: bool = False) -> list[str]:
         required_roots = ["/usr", "/bin", "/lib", "/lib64"]
         command = [
             "bwrap",
@@ -81,7 +93,11 @@ class BubblewrapPythonExecutor:
         for root in required_roots:
             if Path(root).exists():
                 command.extend(["--ro-bind", root, root])
-        command.extend([self.python_path, "-I", "/work/main.py"])
+        if functional:
+            command.extend(["--ro-bind", str(Path(__file__).with_name("functional_runner.py")), "/work/functional_runner.py"])
+            command.extend([self.python_path, "-I", "/work/functional_runner.py", "/work/main.py"])
+        else:
+            command.extend([self.python_path, "-I", "/work/main.py"])
         return command
 
     def run_suite(self, artifact: CodeArtifact, suite: TestSuite, *, run_ordinal: int) -> tuple[ExecutionRecord, dict[str, Any]]:
@@ -92,11 +108,13 @@ class BubblewrapPythonExecutor:
             code_path.write_text(artifact.code, encoding="utf-8")
             for case_index, case in enumerate(suite.cases):
                 input_path = root / f"input-{case_index}.txt"
-                input_path.write_text(case.stdin, encoding="utf-8")
+                stdin = (json.dumps({"function_name": suite.function_name, "arguments": json.loads(case.stdin)},
+                                    ensure_ascii=False) if suite.function_name else case.stdin)
+                input_path.write_text(stdin, encoding="utf-8")
                 try:
                     completed = subprocess.run(
-                        self._command(code_path, input_path),
-                        input=case.stdin,
+                        self._command(code_path, input_path, functional=bool(suite.function_name)),
+                        input=stdin,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
@@ -106,10 +124,12 @@ class BubblewrapPythonExecutor:
                     )
                     actual = normalize_stdout(completed.stdout)
                     expected = normalize_stdout(case.expected_stdout)
+                    matched = (functional_outputs_equal(completed.stdout, case.expected_stdout)
+                               if suite.function_name else actual == expected)
                     outcomes.append(
                         {
                             "case_index": case_index,
-                            "passed": completed.returncode == 0 and actual == expected,
+                            "passed": completed.returncode == 0 and matched,
                             "returncode": completed.returncode,
                             "stdin": case.stdin[:4096],
                             "expected_stdout": expected[:4096],

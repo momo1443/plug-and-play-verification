@@ -77,6 +77,7 @@ class TacoTaskStore:
             return TestSuite(
                 suite_id=suite_id,
                 cases=tuple(TestCase(stdin=str(case["stdin"]), expected_stdout=str(case["expected_stdout"])) for case in cases),
+                function_name=task.get("function_name"),
             )
         return build("developer_v1", task["developer_cases"]), build("private_v1", task["private_cases"])
 

@@ -149,7 +149,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "train_max_samples": args.train_max_samples,
             "sampled_prompt_count": args.train_batch_size * args.total_training_steps,
             "data_selection": "source_prefix",
-            "data_cleaning_enabled": os.environ.get("DEEPSCALER_CLEAN_DATA", "False") == "True",
+            "data_cleaning_enabled": False,
             "train_batch_size": args.train_batch_size,
             "rollout_n": args.rollout_n,
             "max_prompt_length": args.max_prompt_length,

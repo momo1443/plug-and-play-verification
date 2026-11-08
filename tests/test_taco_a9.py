@@ -313,14 +313,12 @@ class TacoA9Test(unittest.TestCase):
                 argparse.Namespace(
                     taco_dir=str(root / "taco"),
                     output_dir=str(output_dir),
-                    min_test_cases=6,
                     developer_fraction=0.5,
-                    validation_fraction=0.5,
-                    max_tasks=0,
-                    train_batch_size=1,
+                    train_samples=3,
+                    validation_size=1,
                 )
             )
-            self.assertEqual(manifest["eligible_tasks"], 4)
+            self.assertEqual(manifest["train_tasks"], 3)
             train_row = pq.read_table(output_dir / "train.parquet").to_pylist()[0]
             self.assertNotIn("solutions", train_row)
             self.assertNotIn("input_output", train_row)

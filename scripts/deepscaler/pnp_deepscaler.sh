@@ -165,19 +165,19 @@ cd "$PROJECT_DIR"
 
 # Every arm/model uses the original training split's first TRAIN_MAX_SAMPLES rows.
 # Labels and row order are preserved. An overlong prefix row is an error, not
-# replaced by a later row. Data cleaning is an explicit optional experiment.
+# replaced by a later row. Conversion never filters, deduplicates, or relabels.
 # An explicit DEEPSCALER_TRAIN_PATH skips preparation.
 VAL_PATH="${DEEPSCALER_VAL_PATH:-$PROJECT_DIR/data/corpus/deepscaler/validation.parquet}"
 if [[ -n "${DEEPSCALER_TRAIN_PATH:-}" ]]; then
     TRAIN_PATH="$DEEPSCALER_TRAIN_PATH"
 else
-    TRAIN_SOURCE_PATH="$PROJECT_DIR/data/corpus/deepscaler/train.parquet"
-    if [[ "${DEEPSCALER_CLEAN_DATA:-False}" == True ]]; then
-        CLEAN_DATA_DIR="$OUTPUT_DIR/_meta/data"
-        "$PYTHON_BIN" -m recipes.deepscaler.clean_data --output-dir "$CLEAN_DATA_DIR"
-        TRAIN_SOURCE_PATH="$CLEAN_DATA_DIR/train.parquet"
-        VAL_PATH="${DEEPSCALER_VAL_PATH:-$CLEAN_DATA_DIR/validation.parquet}"
-    fi
+    SOURCE_DATA_DIR="$OUTPUT_DIR/_meta/data/source_prefix"
+    "$PYTHON_BIN" -m recipes.deepscaler.prepare_data \
+        --input-json "${DEEPSCALER_RAW_JSON:-$PROJECT_DIR/data/raw/DeepScaleR-Preview-Dataset/deepscaler.json}" \
+        --output-dir "$SOURCE_DATA_DIR" --train-samples "$TRAIN_MAX_SAMPLES" \
+        --validation-size "${DEEPSCALER_DIAGNOSTIC_SAMPLES:-2015}"
+    TRAIN_SOURCE_PATH="$SOURCE_DATA_DIR/train.parquet"
+    VAL_PATH="${DEEPSCALER_VAL_PATH:-$SOURCE_DATA_DIR/validation.parquet}"
     TRAIN_PATH="$OUTPUT_DIR/_meta/data/train_${TRAIN_MAX_SAMPLES}_prompt${MAX_PROMPT_LENGTH}.parquet"
     "$PYTHON_BIN" -m recipes.deepscaler.prepare_training_subset --input "$TRAIN_SOURCE_PATH" \
         --output "$TRAIN_PATH" --model "$MODEL_PATH" --samples "$TRAIN_MAX_SAMPLES" \

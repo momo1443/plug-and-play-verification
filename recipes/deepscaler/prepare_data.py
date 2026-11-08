@@ -1,6 +1,6 @@
 """Convert local DeepScaleR JSON into the parquet schema used by the paper flow.
 
-The seeded validation split is a local diagnostic split, not AIME evaluation.
+Training uses the exact source prefix. Local diagnostic rows follow that prefix.
 Only the problem enters the prompt; reference answers stay in reward_model.
 """
 
@@ -9,46 +9,29 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import random
-from collections import defaultdict
 from pathlib import Path
 
 
-def prepare_data(input_path: Path, output_dir: Path, validation_size: int = 2015, seed: int = 42) -> dict:
+def prepare_data(input_path: Path, output_dir: Path, validation_size: int = 2015,
+                 train_samples: int = 10000) -> dict:
     import pandas as pd
 
     records = json.loads(input_path.read_text(encoding="utf-8"))
-    if not isinstance(records, list) or not 0 < validation_size < len(records):
-        raise ValueError("Input must be a JSON list with more rows than validation_size")
-    problem_indices = defaultdict(list)
-    invalid_indices = []
-    for index, record in enumerate(records):
-        problem = record.get("problem")
-        answer = record.get("answer")
-        if not isinstance(problem, str) or not problem.strip() or answer is None or not str(answer).strip():
-            invalid_indices.append(index)
-            continue
-        problem_indices[problem.strip()].append(index)
-    if validation_size >= len(records) - len(invalid_indices):
-        raise ValueError("Not enough valid rows to create nonempty train and validation splits")
+    if not isinstance(records, list):
+        raise ValueError("Input must be a JSON list in source training-split order")
+    if train_samples < 1 or validation_size < 0:
+        raise ValueError("train_samples must be positive and validation_size non-negative")
+    required = train_samples + validation_size
+    if len(records) < required:
+        raise ValueError(f"Need {required} source rows; found {len(records)}")
 
-    # The source contains repeated questions, sometimes with differing labels.
-    # Keep every source row, but assign an entire question group to one split.
-    problems = list(problem_indices)
-    random.Random(seed).shuffle(problems)
-    validation_indices = set()
-    for problem in problems:
-        validation_indices.update(problem_indices[problem])
-        if len(validation_indices) >= validation_size:
-            break
-    if len(validation_indices) == len(records) - len(invalid_indices):
-        raise ValueError("Grouped validation split would leave no training rows")
     splits = {"train": [], "validation": []}
-    invalid_set = set(invalid_indices)
-    for index, record in enumerate(records):
-        if index in invalid_set:
-            continue
-        split = "validation" if index in validation_indices else "train"
+    for index, record in enumerate(records[:required]):
+        problem = record.get("problem") if isinstance(record, dict) else None
+        answer = record.get("answer") if isinstance(record, dict) else None
+        if not isinstance(problem, str) or not problem.strip() or answer is None or not str(answer).strip():
+            raise ValueError(f"Source row {index} requires a nonempty problem and answer; rows cannot be skipped or replaced")
+        split = "train" if index < train_samples else "validation"
         splits[split].append({
             "data_source": "deepmath",
             "prompt": [{"role": "user", "content": record["problem"] +
@@ -59,23 +42,20 @@ def prepare_data(input_path: Path, output_dir: Path, validation_size: int = 2015
         })
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    columns = list(splits["train"][0])
     for split, rows in splits.items():
-        pd.DataFrame(rows).to_parquet(output_dir / f"{split}.parquet", index=False)
+        pd.DataFrame(rows, columns=columns).to_parquet(output_dir / f"{split}.parquet", index=False)
     manifest = {
         "input_path": str(input_path.resolve()),
         "input_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
         "source_rows": len(records), "train_rows": len(splits["train"]),
-        "excluded_missing_problem_or_answer_indices": invalid_indices,
-        "validation_rows": len(splits["validation"]), "seed": seed,
-        "split_method": "seeded shuffle of question groups; all duplicates in one split; source order retained",
-        "unique_problems": len(problem_indices),
-        "duplicate_rows": len(records) - len(invalid_indices) - len(problem_indices),
-        "conflicting_answer_groups": sum(
-            len({str(records[i]['answer']) for i in indices}) > 1 for indices in problem_indices.values()
-        ),
-        "validation_target_rows": validation_size,
-        "validation_source_indices": sorted(validation_indices),
-        "validation_purpose": "local held-out DeepScaleR diagnostic, not AIME benchmark",
+        "selection": "exact_source_training_prefix",
+        "train_source_indices": list(range(train_samples)),
+        "labels_changed": False,
+        "rows_filtered": 0,
+        "validation_rows": len(splits["validation"]),
+        "validation_source_indices": list(range(train_samples, required)),
+        "validation_purpose": "sequential local diagnostics after the training prefix, not AIME evaluation",
     }
     (output_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
@@ -87,9 +67,9 @@ def main() -> None:
                         default=Path("data/raw/DeepScaleR-Preview-Dataset/deepscaler.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("data/corpus/deepscaler"))
     parser.add_argument("--validation-size", type=int, default=2015)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-samples", type=int, default=10000)
     args = parser.parse_args()
-    manifest = prepare_data(args.input_json, args.output_dir, args.validation_size, args.seed)
+    manifest = prepare_data(args.input_json, args.output_dir, args.validation_size, args.train_samples)
     print(f"Prepared {manifest['train_rows']} train / {manifest['validation_rows']} validation rows in {args.output_dir}")
 
 
